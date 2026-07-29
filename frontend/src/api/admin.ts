@@ -509,3 +509,94 @@ export const getTodayStats = async (): Promise<{ success: boolean; data?: TodayS
     return { success: false }
   }
 }
+
+// ========== 数据库恢复 ==========
+
+const RESTORE_PREFIX = '/api/v1/restore'
+
+export interface RestoreTableInfo {
+  name: string
+  has_data: boolean
+  has_structure: boolean
+}
+
+export interface RestoreCategoryInfo {
+  key: string
+  label: string
+  table_count: number
+  tables: RestoreTableInfo[]
+}
+
+export interface RestoreParseResult {
+  reference_id: string
+  source_file: string
+  total_tables: number
+  categories: RestoreCategoryInfo[]
+}
+
+export interface RestoreFailedTable {
+  table: string
+  error: string
+}
+
+export interface RestoreExecuteResult {
+  restored_tables: string[]
+  skipped_tables: string[]
+  failed_tables: RestoreFailedTable[]
+  total_duration_ms: number
+  total_rows_inserted: number
+  categories_restored: string[]
+}
+
+export interface BackupFileItem {
+  name: string
+  size: number
+  size_formatted: string
+  modified_at: string
+}
+
+/** 上传 .sql.gz 备份文件并解析 */
+export const uploadAndParseBackup = async (
+  file: File,
+): Promise<{ success: boolean; data?: RestoreParseResult; message?: string }> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  const result = await post<{ success: boolean; data?: RestoreParseResult; message?: string }>(
+    `${RESTORE_PREFIX}/upload-parse`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 },
+  )
+  return { success: Boolean(result.success), data: result.data, message: result.message }
+}
+
+/** 解析磁盘上已有的备份文件 */
+export const parseExistingBackup = async (
+  fileName: string,
+): Promise<{ success: boolean; data?: RestoreParseResult; message?: string }> => {
+  const result = await post<{ success: boolean; data?: RestoreParseResult; message?: string }>(
+    `${RESTORE_PREFIX}/parse-existing`,
+    { file_name: fileName },
+  )
+  return { success: Boolean(result.success), data: result.data, message: result.message }
+}
+
+/** 列出备份目录下的 .sql.gz 文件 */
+export const getBackupFiles = async (): Promise<{ success: boolean; data?: BackupFileItem[]; message?: string }> => {
+  const result = await get<{ success: boolean; data?: BackupFileItem[]; message?: string }>(
+    `${RESTORE_PREFIX}/backup-files`,
+  )
+  return { success: Boolean(result.success), data: result.data || [], message: result.message }
+}
+
+/** 执行数据库恢复 */
+export const executeRestore = async (
+  referenceId: string,
+  categories: string[],
+): Promise<{ success: boolean; data?: RestoreExecuteResult; message?: string }> => {
+  const result = await post<{ success: boolean; data?: RestoreExecuteResult; message?: string }>(
+    `${RESTORE_PREFIX}/execute`,
+    { reference_id: referenceId, categories },
+    { timeout: 600000 },  // 10 分钟超时
+  )
+  return { success: Boolean(result.success), data: result.data, message: result.message }
+}

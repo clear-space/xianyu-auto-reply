@@ -149,6 +149,12 @@ async def get_db_backup_log_service(session: AsyncSession = Depends(get_db_sessi
     return DbBackupLogService(session)
 
 
+async def get_restore_service(session: AsyncSession = Depends(get_db_session)):
+    """获取数据库恢复服务"""
+    from app.services.restore_service import RestoreService
+    return RestoreService(session)
+
+
 async def get_ai_reply_service(session: AsyncSession = Depends(get_db_session)):
     """获取AI回复设置服务"""
     from app.services.ai_reply_service import AIReplySettingsService

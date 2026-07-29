@@ -60,6 +60,7 @@ from . import (
     external_cookie,
     proxy,
     refund_cancel,
+    restore,
     qr_login,
     qrcode,
     risk_control_logs,
@@ -143,6 +144,7 @@ api_router.include_router(advertisements.router, prefix="/advertisements", tags=
 api_router.include_router(auto_reply_logs.router, tags=["消息日志"])
 api_router.include_router(account_login_logs.router, tags=["账号登录日志"])
 api_router.include_router(db_backup_logs.router, tags=["数据库备份日志"])
+api_router.include_router(restore.router, tags=["数据库恢复"])  # 已定义prefix="/restore"
 api_router.include_router(risk_control_logs.router, tags=["风控日志"])
 
 # 管理员功能
