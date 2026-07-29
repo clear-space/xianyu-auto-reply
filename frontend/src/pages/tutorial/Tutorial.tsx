@@ -1,15 +1,13 @@
 /**
  * 使用教程页面
- * 
- * 功能：
- * 1. 左侧显示菜单目录导航（按钮作为二级目录）
- * 2. 右侧显示详细的功能说明
- * 3. 点击左侧目录可快速跳转到对应内容
+ *
+ * 提供系统中每一项功能的详细操作指南，
+ * 包含操作步骤、重要提示、常见场景和技巧建议。
  */
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { 
-  BookOpen, 
+import {
+  BookOpen,
   ChevronRight,
   ChevronDown,
   LayoutDashboard,
@@ -36,228 +34,1134 @@ import {
   ScrollText,
   Image,
   Circle,
+  Ban,
+  Store,
+  Ticket,
+  Wallet,
+  PackageSearch,
+  LogIn,
+  RotateCcw,
+  Database,
 } from 'lucide-react'
 import { cn } from '@/utils/cn'
 
-// 教程内容数据结构
+// ─── 教程内容数据结构 ──────────────────────────────────────
 interface TutorialSection {
   id: string
   icon?: React.ElementType
   title: string
+  /** 功能概述 */
   description: string
-  important?: boolean  // 重要提示，用红色标注
+  /** 重要提示（红色标注） */
+  important?: string
+  /** 详细操作步骤 */
+  steps?: TutorialStep[]
+  /** 子章节（二级/三级功能点） */
   children?: TutorialSection[]
+  /** 使用技巧 */
+  tips?: string[]
+  /** 常见问题 */
+  faq?: { q: string; a: string }[]
 }
 
-// 教程内容数据 - 按钮作为children（不包含刷新、筛选、搜索类按钮）
+interface TutorialStep {
+  title: string
+  content: string
+}
+
+// ─── 教程数据 ───────────────────────────────────────────────
 const tutorialData: TutorialSection[] = [
+  // ══════════════════════════════════════════════════════
   {
     id: 'dashboard',
     icon: LayoutDashboard,
     title: '仪表盘',
-    description: '系统首页，展示账号统计、订单统计、关键词统计等核心数据概览。',
+    description: '系统首页，登录后看到的第一个页面。集中展示账号、订单、回复等核心数据的统计概览，帮助你快速掌握系统运行状态。',
+    steps: [
+      {
+        title: '查看统计卡片',
+        content: '页面顶部有一排统计卡片，横向滚动可查看全部：总账号数、总关键词数、启用账号数、总订单数、今日回复数、昨日回复数、可添加账号数、已用账号数、剩余额度。每个卡片包含图标、数字和标签，点击「刷新数据」按钮可手动更新所有统计。'
+      },
+      {
+        title: '查看推荐广告',
+        content: '左侧「推荐广告」卡片展示系统管理员发布的轮播广告，每隔 4 秒自动切换。点击广告图片可跳转到对应链接。右侧「文字广告」卡片展示文字链接广告，点击标题可展开查看详情。'
+      },
+      {
+        title: '查看全局统计（管理员）',
+        content: '管理员登录后会额外看到「全局统计」区域，包含总用户数、总账号数、活跃账号、在线账号、已配置密码数、总卡券数、总关键词、总订单数、今日/昨日回复等系统级数据。'
+      },
+      {
+        title: '查看今日统计（管理员）',
+        content: '「今日统计」区域展示当日新增用户、新增账号、订单数、代销订单数、订单金额、已发货数、待处理数等实时运营数据。'
+      },
+      {
+        title: '查看订单金额趋势图',
+        content: '页面底部的折线图展示近期的订单金额变化趋势，所有用户可见。'
+      },
+    ],
+    tips: [
+      '统计卡片支持横向滚动，在移动端也能完整查看',
+      '数据不会自动刷新，需要手动点击右上角「刷新数据」按钮',
+      '可添加账号数受账号数量限制影响，无限制时显示 "-"',
+    ],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'accounts',
     icon: Users,
     title: '账号管理',
-    description: '管理闲鱼账号，支持扫码登录、密码登录、手动输入Cookie等多种方式添加账号。',
+    description: '管理所有闲鱼账号，包括添加账号、启用/禁用、配置自动发货、AI 回复、代理设置等。这是系统中功能最丰富的模块。',
+    important: '账号是系统运行的基础，必须先添加账号才能使用自动回复、自动发货等功能。',
     children: [
-      { id: 'accounts-qrcode', title: '扫码登录', description: '使用闲鱼APP扫描二维码登录，触发人脸验证后无法处理，不推荐使用。' },
-      { id: 'accounts-password', title: '账号密码', description: '使用闲鱼账号和密码登录，可能需要进行人脸验证。' },
-      { id: 'accounts-manual', title: '手动输入', description: '手动输入Cookie信息添加账号，适合高级用户。填写账号密码后可自动续期。' },
-      { id: 'accounts-enable', title: '启用/禁用', description: '切换账号的启用状态，禁用后不再自动回复。' },
-      { id: 'accounts-ai', title: 'AI回复', description: '开启/关闭该账号的AI智能回复功能。' },
-      { id: 'accounts-redelivery', title: '定时补发货', description: '开启后系统会定时检查未发货订单并自动发货。' },
-      { id: 'accounts-rate', title: '定时补评价', description: '开启后系统会定时检查未评价订单并自动评价。' },
-      { id: 'accounts-polish', title: '商品擦亮', description: '开启后系统会定时擦亮商品，提高曝光率。' },
-      { id: 'accounts-auto-confirm', title: '自动确认发货', description: '开启后买家下单时自动调用闲鱼API确认发货，并发送虚拟商品/卡券内容。想要自动发货必须开启此功能。', important: true },
-      { id: 'accounts-ai-settings', title: 'AI设置', description: '配置该账号的AI回复参数，包括AI模型、系统提示词等。' },
-      { id: 'accounts-default-reply', title: '默认回复', description: '设置该账号的默认回复内容，当没有匹配到关键词且未开启AI时发送。' },
-      { id: 'accounts-proxy', title: '代理设置', description: '配置该账号使用的网络代理，支持HTTP/SOCKS5代理。' },
-      { id: 'accounts-msg-wait', title: '消息等待', description: '设置消息等待时间，在该时间内收到的多条消息会合并处理，避免频繁回复。' },
-      { id: 'accounts-face', title: '人脸验证', description: '当账号需要人脸验证时，通过此功能完成验证流程。' },
-      { id: 'accounts-confirm-msg', title: '确认收货消息', description: '设置买家确认收货后自动发送的消息内容，如好评引导语。' },
-      { id: 'accounts-auto-rate', title: '自动评价', description: '配置自动评价的内容。收到评价请求消息时会自动评价买家，定时补评价也会使用此内容。' },
+      {
+        id: 'accounts-add',
+        title: '添加账号',
+        description: '系统支持三种方式添加闲鱼账号。',
+        steps: [
+          {
+            title: '方式一：扫码登录',
+            content: '点击「添加账号」→「扫码登录」，系统会生成一个二维码。打开闲鱼 APP 扫描二维码授权登录。注意：扫码登录如果触发人脸验证，系统无法自动处理，此时建议改用「手动输入」方式。不推荐作为首选方式。'
+          },
+          {
+            title: '方式二：账号密码登录',
+            content: '点击「添加账号」→「账号密码」，输入闲鱼账号和密码。系统会自动模拟登录流程。登录过程中可能需要完成滑块验证或人脸验证，请根据弹窗提示操作。此方式登录成功后可自动续期，推荐使用。'
+          },
+          {
+            title: '方式三：手动输入 Cookie',
+            content: '点击「添加账号」→「手动输入」，直接粘贴从浏览器获取的闲鱼 Cookie 信息。适合高级用户，或扫码/密码登录遇到问题时使用。如果同时填写了账号和密码，系统可以自动续期 Cookie。获取 Cookie 的方法：在浏览器中登录闲鱼后，按 F12 打开开发者工具 → Application → Cookies → 复制需要的字段。'
+          },
+        ],
+        tips: [
+          '建议优先使用「账号密码」方式，登录成功后系统可自动续期，减少 Cookie 过期的问题',
+          '手动输入 Cookie 时，关键字段包括：unb、_m_h5_tk、usessionid 等',
+        ],
+      },
+      {
+        id: 'accounts-enable',
+        title: '启用 / 禁用账号',
+        description: '控制账号是否参与自动回复和自动发货。',
+        steps: [
+          {
+            title: '切换启用状态',
+            content: '在账号列表中找到目标账号，点击开关按钮即可切换启用/禁用状态。启用时开关为蓝色，禁用时为灰色。禁用的账号不会自动回复消息，也不会触发自动发货、擦亮、补评价等定时任务。'
+          },
+          {
+            title: '批量操作',
+            content: '勾选多个账号后，可以使用批量操作按钮一次性启用或禁用多个账号。也可以批量关闭消息通知。'
+          },
+        ],
+        important: '禁用的账号仍然保留所有配置（关键词、默认回复、AI 设置等），重新启用后无需重新配置。',
+      },
+      {
+        id: 'accounts-ai',
+        title: 'AI 智能回复',
+        description: '为账号开启 AI 智能回复功能，当买家消息没有匹配到关键词规则时，由 AI 自动生成回复。',
+        steps: [
+          {
+            title: '开启 AI 回复',
+            content: '在账号列表中点击「AI」列的开关即可开启/关闭该账号的 AI 回复功能。开启后开关显示蓝色。'
+          },
+          {
+            title: '配置 AI 参数',
+            content: '点击账号右侧的更多操作 →「AI 设置」，可以配置：\n• AI 提供商：支持 OpenAI 兼容接口、DashScope（阿里云百炼）等\n• API 地址：AI 服务的接口地址\n• API Key：鉴权密钥\n• 模型名称：如 gpt-4、qwen-turbo 等\n• 系统提示词：定义 AI 的角色和回复风格\n配置完成后务必点击「测试连接」按钮验证配置是否正确。'
+          },
+          {
+            title: 'AI 回复流程',
+            content: '当买家发送消息时，系统优先匹配关键词规则 → 未匹配时检查是否开启 AI → 使用 AI 生成回复 → 发送给买家。如果 AI 也未开启，则发送账号或商品的默认回复。'
+          },
+        ],
+        tips: [
+          'AI 提示词中可以包含商品信息变量，让 AI 更了解商品特点',
+          '建议在系统提示词中明确告知 AI 不要承诺无法兑现的内容',
+          '测试连接前请确保网络能访问 AI 服务地址',
+        ],
+      },
+      {
+        id: 'accounts-auto-confirm',
+        title: '自动确认发货',
+        description: '买家下单后，系统自动调用闲鱼 API 确认发货并发送虚拟商品/卡券内容。这是实现全自动发货的关键功能。',
+        steps: [
+          {
+            title: '开启自动确认',
+            content: '在账号列表中找到「自动确认」列的开关，点击开启。开启后开关显示蓝色。想要实现自动发货必须开启此功能。'
+          },
+          {
+            title: '配置发货内容',
+            content: '自动确认发货时发送的内容由「商品管理」中的发货配置决定。支持固定文字、批量数据（卡券）、API 接口、图片等多种类型。详见商品管理章节。'
+          },
+        ],
+        important: '此功能是实现自动发货的核心开关。如果不开启，即使商品配置了发货内容，系统也不会自动发货，需要手动操作。',
+      },
+      {
+        id: 'accounts-redelivery',
+        title: '定时补发货',
+        description: '系统定时检查是否有未发货的订单，自动进行补发货。',
+        steps: [
+          {
+            title: '开启补发货',
+            content: '在账号列表中点击「补发货」列的开关。开启后，系统会按设定的时间间隔检查待发货订单并自动发货。'
+          },
+          {
+            title: '查看补发货日志',
+            content: '管理员可以在「日志管理 → 补发货日志」中查看补发货的执行记录和详情。'
+          },
+        ],
+      },
+      {
+        id: 'accounts-rate',
+        title: '定时补评价',
+        description: '系统定时检查未评价的订单，自动进行评价。',
+        steps: [
+          {
+            title: '开启补评价',
+            content: '在账号列表中点击「补评价」列的开关。'
+          },
+          {
+            title: '配置评价内容',
+            content: '点击更多操作 →「自动评价」，设置自动评价时发送的文字内容。收到评价请求消息时也会使用此内容自动评价买家。'
+          },
+          {
+            title: '查看补评价日志',
+            content: '管理员可以在「日志管理 → 补评价日志」中查看补评价的执行记录。'
+          },
+        ],
+        tips: ['评价内容建议设置为通用的好评内容，如"感谢惠顾，期待再次光临"'],
+      },
+      {
+        id: 'accounts-polish',
+        title: '商品擦亮',
+        description: '系统定时擦亮该账号下的商品，提高商品在闲鱼搜索结果中的曝光率。',
+        steps: [
+          {
+            title: '开启擦亮',
+            content: '在账号列表中找到「擦亮」列的开关，点击开启。'
+          },
+          {
+            title: '查看擦亮日志',
+            content: '管理员可以在「日志管理 → 擦亮日志」中查看擦亮的执行记录。'
+          },
+        ],
+        tips: ['擦亮操作会消耗账号的擦亮次数，请根据闲鱼规则合理使用'],
+      },
+      {
+        id: 'accounts-default-reply',
+        title: '默认回复',
+        description: '设置账号级别的默认回复内容。当买家发送消息且未匹配任何关键词规则、AI 也未开启时，系统会发送此内容。',
+        steps: [
+          {
+            title: '设置默认回复',
+            content: '点击更多操作 →「默认回复」，输入回复文字。支持纯文本和图片。可以设置「每个买家只回复一次」，避免重复发送。'
+          },
+          {
+            title: '优先级说明',
+            content: '消息回复的优先级为：关键词规则 > AI 回复 > 商品默认回复 > 账号默认回复。如果商品设置了默认回复，会优先使用商品的默认回复。'
+          },
+        ],
+      },
+      {
+        id: 'accounts-proxy',
+        title: '代理设置',
+        description: '为该账号配置独立的网络代理。适合多账号运营需要不同 IP 的场景。',
+        steps: [
+          {
+            title: '配置代理',
+            content: '点击更多操作 →「代理设置」，输入代理地址（支持 HTTP/SOCKS5）。格式示例：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080。'
+          },
+        ],
+        tips: ['代理仅对该账号生效，不会影响其他账号', '系统级别的代理在「系统设置」中配置'],
+      },
+      {
+        id: 'accounts-msg-wait',
+        title: '消息等待时间',
+        description: '设置在收到买家消息后等待多久再回复。在该时间内收到的多条消息会合并处理，避免频繁回复造成骚扰。',
+        steps: [
+          {
+            title: '设置等待时间',
+            content: '点击更多操作 →「消息等待」，输入等待秒数（如 5-30 秒）。建议设置在 10-20 秒之间。'
+          },
+        ],
+        tips: ['等待时间太短会导致频繁回复，太长会让买家等太久', '消息合并期间收到的多条消息会被一起送入 AI 或关键词匹配'],
+      },
+      {
+        id: 'accounts-face',
+        title: '人脸验证',
+        description: '当闲鱼要求人脸验证时，通过此功能完成验证流程。',
+        steps: [
+          {
+            title: '处理人脸验证',
+            content: '账号列表中会显示需要验证的账号状态。点击更多操作 →「人脸验证」，系统会生成验证页面或截图，根据提示在手机上完成验证。'
+          },
+        ],
+        important: '人脸验证必须由真人在手机上完成，系统无法自动处理。长时间未完成验证可能导致账号功能受限。',
+      },
+      {
+        id: 'accounts-confirm-msg',
+        title: '确认收货消息',
+        description: '设置买家确认收货后自动发送的消息内容，如好评引导语、售后提示等。',
+        steps: [
+          {
+            title: '设置确认收货消息',
+            content: '点击更多操作 →「确认收货消息」，输入要发送的文字内容。支持插入图片。当系统检测到买家已确认收货时，会自动发送此消息。'
+          },
+        ],
+        tips: ['建议在此引导买家给好评，如"亲，收到货还满意的话麻烦给个好评哦~"'],
+      },
+      {
+        id: 'accounts-auto-rate',
+        title: '自动评价配置',
+        description: '配置自动评价的具体内容。此设置同时用于「收到评价请求时自动评价」和「定时补评价」。',
+        steps: [
+          {
+            title: '配置评价内容',
+            content: '点击更多操作 →「自动评价」，输入评价文字。当系统收到买家的评价请求消息时，会自动使用此内容评价买家。'
+          },
+        ],
+      },
+      {
+        id: 'accounts-remark',
+        title: '备注与标记',
+        description: '为账号添加备注信息，方便管理和识别。',
+        steps: [
+          {
+            title: '添加备注',
+            content: '在账号列表中点击备注列的编辑图标，输入备注内容后保存。备注会在列表中直接显示。'
+          },
+        ],
+      },
+    ],
+    tips: [
+      '账号列表支持按状态、AI 回复、在线状态等多种条件筛选',
+      '点击「获取商品」按钮可从闲鱼同步该账号下的最新商品列表',
+      '管理员可以导出/导入账号 Excel 文件进行批量管理',
     ],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'online-chat',
     icon: MessageCircle,
     title: '在线聊天',
-    description: '实时查看和管理与买家的聊天会话，支持手动回复消息。',
-    children: [
-      { id: 'chat-send', title: '发送消息', description: '在选中的会话中发送文字消息。' },
+    description: '实时查看和管理与买家的聊天会话。支持手动发送消息、查看会话上下文、快捷回复等功能。',
+    steps: [
+      {
+        title: '进入聊天页面',
+        content: '点击侧边栏「在线聊天」进入聊天界面。左侧显示当前账号下的所有会话列表，右侧为选中会话的聊天内容区。'
+      },
+      {
+        title: '查看会话',
+        content: '左侧会话列表显示买家昵称、最后一条消息预览和发送时间。点击某个会话即可在右侧看到完整的聊天记录。'
+      },
+      {
+        title: '发送消息',
+        content: '在右侧聊天区底部的输入框中输入消息内容，按 Enter 或点击发送按钮即可向买家发送消息。发送的消息会通过闲鱼服务器实时推送给买家。'
+      },
+      {
+        title: '使用快捷回复',
+        content: '聊天界面右侧有「快捷短语」面板，可以预设常用回复语，点击即可快速发送。快捷短语可以在聊天页面中直接添加和管理。'
+      },
+      {
+        title: '查看买家订单',
+        content: '在聊天界面可以查看当前买家的历史订单信息，方便了解购买记录和订单状态。'
+      },
+    ],
+    tips: [
+      '聊天页面采用 KeepAlive 机制，切换菜单不会断开连接',
+      '新消息会自动滚动到最底部',
+      '快捷短语支持按账号或全局使用',
     ],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'items',
     icon: Package,
     title: '商品管理',
-    description: '管理账号下的商品信息，配置发货规则、默认回复、AI提示词等。',
+    description: '管理账号下的商品，配置自动发货规则、默认回复、AI 提示词等。商品是发货和回复策略的载体。',
+    steps: [
+      {
+        title: '获取商品列表',
+        content: '选择要管理的账号，点击「获取商品」按钮（单个账号）或「获取全部商品」（所有账号），系统会从闲鱼同步最新的商品数据到本地。获取完成后列表中会显示商品的标题、价格、状态等信息。'
+      },
+      {
+        title: '搜索与筛选',
+        content: '支持按商品标题/ID 搜索，支持按擦亮状态、多规格开关、多数量发货开关等条件筛选。'
+      },
+    ],
     children: [
-      { id: 'items-fetch', title: '获取商品', description: '从闲鱼获取账号下的所有商品信息并保存到本地。' },
-      { id: 'items-batch-reply', title: '新增默认回复', description: '批量为选中的商品设置默认回复内容。' },
-      { id: 'items-batch-ai', title: '新增AI提示词', description: '批量为选中的商品设置AI回复的提示词。' },
-      { id: 'items-delivery', title: '发货配置', description: '配置商品的自动发货规则，支持固定文字、批量数据、API接口、图片等多种卡券类型。' },
-      { id: 'items-reply', title: '默认回复', description: '设置商品的默认回复内容，买家咨询时自动发送。' },
-      { id: 'items-ai-prompt', title: 'AI提示词', description: '设置商品的AI回复提示词，让AI更了解商品特点。' },
-      { id: 'items-spec-switch', title: '多规格开关', description: '开启后支持按规格匹配不同的发货内容。', important: true },
-      { id: 'items-multi-switch', title: '多数量发货开关', description: '开启后支持按购买数量发送多份卡券。' },
+      {
+        id: 'items-delivery',
+        title: '配置发货内容',
+        description: '为商品设置自动发货内容。当买家购买该商品时，系统会自动发送配置的内容。',
+        steps: [
+          {
+            title: '进入发货配置',
+            content: '在商品列表中找到目标商品，点击「卡券」图标或「发货配置」按钮。'
+          },
+          {
+            title: '选择发货类型',
+            content: '系统支持多种发货类型：\n• 固定文字：发送一段固定文本\n• 批量数据（卡券）：从预设的卡券库中按顺序分配\n• API 接口：调用外部 API 获取发货内容\n• 图片：发送一张或多张图片\n根据业务需要选择合适的类型。'
+          },
+          {
+            title: '关联卡券',
+            content: '如果选择批量数据类型，需要先到「卡券管理」中创建卡券数据，然后在发货配置中关联对应的卡券。系统会按顺序自动分配，每个买家获得不同的卡券内容。'
+          },
+        ],
+        important: '必须先开启账号的「自动确认发货」功能，配置的发货内容才会自动发送。否则需要手动发货。',
+      },
+      {
+        id: 'items-reply',
+        title: '商品默认回复',
+        description: '为商品设置独立的默认回复内容，优先级高于账号默认回复。',
+        steps: [
+          {
+            title: '设置单个商品默认回复',
+            content: '点击商品右侧的「默认回复」按钮，输入回复内容。支持纯文本和图片。可以设置「每个买家只回复一次」。'
+          },
+          {
+            title: '批量设置默认回复',
+            content: '勾选多个商品后，点击「批量新增默认回复」按钮，统一为选中的商品设置相同的回复内容。'
+          },
+          {
+            title: '删除默认回复',
+            content: '在默认回复弹窗中可以清空或删除已设置的回复内容。'
+          },
+        ],
+      },
+      {
+        id: 'items-ai-prompt',
+        title: '商品 AI 提示词',
+        description: '为商品设置专属的 AI 提示词，让 AI 回复时更了解该商品的特点。',
+        steps: [
+          {
+            title: '设置 AI 提示词',
+            content: '点击商品右侧的「AI 提示词」按钮，输入针对该商品的提示信息。例如：商品的详细规格、使用说明、常见问题解答等。这些信息会附加在 AI 的系统提示词中。'
+          },
+          {
+            title: '批量设置 AI 提示词',
+            content: '勾选多个商品后，点击「批量新增 AI 提示词」统一设置。'
+          },
+        ],
+        tips: ['AI 提示词应包含商品的关键信息，如"此商品为电子卡券，发货后不支持退款"'],
+      },
+      {
+        id: 'items-spec-switch',
+        title: '多规格开关',
+        description: '开启后支持按 SKU/规格匹配不同的发货内容。例如同一商品有"标准版"和"豪华版"两个规格，可以分别配置不同的卡券。',
+        steps: [
+          {
+            title: '开启多规格',
+            content: '在商品列表中找到「多规格」列的开关，点击开启。开启后需要在发货配置中按规格分别配置发货内容。'
+          },
+        ],
+        important: '开启多规格后，如果某个规格没有配置发货内容，该规格的订单将无法自动发货。',
+      },
+      {
+        id: 'items-multi-switch',
+        title: '多数量发货开关',
+        description: '开启后支持按购买数量发送多份卡券。例如买家购买数量为 3，系统会从卡券库中分配 3 张卡券。',
+        steps: [
+          {
+            title: '开启多数量发货',
+            content: '在商品列表中找到「多数量发货」列的开关，点击开启。'
+          },
+        ],
+        tips: ['开启此功能前请确保卡券库存充足，数量不足时发货可能失败'],
+      },
+      {
+        id: 'items-edit',
+        title: '编辑商品信息',
+        description: '修改商品标题、描述、价格等基本信息。',
+        steps: [
+          {
+            title: '编辑商品',
+            content: '点击商品右侧的编辑图标，修改标题、描述、价格后保存。注意：这些修改仅影响本地数据展示，不会同步到闲鱼平台。'
+          },
+        ],
+      },
+      {
+        id: 'items-delete',
+        title: '删除商品',
+        description: '删除本地商品记录和关联数据。',
+        steps: [
+          {
+            title: '单个删除',
+            content: '点击商品右侧的删除图标，确认后删除该商品及关联的默认回复、AI 提示词、发货配置等数据。'
+          },
+          {
+            title: '批量删除',
+            content: '勾选多个商品后使用批量删除按钮。'
+          },
+        ],
+        important: '删除商品会同时清除该商品的所有关联数据（关键词绑定、卡券关联、默认回复、AI 提示词），不可恢复。',
+      },
     ],
   },
+
+  // ══════════════════════════════════════════════════════
+  {
+    id: 'cards',
+    icon: Ticket,
+    title: '卡券管理',
+    description: '管理虚拟商品/卡券的数据。卡券是发货内容的核心数据来源，商品通过关联卡券实现自动发货。',
+    steps: [
+      {
+        title: '创建卡券',
+        content: '点击「添加卡券」按钮，输入卡券内容（单条或多条批量导入）。每条卡券包含卡号、密码、有效期等信息。'
+      },
+      {
+        title: '管理卡券',
+        content: '列表中展示所有卡券，支持编辑、删除、查看详情。已使用的卡券会标记状态，未使用的卡券按添加顺序排队分配。'
+      },
+      {
+        title: '关联商品',
+        content: '在商品管理中，通过「发货配置」将卡券与商品关联。系统发货时按顺序从未使用的卡券中分配。'
+      },
+    ],
+    tips: ['卡券支持批量导入，适合大量卡券的初始化', '已用完的卡券可以批量清理'],
+  },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'orders',
     icon: ShoppingCart,
     title: '订单管理',
-    description: '查看和管理所有订单，支持手动发货、查看订单详情等操作。',
-    children: [
-      { id: 'orders-manual-delivery', title: '手动发货', description: '对待发货订单执行手动发货操作。' },
-      { id: 'orders-detail', title: '查看详情', description: '查看订单的详细信息，包括收货地址、发货内容等。' },
+    description: '查看和管理所有订单。支持按账号、状态筛选，查看订单详情，手动发货等操作。',
+    steps: [
+      {
+        title: '查看订单列表',
+        content: '选择要查看的账号，系统会加载该账号下的所有订单。支持按订单状态筛选：待付款、待发货、已发货、已完成、退款中、已退款、已关闭等。'
+      },
+      {
+        title: '获取最新订单',
+        content: '点击「获取订单」按钮，系统会从闲鱼同步最新的订单数据。'
+      },
+      {
+        title: '查看订单详情',
+        content: '点击订单右侧的「查看」图标，弹窗展示订单的详细信息，包括：收货人姓名、手机号、地址、购买商品、规格、数量、金额、订单状态、发货内容和发货方式等。'
+      },
+      {
+        title: '手动发货',
+        content: '对于待发货的订单，点击「发货」按钮可以手动触发发货。系统会发送该商品配置的发货内容给买家。手动发货前请确认商品已配置发货内容。'
+      },
+      {
+        title: '订单状态说明',
+        content: '• 待付款：买家已下单但未付款\n• 待发货：买家已付款，等待发货\n• 已发货：系统已自动或手动发送了发货内容\n• 已完成：交易完成\n• 退款中：买家申请退款\n• 已退款：退款已完成\n• 已关闭：订单已取消或关闭',
+      },
+    ],
+    tips: [
+      '订单列表支持自定义列的显示/隐藏，点击列设置按钮可调整',
+      '双击订单行可快速查看详情',
+      '自动发货的订单会标记发货方式为"auto"，手动发货为"manual"',
     ],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'keywords',
     icon: MessageSquare,
-    title: '自动回复',
-    description: '配置关键词自动回复规则，当买家消息包含关键词时自动发送预设回复。',
-    children: [
-      { id: 'keywords-add', title: '添加关键词', description: '添加新的关键词回复规则。' },
-      { id: 'keywords-batch', title: '批量添加', description: '批量导入多个关键词规则。' },
-      { id: 'keywords-edit', title: '编辑', description: '修改关键词的触发词和回复内容。' },
-      { id: 'keywords-delete', title: '删除', description: '删除关键词规则。' },
+    title: '自动回复（关键词）',
+    description: '配置关键词自动回复规则。当买家消息包含指定关键词时，系统自动发送预设的回复内容。关键词匹配优先于 AI 回复和默认回复。',
+    steps: [
+      {
+        title: '选择账号',
+        content: '在页面顶部的下拉框中选择要配置的账号。关键词规则是按账号隔离的，每个账号有独立的关键词列表。'
+      },
+      {
+        title: '添加关键词规则',
+        content: '点击「添加关键词」按钮，输入：\n• 关键词：支持多个关键词，每行一个。买家消息只要包含其中任意一个即触发回复\n• 回复内容：匹配成功后发送的文字或图片\n• 绑定商品（可选）：将规则限定在特定商品上，只有咨询该商品时才触发'
+      },
+      {
+        title: '编辑关键词',
+        content: '点击规则右侧的编辑图标，修改关键词或回复内容后保存。'
+      },
+      {
+        title: '删除关键词',
+        content: '单个删除：点击规则右侧的删除图标。批量删除：勾选多条规则后使用批量删除按钮。'
+      },
+      {
+        title: '添加图片关键词',
+        content: '点击「添加图片关键词」可以创建图片类型的回复规则。上传图片后，匹配关键词时会发送该图片给买家。'
+      },
+      {
+        title: '批量导入/导出',
+        content: '点击「导入」按钮可以从 Excel/CSV 文件批量导入关键词规则。点击「导出」可以将当前账号的关键词规则导出为文件备份或迁移到其他账号。'
+      },
+      {
+        title: '匹配机制说明',
+        content: '关键词匹配不区分大小写。如果买家消息同时匹配了多个关键词，系统会选择最先匹配到的规则发送。如果一条规则设置了多个关键词，只要买家消息包含其中任意一个即触发。',
+      },
+    ],
+    tips: [
+      '关键词建议涵盖买家常问的各种表述方式，如"多少钱""价格""怎么卖"匹配同一回复',
+      '重要关键词应放在列表前面，系统按顺序匹配',
+      '如果规则绑定了商品，建议在关键词中包含商品的特征词，避免误匹配',
     ],
   },
+
+  // ══════════════════════════════════════════════════════
+  {
+    id: 'message-logs',
+    icon: ScrollText,
+    title: '消息日志',
+    description: '查看自动回复的消息发送记录。每条记录包含触发关键词、发送的回复内容、发送状态等信息。',
+    steps: [
+      {
+        title: '查看日志',
+        content: '列表展示所有自动回复消息的发送记录，包括时间、账号、买家、关键词、回复内容和发送状态（成功/失败）。支持按账号筛选。'
+      },
+      {
+        title: '分析失败原因',
+        content: '发送失败的消息会显示失败原因（如 Cookie 过期、网络超时、被风控拦截等），方便排查问题。'
+      },
+    ],
+  },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'message-filters',
     icon: Filter,
     title: '消息过滤',
-    description: '配置消息过滤规则，符合规则的消息将被忽略不处理。',
-    children: [
-      { id: 'filters-add', title: '添加过滤词', description: '添加新的过滤规则。' },
-      { id: 'filters-edit', title: '编辑', description: '修改过滤规则。' },
-      { id: 'filters-delete', title: '删除', description: '删除过滤规则。' },
+    description: '配置消息过滤规则，符合规则的消息将被忽略，不触发自动回复和通知。适合过滤广告、骚扰消息等。',
+    steps: [
+      {
+        title: '添加过滤规则',
+        content: '点击「添加过滤词」按钮，输入：\n• 账号：选择要应用规则的账号\n• 关键词：要过滤的词语\n• 过滤类型：\n  - 跳过回复（skip_reply）：匹配的消息不自动回复\n  - 跳过通知（skip_notify）：匹配的消息不发送通知\n  - 可同时选择两种'
+      },
+      {
+        title: '编辑/删除规则',
+        content: '点击规则右侧的编辑或删除图标进行修改。'
+      },
+      {
+        title: '批量操作',
+        content: '支持批量添加过滤规则：选择多个账号后输入关键词，一次性为所有选中账号创建相同的过滤规则。'
+      },
+    ],
+    tips: [
+      '过滤广告类消息建议同时选择"跳过回复"和"跳过通知"',
+      '关键词支持模糊匹配，如设置"加群"可过滤所有包含"加群"的消息',
     ],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'risk-logs',
     icon: Shield,
     title: '风控日志',
-    description: '查看账号风控拦截记录，普通用户可查看自己的账号日志，管理员可查看全部。',
+    description: '查看账号被风控拦截的记录。普通用户只能查看自己账号的日志，管理员可查看全部。',
+    steps: [
+      {
+        title: '查看风控记录',
+        content: '列表展示被拦截的操作记录，包括时间、账号、操作类型、拦截原因等。当系统检测到异常操作（如频繁发送、Cookie 失效等）时，会记录风控日志并暂停相关功能。'
+      },
+      {
+        title: '处理风控',
+        content: '查看风控原因后，根据提示处理问题。常见原因：Cookie 过期（需重新登录）、操作频率过高（降低频率或增加等待时间）、账号被平台限制（需手动处理）。'
+      },
+    ],
+    tips: ['发现风控日志后应立即处理，避免账号被进一步限制'],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'notification-channels',
     icon: Bell,
     title: '通知渠道',
-    description: '配置消息通知渠道，支持企业微信、钉钉、飞书、Bark等多种推送方式。',
-    children: [
-      { id: 'channels-add', title: '添加渠道', description: '添加新的通知渠道配置。' },
-      { id: 'channels-test', title: '测试', description: '发送测试消息验证渠道配置是否正确。' },
-      { id: 'channels-edit', title: '编辑', description: '修改渠道配置。' },
-      { id: 'channels-delete', title: '删除', description: '删除通知渠道。' },
-      { id: 'channels-toggle', title: '启用/禁用', description: '切换渠道的启用状态。' },
+    description: '配置消息推送渠道。系统在检测到新订单、新消息等事件时，通过配置的渠道发送通知。',
+    steps: [
+      {
+        title: '添加通知渠道',
+        content: '点击「添加渠道」按钮，选择渠道类型并填写配置信息：\n• 钉钉机器人：填写 Webhook 地址\n• 飞书机器人：填写 Webhook 地址\n• 企业微信机器人：填写 Webhook 地址\n• Bark：填写设备 Key 和服务器地址\n• 邮件：配置 SMTP 信息\n• Telegram：填写 Bot Token 和 Chat ID\n• PushPlus：填写 Token\n• 自定义 Webhook：填写 URL 和请求模板'
+      },
+      {
+        title: '测试渠道',
+        content: '添加渠道后点击「测试」按钮，系统会发送一条测试消息。如果收到消息说明配置正确，否则请检查配置信息。'
+      },
+      {
+        title: '启用/禁用',
+        content: '点击渠道右侧的开关可以暂时关闭某个渠道的通知。'
+      },
+      {
+        title: '编辑/删除',
+        content: '点击编辑按钮修改渠道配置，点击删除按钮移除不再使用的渠道。'
+      },
+    ],
+    tips: [
+      '建议至少配置一个通知渠道，以便及时了解订单和消息动态',
+      'Bark 是 iOS 端的免费推送工具，适合个人用户使用',
+      '多个渠道可以同时启用，系统会向所有启用的渠道发送通知',
     ],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'message-notifications',
     icon: MessageCircle,
     title: '消息通知',
-    description: '配置哪些类型的消息需要推送通知，如新订单、新消息等。',
-    children: [
-      { id: 'notifications-add', title: '添加规则', description: '添加新的通知规则。' },
-      { id: 'notifications-edit', title: '编辑', description: '修改通知规则。' },
-      { id: 'notifications-delete', title: '删除', description: '删除通知规则。' },
-      { id: 'notifications-toggle', title: '启用/禁用', description: '切换规则的启用状态。' },
+    description: '配置哪些类型的消息需要推送通知。例如可以设置为仅新订单通知、或所有新消息都通知。',
+    steps: [
+      {
+        title: '添加通知规则',
+        content: '点击「添加规则」按钮，选择账号和通知渠道，设置通知条件。'
+      },
+      {
+        title: '启用/禁用规则',
+        content: '点击开关暂时关闭某条规则的通知。'
+      },
+      {
+        title: '编辑/删除',
+        content: '点击编辑或删除图标修改通知规则。'
+      },
+    ],
+    tips: ['建议对新订单设置通知，普通聊天消息可选择性通知以减少打扰'],
+  },
+
+  // ══════════════════════════════════════════════════════
+  {
+    id: 'blacklist',
+    icon: Ban,
+    title: '黑名单管理',
+    description: '管理买家黑名单，被加入黑名单的买家消息将被自动忽略。分为平台黑名单（系统级）和个人黑名单（账号级）。',
+    steps: [
+      {
+        title: '平台黑名单',
+        content: '管理员设置的全平台黑名单，对所有账号生效。黑名单中的买家消息不会触发任何自动回复。'
+      },
+      {
+        title: '个人黑名单',
+        content: '针对单个账号设置的黑名单。可以为黑名单条目设置有效期，到期后自动解除。'
+      },
+      {
+        title: '添加黑名单',
+        content: '点击「添加」按钮，输入买家 ID 或昵称，设置有效期（可选）。'
+      },
     ],
   },
+
+  // ══════════════════════════════════════════════════════
+  {
+    id: 'personal-settings',
+    icon: UserCog,
+    title: '个人设置',
+    description: '管理个人账户信息，包括修改密码、账户续期、余额充值、查看资金流水等。',
+    steps: [
+      {
+        title: '修改密码',
+        content: '输入当前密码和新密码后保存。'
+      },
+      {
+        title: '账户续期',
+        content: '如果账户有到期时间，可以在「续期」中购买使用时长。选择续期月数后确认支付，系统会从余额中扣除相应费用并延长到期日。'
+      },
+      {
+        title: '余额充值',
+        content: '通过「充值」功能为账户余额充值，支持支付宝和微信支付。'
+      },
+      {
+        title: '查看资金流水',
+        content: '在「资金流水」中查看所有充值、消费、退款等交易记录。'
+      },
+    ],
+  },
+
+  // ══════════════════════════════════════════════════════
+  {
+    id: 'distribution',
+    icon: PackageSearch,
+    title: '分销管理',
+    description: '管理货源、分销商、对接商品和代理订单。支持多级分销体系。',
+    children: [
+      {
+        id: 'distribution-sources',
+        title: '货源管理',
+        description: '管理上游供应商的货源信息。',
+        steps: [
+          { title: '添加货源', content: '添加供应商信息，包括名称、联系方式、货源描述等。' },
+          { title: '对接货源', content: '通过对接码与其他系统对接，实现货源同步。' },
+        ],
+      },
+      {
+        id: 'distribution-supply',
+        title: '货源广场',
+        description: '浏览和选择可供分销的货源商品。',
+      },
+      {
+        id: 'distribution-docked',
+        title: '对接的商品',
+        description: '管理已对接的商品，设置分销价格和库存。',
+        steps: [
+          { title: '查看对接商品', content: '列表中显示所有已对接的商品及其分销状态。' },
+          { title: '设置分销信息', content: '编辑商品的分销价格、库存等信息。' },
+        ],
+      },
+      {
+        id: 'distribution-dealers',
+        title: '分销商管理',
+        description: '管理下级分销商，查看分销商业绩和订单。',
+        steps: [
+          { title: '添加分销商', content: '创建分销商账号，设置分成比例。' },
+          { title: '查看分销商订单', content: '查看每个分销商的代理订单和销售数据。' },
+        ],
+      },
+      {
+        id: 'distribution-agent-orders',
+        title: '代理订单',
+        description: '查看下级分销商的代理订单，跟踪分销发货状态。',
+      },
+    ],
+  },
+
+  // ══════════════════════════════════════════════════════
+  {
+    id: 'product-publish',
+    icon: Store,
+    title: '商品发布',
+    description: '将商品发布到闲鱼平台。支持单品发布和批量发布，包含素材库管理和地址库管理。',
+    children: [
+      {
+        id: 'publish-materials',
+        title: '素材库',
+        description: '管理商品发布的图片素材。',
+        steps: [
+          { title: '上传素材', content: '上传商品图片到素材库，支持批量上传。' },
+          { title: '管理素材', content: '查看、删除、分类管理已上传的素材图片。' },
+        ],
+      },
+      {
+        id: 'publish-single',
+        title: '单品发布',
+        description: '逐个发布商品到闲鱼。',
+        steps: [
+          { title: '填写商品信息', content: '输入商品标题、描述、价格、分类、图片、发货地址等信息。' },
+          { title: '发布', content: '点击发布按钮将商品发布到闲鱼。发布结果会在发布日志中查看。' },
+        ],
+      },
+      {
+        id: 'publish-batch',
+        title: '批量发布',
+        description: '通过 Excel 模板批量发布多个商品。',
+        steps: [
+          { title: '下载模板', content: '下载标准的批量发布模板。' },
+          { title: '填写数据', content: '在模板中填写多个商品的信息。' },
+          { title: '导入并发布', content: '上传填写好的文件，系统自动逐个发布商品。' },
+        ],
+      },
+      {
+        id: 'publish-addresses',
+        title: '地址库',
+        description: '管理商品发布的发货地址。',
+        steps: [
+          { title: '添加地址', content: '添加发货地址（全局地址库，所有用户共享）。' },
+          { title: '个人地址', content: '管理自己的收货/发货地址。' },
+        ],
+      },
+      {
+        id: 'publish-logs',
+        title: '发布日志',
+        description: '查看商品发布的执行记录和结果。',
+        steps: [
+          { title: '查看日志', content: '查看每次发布的详细信息，包括成功/失败状态和失败原因。' },
+        ],
+      },
+    ],
+  },
+
+  // ══════════════════════════════════════════════════════
+  {
+    id: 'product-monitor',
+    icon: Radar,
+    title: '商品监控',
+    description: '监控闲鱼平台上的商品，自动采集和跟踪商品变化。支持设置监控分类、采集商品、下单等功能。',
+    children: [
+      {
+        id: 'monitor-overview',
+        title: '监控总览',
+        description: '查看监控系统的运行概览，包括监控数量、采集数量、异常数量等统计信息。',
+      },
+      {
+        id: 'monitor-categories',
+        title: '监控分类',
+        description: '管理监控的商品分类，按分类组织和筛选监控目标。',
+      },
+      {
+        id: 'monitor-listing',
+        title: '商品监控列表',
+        description: '配置具体的监控目标（闲鱼商品链接），设置监控参数。',
+        steps: [
+          { title: '添加监控', content: '输入闲鱼商品链接或搜索条件，设置监控频率和参数。' },
+          { title: '管理监控', content: '启用/禁用、编辑、删除监控任务。' },
+        ],
+      },
+      {
+        id: 'monitor-logs',
+        title: '监控日志',
+        description: '查看监控任务的执行记录。',
+      },
+      {
+        id: 'monitor-items',
+        title: '采集商品',
+        description: '查看监控系统采集到的商品数据。',
+      },
+      {
+        id: 'monitor-fallback',
+        title: '备用账号',
+        description: '管理用于下单和采集的备用闲鱼账号。',
+      },
+    ],
+  },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'goofish-compass',
     icon: Radar,
     title: '数据罗盘',
-    description: '（管理员功能）闲鱼数据分析工具，搜索和分析商品数据。',
-    children: [
-      { id: 'compass-export', title: '导出', description: '导出搜索结果。' },
+    description: '（管理员功能）闲鱼数据分析工具，搜索和分析平台商品数据。',
+    steps: [
+      {
+        title: '搜索商品',
+        content: '输入关键词搜索闲鱼平台的商品数据，查看价格分布、销量趋势等分析结果。'
+      },
+      {
+        title: '导出数据',
+        content: '将搜索结果导出为文件，方便进一步分析。'
+      },
     ],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'goofish-scheduled-crawler',
     icon: Clock,
     title: '定时采集',
-    description: '（管理员功能）配置定时采集任务，自动采集闲鱼商品数据。',
-    children: [
-      { id: 'crawler-add', title: '添加任务', description: '创建新的定时采集任务。' },
-      { id: 'crawler-run', title: '立即执行', description: '手动触发采集任务。' },
-      { id: 'crawler-edit', title: '编辑', description: '修改任务配置。' },
-      { id: 'crawler-delete', title: '删除', description: '删除采集任务。' },
-      { id: 'crawler-toggle', title: '启用/禁用', description: '切换任务的启用状态。' },
+    description: '（管理员功能）配置定时数据采集任务，自动采集闲鱼商品数据。',
+    steps: [
+      {
+        title: '创建采集任务',
+        content: '点击「添加任务」，设置搜索关键词、采集频率、采集数量等参数。'
+      },
+      {
+        title: '管理任务',
+        content: '支持编辑、删除、启用/禁用采集任务。点击「立即执行」可手动触发一次采集。'
+      },
     ],
+    tips: ['采集频率不宜过高，避免触发平台反爬机制'],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'settings',
     icon: Settings,
     title: '系统设置',
-    description: '配置系统参数，包括主题、语言、个人信息等。',
+    description: '（管理员功能）配置系统全局参数，包括主题外观、字体、代理、密码登录方式、滑块验证模式、菜单可见性等。',
     children: [
-      { id: 'settings-password', title: '修改密码', description: '修改当前账号的登录密码。' },
-      { id: 'settings-theme', title: '主题切换', description: '切换系统的明暗主题。' },
+      {
+        id: 'settings-theme',
+        title: '主题外观设置',
+        description: '自定义系统的视觉风格。',
+        steps: [
+          {
+            title: '选择颜色主题',
+            content: '系统提供 9 种颜色预设：海洋蓝、翡翠绿、雾感紫、深海靛蓝、琥珀金（以上为纯色风格）、落日橙、极光青、霓虹粉、宝石红（以上为炫彩风格）。选择后实时预览效果。'
+          },
+          {
+            title: '选择效果模式',
+            content: '• 纯色模式：界面干净统一，按钮和选中态使用主题色\n• 炫彩模式：按钮和顶部区域增加渐变效果，背景有彩色氛围光'
+          },
+          {
+            title: '选择字体',
+            content: '系统提供 9 种字体选项：系统默认、微软雅黑、现代黑体、雅致宋体、经典楷体、文雅仿宋、行楷风格、圆润字体、等宽风格。选择后全站字体实时切换。'
+          },
+          {
+            title: '切换明暗模式',
+            content: '点击顶部导航栏的主题切换按钮（太阳/月亮图标），在亮色模式和暗色模式之间切换。暗黑模式适合夜间使用，减少眼部疲劳。'
+          },
+        ],
+      },
+      {
+        id: 'settings-password',
+        title: '修改密码',
+        description: '修改当前管理员账号的登录密码。输入当前密码和新密码后保存。',
+      },
+      {
+        id: 'settings-proxy',
+        title: '系统代理设置',
+        description: '配置系统级别的全局网络代理。与账号级别的代理不同，此处的代理用于系统本身与闲鱼服务器的通信。',
+        steps: [
+          { title: '配置代理', content: '输入代理地址和端口，选择是否启用。保存后立即生效。' },
+        ],
+      },
+      {
+        id: 'settings-password-mode',
+        title: '密码登录方式',
+        description: '选择账号密码登录时的实现方式：• protocol（协议方式）：使用 API 接口模拟登录，速度快但可能触发验证 • browser（浏览器方式）：使用浏览器模拟真实登录，通过率高但速度较慢。',
+      },
+      {
+        id: 'settings-slider-mode',
+        title: '滑块验证模式',
+        description: '选择滑块验证码的处理方式：• browser（浏览器模拟）：使用浏览器自动完成滑块 • real_mouse（真实鼠标）：模拟真实鼠标轨迹完成滑块，通过率更高。',
+      },
+      {
+        id: 'settings-menu-visibility',
+        title: '菜单可见性设置',
+        description: '管理员可以隐藏某些菜单项，对普通用户不可见。勾选要隐藏的菜单后保存，普通用户将看不到对应菜单。管理员自己不受影响。',
+      },
+      {
+        id: 'settings-login-branding',
+        title: '登录页品牌设置',
+        description: '自定义登录页面的系统名称、标题和描述文字。',
+      },
+      {
+        id: 'settings-disclaimer',
+        title: '免责声明设置',
+        description: '自定义系统免责声明的标题、内容和按钮文字。',
+      },
+      {
+        id: 'settings-footer-ad',
+        title: '登录页底部广告',
+        description: '设置登录页面底部的广告 HTML 内容，支持 HTML 标签和链接。',
+      },
+      {
+        id: 'settings-token-api',
+        title: 'Token 获取方式',
+        description: '选择获取闲鱼 API Token 的方式：• web（本地）：由本地服务获取 • remote（远程）：从远程服务获取。远程模式需要配置远程服务地址和密钥。',
+      },
     ],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'admin',
     icon: UserCog,
     title: '管理员功能',
-    description: '系统管理员专属功能，包括用户管理、日志查看、定时任务等。',
+    description: '系统管理员专属功能模块，包括用户管理、日志查看、定时任务、公告管理、广告管理、数据库维护等。',
     children: [
       {
         id: 'admin-users',
         icon: UserCog,
         title: '用户管理',
-        description: '管理系统用户，包括创建用户、修改权限、重置密码等。',
-        children: [
-          { id: 'users-add', title: '添加用户', description: '创建新的系统用户。' },
-          { id: 'users-edit', title: '编辑', description: '修改用户信息和权限。' },
-          { id: 'users-reset-pwd', title: '重置密码', description: '重置用户的登录密码。' },
-          { id: 'users-toggle', title: '启用/禁用', description: '切换用户的启用状态。' },
+        description: '管理系统用户，包括创建用户、修改权限、重置密码、启用/禁用用户、充值余额等。',
+        steps: [
+          {
+            title: '添加用户',
+            content: '点击「添加用户」按钮，填写用户名、密码、邮箱（可选）、角色（管理员/操作员/成员）、账号数量限制等信息。'
+          },
+          {
+            title: '编辑用户',
+            content: '点击编辑图标修改用户信息，包括角色、账号限制、到期时间等。'
+          },
+          {
+            title: '重置密码',
+            content: '点击重置密码按钮，输入新密码后保存。'
+          },
+          {
+            title: '启用/禁用用户',
+            content: '点击状态开关切换用户的启用状态。禁用的用户无法登录系统。'
+          },
+          {
+            title: '用户充值',
+            content: '管理员可以为用户账户充值余额。'
+          },
         ],
       },
       {
         id: 'admin-logs',
         icon: ScrollText,
         title: '日志管理',
-        description: '查看系统运行日志，包括系统日志、补发货日志等。',
+        description: '查看各类系统运行日志，用于排查问题和监控系统状态。',
         children: [
           {
             id: 'admin-system-logs',
             icon: FileText,
             title: '系统日志',
-            description: '查看系统运行日志，排查问题。',
+            description: '查看系统运行日志，包含错误、警告、信息等级别的日志记录。用于排查系统问题和了解运行状态。',
+            steps: [
+              { title: '查看日志', content: '日志列表按时间倒序排列，支持按级别筛选。每条日志包含时间戳、级别、模块来源和详细信息。' },
+            ],
           },
           {
             id: 'admin-redelivery-logs',
             icon: Repeat,
             title: '补发货日志',
-            description: '查看定时补发货的执行记录。',
-            children: [
-              { id: 'redelivery-detail', title: '查看详情', description: '查看批次的详细发货记录。' },
+            description: '查看定时补发货任务的执行记录。每个批次包含执行时间、处理的账号数、发货成功/失败数量等统计。',
+            steps: [
+              { title: '查看批次', content: '列表中每个批次显示执行时间、总数、成功数、失败数。' },
+              { title: '查看详情', content: '点击批次进入详情页，查看每条发货记录的详细信息，包括商品、买家、发货内容和状态。如果发货失败，会显示失败原因。' },
             ],
           },
           {
             id: 'admin-rate-logs',
             icon: Star,
             title: '补评价日志',
-            description: '查看定时补评价的执行记录。',
-            children: [
-              { id: 'rate-logs-detail', title: '查看详情', description: '查看批次的详细评价记录。' },
-            ],
+            description: '查看定时补评价任务的执行记录。结构与补发货日志类似。',
           },
           {
             id: 'admin-polish-logs',
             icon: Star,
             title: '擦亮日志',
-            description: '查看商品擦亮的执行记录。',
-            children: [
-              { id: 'polish-logs-detail', title: '查看详情', description: '查看批次的详细擦亮记录。' },
+            description: '查看商品擦亮任务的执行记录，了解哪些商品被擦亮以及擦亮结果。',
+          },
+          {
+            id: 'admin-login-renew-logs',
+            title: '登录续期日志',
+            description: '查看账号登录续期的执行记录。账号 Cookie 过期前系统会自动续期，此处记录续期结果。',
+          },
+          {
+            id: 'admin-token-renewal-logs',
+            title: 'Token 续期日志',
+            description: '查看闲鱼 API Token 的续期记录。',
+          },
+          {
+            id: 'admin-cookies-refresh-logs',
+            title: 'Cookie 刷新日志',
+            description: '查看账号 Cookie 的刷新记录。',
+          },
+          {
+            id: 'admin-api-cookie-renew-logs',
+            title: '接口续期 Cookie 日志',
+            description: '查看通过 API 接口续期 Cookie 的执行记录。',
+          },
+          {
+            id: 'admin-close-notice-logs',
+            title: '消息通知关闭日志',
+            description: '查看系统自动关闭消息通知的操作记录。',
+          },
+          {
+            id: 'admin-red-flower-logs',
+            title: '求小红花日志',
+            description: '查看自动求小红花功能的执行记录。',
+          },
+          {
+            id: 'admin-db-backup-logs',
+            icon: Database,
+            title: '数据库备份日志',
+            description: '查看数据库自动备份的执行记录，包括备份文件名、大小、执行时间等。支持下载备份文件。',
+          },
+          {
+            id: 'admin-db-restore',
+            icon: RotateCcw,
+            title: '数据库恢复',
+            description: '从备份文件恢复数据库。支持上传备份文件或选择服务器上已有的备份文件，按分类选择性恢复数据。',
+            steps: [
+              {
+                title: '选择备份文件',
+                content: '两个方式：上传本地 .sql.gz 备份文件，或从服务器已有备份列表中选择。选择后系统会解析文件并显示包含的数据分类和表信息。'
+              },
+              {
+                title: '选择恢复范围',
+                content: '系统将数据分为 7 类（系统配置、用户与账号、业务核心、广告与反馈、分销与财务、商品发布与采集、返佣系统）。可以勾选需要恢复的分类，或选择「全部数据」。'
+              },
+              {
+                title: '执行恢复',
+                content: '确认恢复范围后，勾选「我已知晓恢复操作不可撤销」→点击「开始恢复」。恢复过程中不要关闭页面，完成后会显示各表的恢复结果。'
+              },
             ],
+            important: '恢复操作将覆盖当前数据库中的对应数据，不可撤销。执行恢复前建议先备份当前数据库。',
+          },
+          {
+            id: 'admin-account-login-logs',
+            icon: LogIn,
+            title: '账号登录日志',
+            description: '查看闲鱼账号的登录记录，包括登录时间、登录方式、登录结果等信息。',
           },
         ],
       },
@@ -265,37 +1169,59 @@ const tutorialData: TutorialSection[] = [
         id: 'admin-scheduled-tasks',
         icon: Timer,
         title: '定时任务',
-        description: '查看和管理系统定时任务的执行状态。',
-        children: [
-          { id: 'tasks-run', title: '立即执行', description: '手动触发定时任务。' },
+        description: '查看和管理系统后台定时任务的执行状态。每个任务显示名称、上次执行时间、下次执行时间、执行状态等。',
+        steps: [
+          { title: '查看任务状态', content: '列表展示所有定时任务，包括自动回复、补发货、补评价、擦亮、续期等。' },
+          { title: '手动执行', content: '点击任务右侧的「立即执行」按钮可以手动触发一次任务。' },
         ],
       },
       {
         id: 'admin-announcements',
         icon: Megaphone,
         title: '公告管理',
-        description: '发布和管理系统公告。',
+        description: '发布和管理系统公告。公告会在用户登录后的页面中显示。',
+        steps: [
+          { title: '添加公告', content: '点击「添加公告」，输入标题和内容后发布。' },
+          { title: '编辑/删除', content: '修改公告内容或删除不再需要的公告。' },
+          { title: '启用/禁用', content: '切换公告的显示状态。禁用的公告不会在用户端显示。' },
+        ],
         children: [
-          { id: 'announcements-add', title: '添加公告', description: '发布新的系统公告。' },
-          { id: 'announcements-edit', title: '编辑', description: '修改公告内容。' },
-          { id: 'announcements-delete', title: '删除', description: '删除公告。' },
-          { id: 'announcements-toggle', title: '启用/禁用', description: '切换公告的显示状态。' },
+          {
+            id: 'admin-popup-announcements',
+            title: '弹窗公告',
+            description: '创建登录后自动弹出的公告窗口。与普通公告不同，弹窗公告会在用户登录后以模态窗口形式展示，需要用户手动关闭。',
+          },
         ],
       },
       {
-        id: 'admin-ad-manage',
+        id: 'admin-advertising',
         icon: Image,
         title: '广告管理',
-        description: '管理系统广告位和广告内容。',
+        description: '管理系统中的广告位内容。',
         children: [
-          { id: 'ad-add', title: '添加广告', description: '创建新的广告。' },
-          { id: 'ad-edit', title: '编辑', description: '修改广告内容。' },
-          { id: 'ad-delete', title: '删除', description: '删除广告。' },
-          { id: 'ad-audit', title: '审核', description: '审核用户提交的广告申请。' },
+          {
+            id: 'admin-ad-manage',
+            icon: Image,
+            title: '广告管理',
+            description: '创建和管理广告内容，支持轮播广告和文字广告两种类型。',
+            steps: [
+              { title: '添加广告', content: '创建新的广告，设置标题、内容、图片（轮播广告）、链接、广告类型等。' },
+              { title: '审核广告', content: '审核用户提交的广告申请，通过后广告会在系统中展示。' },
+              { title: '编辑/删除', content: '修改广告内容或删除广告。' },
+            ],
+          },
         ],
+      },
+      {
+        id: 'admin-fund-flows',
+        icon: Wallet,
+        title: '资金流水',
+        description: '查看所有用户的资金变动记录，包括充值、消费、退款等。管理员可以查看全平台流水，普通用户在个人设置中只能看自己的。',
       },
     ],
   },
+
+  // ══════════════════════════════════════════════════════
   {
     id: 'other',
     icon: Info,
@@ -306,9 +1232,9 @@ const tutorialData: TutorialSection[] = [
         id: 'feedback',
         icon: MessageSquarePlus,
         title: '意见反馈',
-        description: '提交使用过程中遇到的问题或建议。',
-        children: [
-          { id: 'feedback-submit', title: '提交反馈', description: '提交新的意见或建议。' },
+        description: '提交使用过程中遇到的问题、建议或需求。',
+        steps: [
+          { title: '提交反馈', content: '输入反馈标题和详细内容后提交。管理员可以在后台查看和回复反馈。' },
         ],
       },
       {
@@ -316,25 +1242,27 @@ const tutorialData: TutorialSection[] = [
         icon: Image,
         title: '广告申请',
         description: '申请在系统中投放广告。',
-        children: [
-          { id: 'ad-apply-submit', title: '提交申请', description: '提交广告投放申请。' },
+        steps: [
+          { title: '提交广告申请', content: '填写广告信息（标题、内容、链接、图片等）后提交。管理员审核通过后广告会在系统中展示。' },
         ],
       },
       {
         id: 'disclaimer',
         icon: AlertTriangle,
         title: '免责声明',
-        description: '查看系统的免责声明和使用条款。',
+        description: '查看系统的免责声明和使用条款。首次登录时必须同意免责声明才能使用系统。',
       },
       {
         id: 'about',
         icon: Info,
         title: '关于',
-        description: '查看系统版本信息和开发者信息。',
+        description: '查看系统版本信息、开发者信息、获取最新版本和源码的入口。',
       },
     ],
   },
 ]
+
+// ─── 组件 ─────────────────────────────────────────────────
 
 export function Tutorial() {
   const [activeSection, setActiveSection] = useState<string>('dashboard')
@@ -375,7 +1303,7 @@ export function Tutorial() {
     const handleScroll = () => {
       const containerTop = container.getBoundingClientRect().top
       let currentSection = 'dashboard'
-      
+
       Object.entries(sectionRefs.current).forEach(([id, element]) => {
         if (element) {
           const elementTop = element.getBoundingClientRect().top - containerTop
@@ -384,7 +1312,7 @@ export function Tutorial() {
           }
         }
       })
-      
+
       setActiveSection(currentSection)
     }
 
@@ -398,7 +1326,7 @@ export function Tutorial() {
     const isActive = activeSection === section.id
     const hasChildren = section.children && section.children.length > 0
     const isExpanded = expandedSections.has(section.id)
-    
+
     return (
       <div key={section.id}>
         <div className="flex items-center">
@@ -442,25 +1370,91 @@ export function Tutorial() {
   const renderContentSection = (section: TutorialSection, level: number = 0) => {
     const Icon = section.icon || Circle
     const HeadingTag = level === 0 ? 'h2' : level === 1 ? 'h3' : 'h4'
-    const headingClass = level === 0 
-      ? 'text-xl font-bold text-blue-600 dark:text-blue-400' 
-      : level === 1 
-        ? 'text-lg font-semibold text-emerald-600 dark:text-emerald-400' 
+    const headingClass = level === 0
+      ? 'text-xl font-bold text-blue-600 dark:text-blue-400'
+      : level === 1
+        ? 'text-lg font-semibold text-emerald-600 dark:text-emerald-400'
         : 'text-base font-medium text-slate-700 dark:text-slate-300'
-    
+
     return (
       <div
         key={section.id}
         ref={el => { sectionRefs.current[section.id] = el }}
         className={cn('mb-6', level > 0 && 'ml-4')}
       >
-        <HeadingTag className={cn('flex items-center gap-2 mb-2', headingClass, section.important && 'text-red-600 dark:text-red-400')}>
+        <HeadingTag className={cn('flex items-center gap-2 mb-2', headingClass)}>
           <Icon className={cn(level === 0 ? 'w-5 h-5' : 'w-4 h-4')} />
           {section.title}
-          {section.important && <span className="text-xs bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">重要</span>}
+          {section.important && (
+            <span className="text-xs bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded font-normal">重要</span>
+          )}
         </HeadingTag>
-        <p className={cn('mb-3 text-sm', section.important ? 'text-red-600 dark:text-red-400 font-medium' : 'text-slate-600 dark:text-slate-400')}>{section.description}</p>
-        
+
+        {/* 概述 */}
+        <p className="mb-3 text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+          {section.description}
+        </p>
+
+        {/* 重要提示 */}
+        {section.important && (
+          <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+            <p className="text-sm text-red-700 dark:text-red-300 font-medium">
+              ⚠️ {section.important}
+            </p>
+          </div>
+        )}
+
+        {/* 操作步骤 */}
+        {section.steps && section.steps.length > 0 && (
+          <div className="mb-4">
+            <h5 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">📋 操作步骤</h5>
+            <div className="space-y-3">
+              {section.steps.map((step, i) => (
+                <div key={i} className="flex gap-3">
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 text-xs font-bold flex items-center justify-center mt-0.5">
+                    {i + 1}
+                  </span>
+                  <div>
+                    <p className="text-sm font-medium text-slate-700 dark:text-slate-300">{step.title}</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed whitespace-pre-line">{step.content}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 使用技巧 */}
+        {section.tips && section.tips.length > 0 && (
+          <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <p className="text-sm font-semibold text-blue-700 dark:text-blue-300 mb-1">💡 使用技巧</p>
+            <ul className="space-y-1">
+              {section.tips.map((tip, i) => (
+                <li key={i} className="text-sm text-blue-600 dark:text-blue-400 flex items-start gap-2">
+                  <span className="flex-shrink-0 mt-0.5">•</span>
+                  {tip}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* 常见问题 */}
+        {section.faq && section.faq.length > 0 && (
+          <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+            <p className="text-sm font-semibold text-amber-700 dark:text-amber-300 mb-1">❓ 常见问题</p>
+            <dl className="space-y-2">
+              {section.faq.map((item, i) => (
+                <div key={i}>
+                  <dt className="text-sm font-medium text-amber-700 dark:text-amber-300">Q: {item.q}</dt>
+                  <dd className="text-sm text-amber-600 dark:text-amber-400 mt-0.5">A: {item.a}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        )}
+
+        {/* 子章节 */}
         {section.children?.map(child => renderContentSection(child, level + 1))}
       </div>
     )
@@ -513,3 +1507,5 @@ export function Tutorial() {
     </div>
   )
 }
+
+export default Tutorial
