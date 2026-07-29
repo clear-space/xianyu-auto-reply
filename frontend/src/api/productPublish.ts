@@ -243,3 +243,67 @@ export const getPublishLogs = (
 export const clearPublishLogs = async (): Promise<{ success: boolean; message: string }> => {
   return del<{ success: boolean; message: string }>(`${PREFIX}/logs/clear`)
 }
+
+// ==================== 批量导入 ====================
+
+/** 目录扫描返回的素材项 */
+export interface ScannedMaterial {
+  code: string
+  folder_name: string
+  title: string
+  description: string
+  images: string[]          // 本地图片文件路径
+  image_count: number
+  category: string
+  price: number
+}
+
+/** 扫描目录响应 */
+export interface ScanDirectoryResponse {
+  success: boolean
+  message: string
+  data?: {
+    materials: ScannedMaterial[]
+    total: number
+  }
+}
+
+/** 扫描本地目录，解析素材 */
+export const scanDirectory = (
+  dirPath: string
+): Promise<ScanDirectoryResponse> =>
+  post(`${PREFIX}/materials/scan-directory`, { path: dirPath })
+
+/** 批量导入确认参数 */
+export interface BatchImportParams {
+  materials: {
+    code: string
+    folder_name: string
+    title: string
+    description: string
+    images: string[]
+    price: number
+    category: string
+    condition: string
+    brand: string
+    delivery_method: 'express' | 'pickup'
+    postage: number
+  }[]
+}
+
+/** 批量导入响应 */
+export interface BatchImportResponse {
+  success: boolean
+  message: string
+  data?: {
+    imported: number
+    failed: number
+    failed_items: { code: string; reason: string }[]
+  }
+}
+
+/** 批量导入素材（从本地目录） */
+export const batchImportMaterials = (
+  params: BatchImportParams
+): Promise<BatchImportResponse> =>
+  post(`${PREFIX}/materials/batch-import`, params)

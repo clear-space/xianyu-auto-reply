@@ -475,6 +475,257 @@ async def clear_publish_logs(
         return ApiResponse(success=False, message=f"清空发布日志失败: {str(e)}")
 
 
+# ==================== 批量导入接口 ====================
+
+class ScanDirectoryRequest(BaseModel):
+    """扫描本地目录请求"""
+    path: str = Field(..., min_length=1, description="本地素材目录路径")
+
+
+class BatchImportMaterialItem(BaseModel):
+    """批量导入单条素材"""
+    code: str = Field(..., description="素材编号")
+    folder_name: str = Field(..., description="文件夹名")
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(..., min_length=1)
+    images: List[str] = Field(default=[], description="本地图片路径列表")
+    price: float = Field(..., gt=0)
+    category: str = Field("虚拟商品", max_length=100)
+    condition: str = Field("全新")
+    brand: str = Field("", max_length=100)
+    delivery_method: str = Field("express")
+    postage: float = Field(0, ge=0)
+
+
+class BatchImportRequest(BaseModel):
+    """批量导入请求"""
+    materials: List[BatchImportMaterialItem] = Field(..., min_length=1, description="要导入的素材列表")
+
+
+@router.post("/materials/scan-directory", response_model=ApiResponse)
+async def scan_directory(
+    req: ScanDirectoryRequest,
+    current_user: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """扫描本地目录，解析素材（txt元数据 + 图片文件）
+
+    目录结构要求：每个子文件夹为一个素材，包含：
+    - 一个 .txt 文件（第一行=标题，最后非空行=编号，中间=描述）
+    - 若干 .jpg/.png 图片（按文件名排序）
+    """
+    import os
+    import re
+    from pathlib import Path
+
+    from loguru import logger
+
+    dir_path = Path(req.path.strip())
+    if not dir_path.exists():
+        return ApiResponse(success=False, message=f"目录不存在: {dir_path}")
+    if not dir_path.is_dir():
+        return ApiResponse(success=False, message=f"路径不是目录: {dir_path}")
+
+    materials: List[Dict[str, Any]] = []
+    IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}
+
+    try:
+        subdirs = sorted(
+            [d for d in dir_path.iterdir() if d.is_dir()],
+            key=lambda d: d.name,
+        )
+    except PermissionError:
+        return ApiResponse(success=False, message=f"没有权限读取目录: {dir_path}")
+    except Exception as e:
+        logger.error(f"扫描目录异常: {e}")
+        return ApiResponse(success=False, message=f"扫描目录失败: {e}")
+
+    for subdir in subdirs:
+        try:
+            # 查找 .txt 文件
+            txt_files = sorted(subdir.glob("*.txt"))
+            if not txt_files:
+                logger.warning(f"跳过无txt文件的目录: {subdir.name}")
+                continue
+
+            txt_path = txt_files[0]
+            try:
+                txt_content = txt_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                try:
+                    txt_content = txt_path.read_text(encoding="gbk")
+                except Exception:
+                    logger.warning(f"无法读取txt文件编码: {txt_path}")
+                    continue
+
+            lines = [l.strip() for l in txt_content.split("\n")]
+            # 过滤掉完全空的行
+            non_empty = [l for l in lines if l]
+
+            if len(non_empty) < 2:
+                logger.warning(f"txt文件内容不足: {txt_path}, 行数={len(non_empty)}")
+                continue
+
+            # 第一行 = 标题
+            raw_title = non_empty[0]
+            # 去掉【xxx】前缀
+            title = re.sub(r'^【[^】]*】\s*', '', raw_title).strip()
+
+            # 最后非空行 = 编号
+            code = non_empty[-1].strip()
+
+            # 中间行 = 描述
+            # 如果只有2行非空行，描述为空
+            if len(non_empty) <= 2:
+                description = title
+            else:
+                description = "\n".join(non_empty[1:-1]).strip()
+
+            if not description:
+                description = title
+
+            # 查找图片
+            images = sorted(
+                [
+                    str(p) for p in subdir.iterdir()
+                    if p.suffix.lower() in IMAGE_EXTS
+                ],
+                key=lambda p: (
+                    # 按数字排序：1.jpg, 2.jpg, ...
+                    int(re.search(r'(\d+)', os.path.basename(p)).group(1))
+                    if re.search(r'(\d+)', os.path.basename(p))
+                    else os.path.basename(p)
+                ),
+            )
+
+            # 从描述中提取分类
+            category = "虚拟商品"
+            if "虚拟商品" in txt_content:
+                category = "虚拟商品"
+            elif any(kw in txt_content for kw in ["数码", "手机", "电脑", "电子"]):
+                category = "数码家电"
+            elif any(kw in txt_content for kw in ["服饰", "鞋", "包", "衣服", "穿"]):
+                category = "服饰鞋包"
+            elif any(kw in txt_content for kw in ["家居", "日用", "家具", "收纳"]):
+                category = "家居日用"
+            elif any(kw in txt_content for kw in ["书", "音像", "DVD", "CD"]):
+                category = "图书音像"
+            elif any(kw in txt_content for kw in ["美妆", "护肤", "化妆", "个护"]):
+                category = "美妆个护"
+            elif any(kw in txt_content for kw in ["母婴", "宝宝", "孕"]):
+                category = "母婴用品"
+            elif any(kw in txt_content for kw in ["运动", "户外", "健身", "瑜伽"]):
+                category = "运动户外"
+            elif any(kw in txt_content for kw in ["食品", "生鲜", "零食", "饮料"]):
+                category = "食品生鲜"
+            elif any(kw in txt_content for kw in ["PPT", "模板", "简历", "教程", "素材", "资料", "网盘", "电子"]):
+                category = "虚拟商品"
+
+            materials.append({
+                "code": code,
+                "folder_name": subdir.name,
+                "title": title,
+                "description": description,
+                "images": images,
+                "image_count": len(images),
+                "category": category,
+                "price": 0,  # 前端统一设置
+            })
+        except Exception as e:
+            logger.warning(f"解析目录异常 {subdir.name}: {e}")
+            continue
+
+    logger.info(f"[扫描目录] 目录={dir_path}, 发现素材={len(materials)}")
+    return ApiResponse(
+        success=True,
+        message=f"扫描完成，发现 {len(materials)} 个素材",
+        data={"materials": materials, "total": len(materials)},
+    )
+
+
+@router.post("/materials/batch-import", response_model=ApiResponse)
+async def batch_import_materials(
+    req: BatchImportRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """批量导入素材（从本地目录复制图片并创建素材记录）"""
+    import os
+    import shutil
+    import uuid as uuid_mod
+
+    from loguru import logger
+
+    from app.core.paths import UPLOADS_PRODUCTS
+
+    svc = ProductMaterialService(session)
+    imported = 0
+    failed = 0
+    failed_items: List[Dict[str, str]] = []
+
+    for material_data in req.materials:
+        try:
+            # 复制图片到上传目录
+            saved_urls: List[str] = []
+            for src_path in material_data.images:
+                src = os.path.normpath(src_path)
+                if not os.path.isfile(src):
+                    logger.warning(f"图片不存在，跳过: {src}")
+                    continue
+
+                ext = os.path.splitext(src)[1].lower()
+                if ext not in {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}:
+                    ext = '.jpg'
+
+                # 生成唯一文件名
+                unique_name = f"{uuid_mod.uuid4().hex}{ext}"
+                dest_dir = str(UPLOADS_PRODUCTS)
+                os.makedirs(dest_dir, exist_ok=True)
+                dest = os.path.join(dest_dir, unique_name)
+
+                shutil.copy2(src, dest)
+                saved_urls.append(f"/static/uploads/products/{unique_name}")
+
+            if not saved_urls and material_data.images:
+                logger.warning(f"素材 {material_data.code} 没有成功复制任何图片")
+
+            # 补充可能被清洗的字段
+            title = material_data.title.strip() or material_data.folder_name
+            description = material_data.description.strip() or title
+
+            create_data = {
+                "title": title,
+                "description": description,
+                "price": float(material_data.price),
+                "original_price": None,
+                "category": material_data.category or "虚拟商品",
+                "images": [u for u in saved_urls if u],
+                "delivery_method": material_data.delivery_method or "express",
+                "postage": float(material_data.postage) if material_data.postage else 0,
+                "address": None,
+                "brand": material_data.brand.strip() if material_data.brand else None,
+                "condition": material_data.condition or "全新",
+                "remark": f"批量导入自: {material_data.folder_name}",
+            }
+
+            await svc.create(current_user.id, create_data)
+            imported += 1
+            logger.info(f"[批量导入] 成功: {material_data.code} - {title}")
+        except Exception as e:
+            failed += 1
+            failed_items.append({"code": material_data.code, "reason": str(e)})
+            logger.error(f"[批量导入] 失败: {material_data.code} - {e}")
+
+    return ApiResponse(
+        success=True,
+        message=f"导入完成：成功 {imported} 条，失败 {failed} 条",
+        data={
+            "imported": imported,
+            "failed": failed,
+            "failed_items": failed_items,
+        },
+    )
+
+
 # ==================== 图片上传接口 ====================
 
 @router.post("/upload/images", response_model=ApiResponse)

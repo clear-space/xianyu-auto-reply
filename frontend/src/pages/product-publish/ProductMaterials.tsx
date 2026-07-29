@@ -10,13 +10,14 @@
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, X, FolderOpen } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { getMaterials, deleteMaterial, batchDeleteMaterials, type ProductMaterial } from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { MaterialFormModal } from './MaterialFormModal'
+import { BatchImportModal } from './BatchImportModal'
 
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
@@ -34,6 +35,7 @@ export function ProductMaterials() {
   const [totalPages, setTotalPages] = useState(0)
   const [showModal, setShowModal] = useState(false)
   const [editTarget, setEditTarget] = useState<ProductMaterial | null>(null)
+  const [showBatchImport, setShowBatchImport] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; item: ProductMaterial | null }>({ open: false, item: null })
   const [deleting, setDeleting] = useState(false)
 
@@ -193,6 +195,9 @@ export function ProductMaterials() {
           </button>
           <button className="btn-ios-primary" onClick={() => { setEditTarget(null); setShowModal(true) }}>
             <Plus className="w-4 h-4" />新建素材
+          </button>
+          <button className="btn-ios-secondary" onClick={() => setShowBatchImport(true)}>
+            <FolderOpen className="w-4 h-4" />批量导入
           </button>
         </div>
       </div>
@@ -391,6 +396,14 @@ export function ProductMaterials() {
         onConfirm={handleBatchDelete}
         onCancel={() => setBatchDeleteConfirm(false)}
       />
+
+      {/* 批量导入弹窗 */}
+      {showBatchImport && (
+        <BatchImportModal
+          onClose={() => setShowBatchImport(false)}
+          onImported={() => { setShowBatchImport(false); load(page, pageSize) }}
+        />
+      )}
     </div>
   )
 }
