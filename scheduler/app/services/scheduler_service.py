@@ -38,6 +38,7 @@ from app.services.scheduler.listing_monitor_task import listing_monitor_task_ser
 from app.services.scheduler.seller_fill_task import seller_fill_task_service
 from app.services.scheduler.dm_send_task import dm_send_task_service
 from app.services.scheduler.auto_order_task import auto_order_task_service
+from app.services.scheduler.scheduled_publish_task import scheduled_publish_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -61,6 +62,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_SELLER_FILL,
     TASK_CODE_DM_SEND,
     TASK_CODE_AUTO_ORDER,
+    TASK_CODE_SCHEDULED_PUBLISH,
 )
 from common.db.session import async_session_maker
 
@@ -93,6 +95,7 @@ class SchedulerService:
         self._seller_fill_task_handle: Optional[asyncio.Task] = None
         self._dm_send_task_handle: Optional[asyncio.Task] = None
         self._auto_order_task_handle: Optional[asyncio.Task] = None
+        self._scheduled_publish_task_handle: Optional[asyncio.Task] = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -114,7 +117,8 @@ class SchedulerService:
         self._seller_fill_task = seller_fill_task_service
         self._dm_send_task = dm_send_task_service
         self._auto_order_task = auto_order_task_service
-    
+        self._scheduled_publish_task = scheduled_publish_task_service
+
     @classmethod
     def get_instance(cls) -> "SchedulerService":
         """获取单例实例"""
@@ -144,7 +148,7 @@ class SchedulerService:
         """重新加载所有任务配置"""
         for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_REFUND_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_TOKEN_RENEWAL, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
             await self.reload_task_config(task_code)
-        for task_code in [TASK_CODE_DELIVERY_TIMEOUT, TASK_CODE_LISTING_MONITOR, TASK_CODE_SELLER_FILL, TASK_CODE_DM_SEND, TASK_CODE_AUTO_ORDER]:
+        for task_code in [TASK_CODE_DELIVERY_TIMEOUT, TASK_CODE_LISTING_MONITOR, TASK_CODE_SELLER_FILL, TASK_CODE_DM_SEND, TASK_CODE_AUTO_ORDER, TASK_CODE_SCHEDULED_PUBLISH]:
             await self.reload_task_config(task_code)
     
     def start(self) -> None:
@@ -176,6 +180,7 @@ class SchedulerService:
         self._seller_fill_task_handle = asyncio.create_task(self._run_seller_fill_loop())
         self._dm_send_task_handle = asyncio.create_task(self._run_dm_send_loop())
         self._auto_order_task_handle = asyncio.create_task(self._run_auto_order_loop())
+        self._scheduled_publish_task_handle = asyncio.create_task(self._run_scheduled_publish_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -248,6 +253,9 @@ class SchedulerService:
         if self._auto_order_task_handle:
             self._auto_order_task_handle.cancel()
             self._auto_order_task_handle = None
+        if self._scheduled_publish_task_handle:
+            self._scheduled_publish_task_handle.cancel()
+            self._scheduled_publish_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
@@ -273,6 +281,7 @@ class SchedulerService:
         seller_fill_config = ScheduledTaskService.get_cached_config(TASK_CODE_SELLER_FILL)
         dm_send_config = ScheduledTaskService.get_cached_config(TASK_CODE_DM_SEND)
         auto_order_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_ORDER)
+        scheduled_publish_config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULED_PUBLISH)
         
         return {
             "running": self._running,
@@ -424,6 +433,13 @@ class SchedulerService:
                         and not self._auto_order_task_handle.done()
                     ),
                 },
+                TASK_CODE_SCHEDULED_PUBLISH: {
+                    "config": scheduled_publish_config or {"interval_seconds": 30, "enabled": True},
+                    "task_running": (
+                        self._scheduled_publish_task_handle is not None
+                        and not self._scheduled_publish_task_handle.done()
+                    ),
+                },
             }
         }
     
@@ -497,6 +513,9 @@ class SchedulerService:
         elif task_code == TASK_CODE_AUTO_ORDER:
             logger.info("[定时任务调度] 手动触发采集商品自动下单任务")
             await self._auto_order_task.execute()
+        elif task_code == TASK_CODE_SCHEDULED_PUBLISH:
+            logger.info("[定时任务调度] 手动触定发布任务")
+            await self._scheduled_publish_task.execute()
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
     
@@ -1189,6 +1208,37 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 采集商品自动下单任务循环结束")
+
+    async def _run_scheduled_publish_loop(self) -> None:
+        """定时发布任务执行循环"""
+        logger.info("[定时任务调度] 定时发布任务循环开始")
+
+        await self.reload_task_config(TASK_CODE_SCHEDULED_PUBLISH)
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULED_PUBLISH)
+            if not config:
+                config = {"interval_seconds": 30, "enabled": True}
+
+            interval = config.get("interval_seconds", 30)
+            enabled = config.get("enabled", True)
+
+            if enabled:
+                try:
+                    await self._scheduled_publish_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 定时发布任务被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] 定时发布任务执行异常: {e}")
+
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 定时发布任务等待被取消")
+                break
+
+        logger.info("[定时任务调度] 定时发布任务循环结束")
 
 
 # 全局实例获取函数

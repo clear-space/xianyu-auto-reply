@@ -33,6 +33,10 @@ class SchedulerConfig(BaseConfig):
         default="http://localhost:8090",
         alias="WEBSOCKET_SERVICE_URL"
     )
+    backend_service_url: str = Field(
+        default="http://localhost:8089",
+        alias="BACKEND_SERVICE_URL"
+    )
 
 
 @lru_cache

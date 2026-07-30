@@ -6,7 +6,7 @@
  * 2. 单品发布 / 批量发布
  * 3. 发布日志查询
  */
-import { get, post, put, del } from '@/utils/request'
+import { get, post, put, del, patch } from '@/utils/request'
 import type { ApiResponse } from '@/types'
 
 const PREFIX = '/api/v1/product-publish'
@@ -307,3 +307,136 @@ export const batchImportMaterials = (
   params: BatchImportParams
 ): Promise<BatchImportResponse> =>
   post(`${PREFIX}/materials/batch-import`, params)
+
+// ==================== 定时发布 ====================
+
+/** 定时规则 */
+export interface PublishSchedule {
+  id: number
+  user_id: number
+  name: string
+  schedule_mode: 'once' | 'daily' | 'weekly'
+  schedule_config: ScheduleConfig
+  account_ids: string[]
+  material_ids: number[]
+  enabled: boolean
+  last_triggered_at?: string | null
+  next_trigger_at?: string | null
+  account_count?: number
+  material_count?: number
+  created_at: string
+  updated_at: string
+}
+
+/** 调度时间配置 */
+export interface ScheduleConfig {
+  datetime?: string           // once模式
+  times?: string[]            // 时间点列表
+  days?: number[]             // 星期几 1-7
+  time_range?: { start: string; end: string }
+  random?: boolean
+}
+
+/** 创建定时规则参数 */
+export interface CreateScheduleParams {
+  name: string
+  schedule_mode: 'once' | 'daily' | 'weekly'
+  schedule_config: ScheduleConfig
+  account_ids: string[]
+  material_ids: number[]
+}
+
+/** 更新定时规则参数 */
+export interface UpdateScheduleParams {
+  name?: string
+  schedule_mode?: string
+  schedule_config?: Record<string, unknown>
+  account_ids?: string[]
+  material_ids?: number[]
+  enabled?: boolean
+}
+
+/** 执行记录 */
+export interface PublishScheduleLog {
+  id: number
+  schedule_id: number
+  batch_id?: string | null
+  scheduled_at: string
+  executed_at?: string | null
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  total_count: number
+  success_count: number
+  failed_count: number
+  error_message?: string | null
+  created_at: string
+}
+
+/** 规则列表响应 */
+export interface ScheduleListResponse {
+  success: boolean
+  message: string
+  data: {
+    list: PublishSchedule[]
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+  }
+}
+
+/** 执行日志列表响应 */
+export interface ScheduleLogListResponse {
+  success: boolean
+  message: string
+  data: {
+    list: PublishScheduleLog[]
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+  }
+}
+
+const SCHEDULE_PREFIX = '/api/v1/product-publish/schedules'
+
+/** 创建定时规则 */
+export const createSchedule = (params: CreateScheduleParams): Promise<ApiResponse> =>
+  post(SCHEDULE_PREFIX, params)
+
+/** 分页查询定时规则 */
+export const getSchedules = (page = 1, pageSize = 20): Promise<ScheduleListResponse> => {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return get(`${SCHEDULE_PREFIX}?${params}`)
+}
+
+/** 查询单条规则 */
+export const getSchedule = (id: number): Promise<ApiResponse> =>
+  get(`${SCHEDULE_PREFIX}/${id}`)
+
+/** 更新定时规则 */
+export const updateSchedule = (id: number, params: UpdateScheduleParams): Promise<ApiResponse> =>
+  put(`${SCHEDULE_PREFIX}/${id}`, params)
+
+/** 删除定时规则 */
+export const deleteSchedule = (id: number): Promise<ApiResponse> =>
+  del(`${SCHEDULE_PREFIX}/${id}`)
+
+/** 切换规则启用/禁用 */
+export const toggleSchedule = (id: number): Promise<ApiResponse> =>
+  patch(`${SCHEDULE_PREFIX}/${id}/toggle`)
+
+/** 手动触发一次 */
+export const triggerSchedule = (id: number): Promise<ApiResponse> =>
+  post(`${SCHEDULE_PREFIX}/${id}/trigger`)
+
+/** 查询某规则的执行历史 */
+export const getScheduleLogs = (scheduleId: number, page = 1, pageSize = 20): Promise<ScheduleLogListResponse> => {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return get(`${SCHEDULE_PREFIX}/${scheduleId}/logs?${params}`)
+}
+
+/** 查询全部定时规则的执行历史（全局视图） */
+export const getAllScheduleLogs = (page = 1, pageSize = 20): Promise<ScheduleLogListResponse> => {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return get(`${SCHEDULE_PREFIX}/logs/global?${params}`)
+}

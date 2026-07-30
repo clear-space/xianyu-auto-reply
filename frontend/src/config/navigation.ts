@@ -2,6 +2,7 @@ import type React from 'react'
 import {
   AlertTriangle,
   Ban,
+  Clock,
   BarChart3,
   Bell,
   BellOff,
@@ -113,6 +114,7 @@ export const mainNavItems: NavEntry[] = [
       { key: 'product-publish-single', icon: Send, label: '单品发布', path: '/product-publish/single' },
       { key: 'product-publish-batch', icon: Layers, label: '批量发布', path: '/product-publish/batch' },
       { key: 'product-publish-addresses', icon: MapPin, label: '地址库', path: '/product-publish/addresses' },
+      { key: 'product-publish-scheduled', icon: Clock, label: '定时发布', path: '/product-publish/scheduled' },
       { key: 'product-publish-logs', icon: ScrollText, label: '发布日志', path: '/product-publish/logs' },
     ],
   },

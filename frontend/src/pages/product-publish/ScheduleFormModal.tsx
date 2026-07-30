@@ -1,0 +1,372 @@
+/**
+ * 定时规则创建/编辑弹窗
+ *
+ * 功能：
+ * 1. 设置规则名称、重复模式（单次/每天/每周）
+ * 2. 配置时间：指定时间点 或 时间段内随机
+ * 3. 选择账号和素材
+ * 4. 创建/更新定时规则
+ */
+import { useState, useEffect } from 'react'
+import { motion } from 'framer-motion'
+import { Clock, X, Loader2, Save } from 'lucide-react'
+import { useUIStore } from '@/store/uiStore'
+import { getAccountDetails } from '@/api/accounts'
+import { getMaterials, createSchedule, updateSchedule, type ProductMaterial, type PublishSchedule, type ScheduleConfig, type CreateScheduleParams, type UpdateScheduleParams } from '@/api/productPublish'
+
+interface Props {
+  initial?: PublishSchedule | null
+  /** 预填账号/素材（从批量发布页跳转） */
+  prefills?: { accountIds?: string[]; materialIds?: number[] }
+  onClose: () => void
+  onSaved: () => void
+}
+
+type ScheduleMode = 'once' | 'daily' | 'weekly'
+type TimeMode = 'fixed' | 'random'
+
+const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
+const DEFAULT_TIME_RANGE = { start: '09:00', end: '21:00' }
+
+export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props) {
+  const { addToast } = useUIStore()
+  const [loading, setLoading] = useState(false)
+  const [accounts, setAccounts] = useState<any[]>([])
+  const [materials, setMaterials] = useState<ProductMaterial[]>([])
+  const [dataLoading, setDataLoading] = useState(true)
+
+  const [name, setName] = useState(initial?.name || '')
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(initial?.schedule_mode || 'daily')
+  const [timeMode, setTimeMode] = useState<TimeMode>(() => {
+    if (initial?.schedule_config?.random) return 'random'
+    return 'fixed'
+  })
+  const [times, setTimes] = useState<string[]>(initial?.schedule_config?.times || ['20:00'])
+  const [timeRange, setTimeRange] = useState(initial?.schedule_config?.time_range || DEFAULT_TIME_RANGE)
+  const [days, setDays] = useState<number[]>(initial?.schedule_config?.days || [1, 2, 3, 4, 5])
+  const [onceDatetime, setOnceDatetime] = useState(initial?.schedule_config?.datetime?.slice(0, 16) || '')
+  const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(
+    new Set(initial?.account_ids || prefills?.accountIds || [])
+  )
+  const [selectedMaterials, setSelectedMaterials] = useState<Set<number>>(
+    new Set(initial?.material_ids || prefills?.materialIds || [])
+  )
+  const [materialSearch, setMaterialSearch] = useState('')
+
+  useEffect(() => {
+    Promise.all([
+      getAccountDetails(),
+      getMaterials(1, 1000),
+    ]).then(([accList, matRes]) => {
+      setAccounts(accList)
+      if (matRes.success) setMaterials(matRes.data.list)
+    }).finally(() => setDataLoading(false))
+  }, [])
+
+  const buildConfig = (): ScheduleConfig => {
+    const config: ScheduleConfig = {}
+    if (scheduleMode === 'once') {
+      if (onceDatetime) config.datetime = onceDatetime
+      return config
+    }
+    if (timeMode === 'random') {
+      config.random = true
+      config.time_range = timeRange
+    } else {
+      config.times = times.filter(t => t.trim())
+    }
+    if (scheduleMode === 'weekly') {
+      config.days = days.length > 0 ? days : [1, 2, 3, 4, 5]
+    }
+    return config
+  }
+
+  const handleSave = async () => {
+    if (!name.trim()) { addToast({ type: 'warning', message: '请输入规则名称' }); return }
+    if (selectedAccounts.size === 0) { addToast({ type: 'warning', message: '请至少选择一个账号' }); return }
+    if (selectedMaterials.size === 0) { addToast({ type: 'warning', message: '请至少选择一条素材' }); return }
+
+    if (scheduleMode === 'once' && !onceDatetime) {
+      addToast({ type: 'warning', message: '请设置执行时间' }); return
+    }
+    if (scheduleMode !== 'once' && timeMode === 'fixed' && times.filter(t => t.trim()).length === 0) {
+      addToast({ type: 'warning', message: '请至少设置一个时间点' }); return
+    }
+
+    setLoading(true)
+    try {
+      const params: CreateScheduleParams = {
+        name: name.trim(),
+        schedule_mode: scheduleMode,
+        schedule_config: buildConfig(),
+        account_ids: Array.from(selectedAccounts),
+        material_ids: Array.from(selectedMaterials),
+      }
+
+      if (initial) {
+        const res = await updateSchedule(initial.id, params as UpdateScheduleParams)
+        if (res.success) {
+          addToast({ type: 'success', message: '规则已更新' })
+          onSaved()
+        } else {
+          addToast({ type: 'error', message: res.message || '更新失败' })
+        }
+      } else {
+        const res = await createSchedule(params)
+        if (res.success) {
+          addToast({ type: 'success', message: '定时规则创建成功' })
+          onSaved()
+        } else {
+          addToast({ type: 'error', message: res.message || '创建失败' })
+        }
+      }
+    } catch {
+      addToast({ type: 'error', message: '操作失败，请重试' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const toggleDay = (d: number) => {
+    setDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort())
+  }
+  const addTime = () => setTimes([...times, '12:00'])
+  const removeTime = (i: number) => setTimes(times.filter((_, idx) => idx !== i))
+  const updateTime = (i: number, v: string) => setTimes(times.map((t, idx) => idx === i ? v : t))
+
+  const toggleAccount = (id: string) => {
+    setSelectedAccounts(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  const toggleMaterial = (id: number) => {
+    setSelectedMaterials(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  const toggleAllAccounts = () => {
+    if (selectedAccounts.size === accounts.length) setSelectedAccounts(new Set())
+    else setSelectedAccounts(new Set(accounts.map((a: any) => a.id)))
+  }
+  const toggleAllMaterials = () => {
+    const filtered = materialSearch.trim()
+      ? materials.filter(m => m.title.toLowerCase().includes(materialSearch.trim().toLowerCase()))
+      : materials
+    const ids = filtered.map(m => m.id)
+    const allSelected = ids.length > 0 && ids.every(id => selectedMaterials.has(id))
+    if (allSelected) setSelectedMaterials(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n })
+    else setSelectedMaterials(prev => { const n = new Set(prev); ids.forEach(id => n.add(id)); return n })
+  }
+
+  const filteredMaterials = materialSearch.trim()
+    ? materials.filter(m => m.title.toLowerCase().includes(materialSearch.trim().toLowerCase()))
+    : materials
+
+  const totalPublishes = selectedAccounts.size * selectedMaterials.size
+
+  if (dataLoading) {
+    return (
+      <div className="modal-overlay">
+        <div className="modal-content max-w-lg">
+          <div className="flex justify-center py-10"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+        className="modal-content max-w-2xl max-h-[90vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2 className="modal-title flex items-center gap-2">
+            <Clock className="w-5 h-5" />
+            {initial ? '编辑定时规则' : '新建定时规则'}
+          </h2>
+          <button className="modal-close" onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+        <div className="modal-body overflow-y-auto space-y-4">
+
+          {/* 规则名称 */}
+          <div className="input-group">
+            <label className="input-label">规则名称 <span className="text-red-500">*</span></label>
+            <input className="input-ios" placeholder="如：晚间随机发布" value={name}
+              onChange={e => setName(e.target.value)} maxLength={100} />
+          </div>
+
+          {/* 重复模式 */}
+          <div className="input-group">
+            <label className="input-label">重复模式</label>
+            <div className="flex gap-2 mt-1">
+              {([
+                { key: 'once', label: '仅一次' },
+                { key: 'daily', label: '每天' },
+                { key: 'weekly', label: '每周' },
+              ] as { key: ScheduleMode; label: string }[]).map(m => (
+                <button key={m.key} type="button" onClick={() => setScheduleMode(m.key)}
+                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                    scheduleMode === m.key
+                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600'
+                      : 'border-slate-300 dark:border-slate-600 text-slate-600 hover:border-blue-400'
+                  }`}>{m.label}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* 时间配置 */}
+          <div className="vben-card">
+            <div className="vben-card-body space-y-3">
+
+              {scheduleMode === 'once' ? (
+                <div className="input-group">
+                  <label className="input-label">执行时间 <span className="text-red-500">*</span></label>
+                  <input type="datetime-local" className="input-ios"
+                    value={onceDatetime} onChange={e => setOnceDatetime(e.target.value)} />
+                </div>
+              ) : (
+                <>
+                  {/* 时间模式 */}
+                  <div className="flex gap-2">
+                    {([
+                      { key: 'fixed', label: '指定时间点' },
+                      { key: 'random', label: '时间段随机' },
+                    ] as { key: TimeMode; label: string }[]).map(m => (
+                      <button key={m.key} type="button" onClick={() => setTimeMode(m.key)}
+                        className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${
+                          timeMode === m.key
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600'
+                            : 'border-slate-300 dark:border-slate-600 text-slate-600 hover:border-blue-400'
+                        }`}>{m.label}</button>
+                    ))}
+                  </div>
+
+                  {timeMode === 'fixed' ? (
+                    <div>
+                      <label className="input-label text-xs mb-1">时间点列表</label>
+                      <div className="space-y-1.5">
+                        {times.map((t, i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <input type="time" className="input-ios w-32" value={t}
+                              onChange={e => updateTime(i, e.target.value)} />
+                            {times.length > 1 && (
+                              <button onClick={() => removeTime(i)}
+                                className="text-red-400 hover:text-red-600 p-1"><X className="w-4 h-4" /></button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={addTime} className="text-sm text-blue-500 hover:underline mt-1">
+                        + 添加时间点
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm text-slate-500">时间段:</span>
+                      <input type="time" className="input-ios w-32" value={timeRange.start}
+                        onChange={e => setTimeRange(prev => ({ ...prev, start: e.target.value }))} />
+                      <span className="text-slate-400">~</span>
+                      <input type="time" className="input-ios w-32" value={timeRange.end}
+                        onChange={e => setTimeRange(prev => ({ ...prev, end: e.target.value }))} />
+                      <span className="text-xs text-slate-400">（每次随机选取）</span>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* 每周选择 */}
+              {scheduleMode === 'weekly' && (
+                <div>
+                  <label className="input-label text-xs mb-1">选择星期</label>
+                  <div className="flex gap-1.5">
+                    {WEEKDAY_LABELS.map((label, i) => {
+                      const d = i + 1
+                      const active = days.includes(d)
+                      return (
+                        <button key={d} type="button" onClick={() => toggleDay(d)}
+                          className={`w-9 h-9 rounded-lg text-sm font-medium transition-colors ${
+                            active
+                              ? 'bg-blue-500 text-white'
+                              : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                          }`}>{label}</button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 选择账号 */}
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h3 className="vben-card-title text-sm">选择账号</h3>
+              <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllAccounts}>
+                {selectedAccounts.size === accounts.length && accounts.length > 0 ? '取消全选' : '全选'}
+              </button>
+            </div>
+            <div className="vben-card-body">
+              {accounts.length === 0 ? (
+                <p className="text-center text-slate-400 py-4 text-sm">暂无账号</p>
+              ) : (
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {accounts.map((a: any) => (
+                    <label key={a.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${selectedAccounts.has(a.id) ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                      <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
+                        checked={selectedAccounts.has(a.id)} onChange={() => toggleAccount(a.id)} />
+                      <span className="text-sm truncate text-slate-700 dark:text-slate-200">{a.note || a.id}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 选择素材 */}
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h3 className="vben-card-title text-sm">选择素材</h3>
+              <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllMaterials}>
+                {filteredMaterials.length > 0 && filteredMaterials.every(m => selectedMaterials.has(m.id)) ? '取消全选' : '全选'}
+              </button>
+            </div>
+            <div className="vben-card-body">
+              <input className="input-ios w-full mb-2" placeholder="搜索素材标题..."
+                value={materialSearch} onChange={e => setMaterialSearch(e.target.value)} />
+              {filteredMaterials.length === 0 ? (
+                <p className="text-center text-slate-400 py-4 text-sm">没有匹配的素材</p>
+              ) : (
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {filteredMaterials.map(m => (
+                    <label key={m.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${selectedMaterials.has(m.id) ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                      <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
+                        checked={selectedMaterials.has(m.id)} onChange={() => toggleMaterial(m.id)} />
+                      <span className="text-sm truncate flex-1 text-slate-700 dark:text-slate-200">{m.title}</span>
+                      <span className="text-xs text-amber-600 flex-shrink-0">¥{m.price}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 预览 */}
+          <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+            <span className="text-sm text-slate-500">
+              {selectedAccounts.size} 账号 × {selectedMaterials.size} 素材
+            </span>
+            <span className="text-lg font-semibold text-blue-600 dark:text-blue-400">
+              = {totalPublishes} 次发布
+            </span>
+          </div>
+        </div>
+
+        <div className="modal-footer flex-shrink-0">
+          <button className="btn-ios-secondary" onClick={onClose}>取消</button>
+          <button className="btn-ios-primary" disabled={loading || totalPublishes === 0} onClick={handleSave}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {initial ? '保存修改' : '创建规则'}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}

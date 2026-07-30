@@ -9,7 +9,8 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { Layers, CheckCircle, XCircle, Clock, Play, Loader2 } from 'lucide-react'
+import { Layers, CheckCircle, XCircle, Clock, Play, Loader2, Save } from 'lucide-react'
+import { ScheduleFormModal } from './ScheduleFormModal'
 import { useUIStore } from '@/store/uiStore'
 import { publishBatch, getBatchStatus, getMaterials, type ProductMaterial, type BatchAccountStatus } from '@/api/productPublish'
 import { getAccountDetails } from '@/api/accounts'
@@ -40,6 +41,7 @@ export function BatchPublish() {
   const [progress, setProgress] = useState<BatchProgress | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [materialSearch, setMaterialSearch] = useState('')
+  const [showScheduleForm, setShowScheduleForm] = useState(false)
   const accountNameMap = new Map(accounts.map((account: any) => [account.id, account.note || account.id]))
 
   const getSyncStatusLabel = (status: BatchAccountStatus['sync_status']) => {
@@ -304,11 +306,14 @@ export function BatchPublish() {
       </div>
 
       {/* 提交按钮 */}
-      <div className="flex justify-center">
+      <div className="flex justify-center gap-3">
         <button className="btn-ios-primary min-w-48" disabled={isDisabled} onClick={handleSubmit}>
           {submitting
             ? <><Loader2 className="w-4 h-4 animate-spin" />提交中...</>
             : <><Play className="w-4 h-4" />开始批量发布（{total} 次）</>}
+        </button>
+        <button className="btn-ios-secondary" disabled={total === 0} onClick={() => setShowScheduleForm(true)}>
+          <Save className="w-4 h-4" />保存为定时规则
         </button>
       </div>
 
@@ -400,6 +405,21 @@ export function BatchPublish() {
             )}
           </div>
         </motion.div>
+      )}
+
+      {/* 保存为定时规则弹窗 */}
+      {showScheduleForm && (
+        <ScheduleFormModal
+          prefills={{
+            accountIds: Array.from(selectedAccounts),
+            materialIds: Array.from(selectedMaterials),
+          }}
+          onClose={() => setShowScheduleForm(false)}
+          onSaved={() => {
+            setShowScheduleForm(false)
+            addToast({ type: 'success', message: '定时规则已保存，可在「定时发布」页面查看' })
+          }}
+        />
       )}
     </div>
   )
