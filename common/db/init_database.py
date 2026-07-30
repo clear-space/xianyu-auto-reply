@@ -1711,6 +1711,46 @@ class DatabaseInitializer:
                 INDEX idx_chat_quick_phrase_owner_sort (owner_id, sort_order)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='在线聊天快捷短语';
         """,
+
+        # 52. 定时发布规则表
+        "xy_publish_schedules": """
+            CREATE TABLE IF NOT EXISTS xy_publish_schedules (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                user_id BIGINT NOT NULL COMMENT '所属用户ID',
+                name VARCHAR(100) NOT NULL COMMENT '规则名称',
+                schedule_mode VARCHAR(20) NOT NULL DEFAULT 'once' COMMENT '重复模式：once-单次, daily-每天, weekly-每周',
+                schedule_config JSON NOT NULL COMMENT '时间配置JSON',
+                account_ids JSON NOT NULL COMMENT '闲鱼账号ID列表',
+                material_ids JSON NOT NULL COMMENT '素材ID列表',
+                enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+                last_triggered_at DATETIME COMMENT '上次触发时间',
+                next_trigger_at DATETIME COMMENT '下次触发时间',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_ps_user (user_id),
+                INDEX idx_ps_next_trigger (enabled, next_trigger_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时发布规则表';
+        """,
+
+        # 53. 定时发布执行记录表
+        "xy_publish_schedule_logs": """
+            CREATE TABLE IF NOT EXISTS xy_publish_schedule_logs (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                schedule_id BIGINT NOT NULL COMMENT '关联的定时规则ID',
+                batch_id VARCHAR(36) COMMENT '批量发布的 batch_id',
+                scheduled_at DATETIME NOT NULL COMMENT '计划执行时间',
+                executed_at DATETIME COMMENT '实际执行时间',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending-待执行, running-执行中, completed-已完成, failed-失败, cancelled-已取消',
+                total_count INT DEFAULT 0 COMMENT '总发布次数',
+                success_count INT DEFAULT 0 COMMENT '成功次数',
+                failed_count INT DEFAULT 0 COMMENT '失败次数',
+                error_message VARCHAR(1000) COMMENT '失败原因',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_psl_schedule (schedule_id),
+                INDEX idx_psl_batch (batch_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时发布执行记录表';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
