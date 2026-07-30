@@ -8,7 +8,7 @@
  * 4. 确认后批量导入到素材库
  */
 import { useState } from 'react'
-import { X, Loader2, Search, FolderOpen, CheckSquare, Square, Image, ChevronDown, ChevronUp, Pencil } from 'lucide-react'
+import { X, Loader2, Search, FolderOpen, Image, ChevronDown, ChevronUp, Pencil } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   scanDirectory,
@@ -228,6 +228,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
   const selectedCount = selectedCodes.size
   const allSelected = materials.length > 0 && selectedCount === materials.length
+  const noneSelected = selectedCount === 0
 
   return (
     <div className="modal-overlay">
@@ -400,19 +401,26 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                 {/* ===== 素材列表（可逐条编辑） ===== */}
                 <div className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
                   <div className="bg-slate-50 dark:bg-slate-800 px-4 py-2.5 flex items-center justify-between border-b border-slate-200 dark:border-slate-700">
-                    <button
-                      className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 hover:text-blue-600 transition-colors"
-                      onClick={toggleSelectAll}
-                    >
-                      {allSelected ? (
-                        <CheckSquare className="w-4 h-4 text-blue-500" />
-                      ) : (
-                        <Square className="w-4 h-4" />
-                      )}
-                      素材列表 ({materials.length} 条)
-                    </button>
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          ref={el => {
+                            if (el) {
+                              el.indeterminate = !allSelected && !noneSelected
+                            }
+                          }}
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={toggleSelectAll}
+                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                        <span className="text-sm text-slate-600 dark:text-slate-300 font-medium">
+                          素材列表 ({materials.length} 条)
+                        </span>
+                        <span className="text-xs text-slate-400">
+                          {allSelected ? '· 全选' : noneSelected ? '· 未选' : `· 已选 ${selectedCount} 条`}
+                        </span>
+                      </label>
                     <span className="text-xs text-slate-400">
-                      已选 {selectedCount} 条
                       {Object.keys(overrides).length > 0 && (
                         <span className="text-amber-500 ml-1">
                           · {Object.keys(overrides).length} 条已单独设置
@@ -435,16 +443,14 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                               isSelected ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''
                             }`}
                           >
-                            <button
-                              className="mt-0.5 flex-shrink-0"
-                              onClick={() => toggleSelect(m.code)}
-                            >
-                              {isSelected ? (
-                                <CheckSquare className="w-4 h-4 text-blue-500" />
-                              ) : (
-                                <Square className="w-4 h-4 text-slate-300" />
-                              )}
-                            </button>
+                            <label className="mt-0.5 flex-shrink-0 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleSelect(m.code)}
+                                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </label>
                             {/* 缩略图 */}
                             <div className="w-14 h-14 flex-shrink-0 rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600">
                               {m.images.length > 0 ? (
