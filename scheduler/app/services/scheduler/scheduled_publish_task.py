@@ -227,7 +227,8 @@ class ScheduledPublishTaskService:
         await session.commit()
 
         backend_url = settings.backend_service_url or "http://localhost:8089"
-        publish_url = f"{backend_url.rstrip('/')}/api/v1/product-publish/batch"
+        # 使用内部端点（无需用户认证，直接传入 user_id）
+        publish_url = f"{backend_url.rstrip('/')}/api/v1/internal/publish/batch"
 
         client = get_http_client()
         try:
@@ -235,6 +236,7 @@ class ScheduledPublishTaskService:
             result = await client.post(
                 publish_url,
                 json={
+                    "user_id": schedule.user_id,
                     "account_ids": schedule.account_ids,
                     "material_ids": schedule.material_ids,
                 },

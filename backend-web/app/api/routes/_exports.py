@@ -43,6 +43,7 @@ from . import (
     goofish_compass,
     goofish_crawler,
     health,
+    internal,
     items,
     keywords,
     message,
@@ -191,6 +192,9 @@ api_router.include_router(chat_quick_phrase.router, tags=["在线聊天(新)快�
 api_router.include_router(chat_customer_order.router, tags=["在线聊天(新)客户订单"])  # 已定义prefix="/chat-new"
 # 版本检测（公开接口，无需登录即可查询版本信息）
 api_router.include_router(version.router, tags=["版本检测"])  # 已定义prefix="/version"
+
+# 内部服务间 API（无需用户认证，仅供 scheduler 等内部服务调用）
+api_router.include_router(internal.router, tags=["内部服务"])  # 已定义prefix="/internal"
 
 
 __all__ = ["api_router"]
