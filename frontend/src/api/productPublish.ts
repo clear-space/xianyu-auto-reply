@@ -244,7 +244,7 @@ export const getPublishLogs = (
 }
 
 export const clearPublishLogs = async (): Promise<{ success: boolean; message: string }> => {
-  return del<{ success: boolean; message: string }>(`${PREFIX}/logs/clear`)
+  return post<{ success: boolean; message: string }>(`${PREFIX}/logs/clear`)
 }
 
 // ==================== 批量导入 ====================
@@ -444,6 +444,11 @@ export const getScheduleLogs = (scheduleId: number, page = 1, pageSize = 20): Pr
 export const getAllScheduleLogs = (page = 1, pageSize = 20): Promise<ScheduleLogListResponse> => {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
   return get(`${SCHEDULE_PREFIX}/logs/global?${params}`)
+}
+
+/** 清空定时发布执行日志 */
+export const clearScheduleLogs = async (): Promise<{ success: boolean; message: string }> => {
+  return post<{ success: boolean; message: string }>(`${SCHEDULE_PREFIX}/logs/clear`)
 }
 
 // ==================== 定时发布实时进度 ====================

@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, X, Layers, CheckCircle, XCircle } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, getAllScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type PublishScheduleLog, type ActiveScheduleProgress } from '@/api/productPublish'
+import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, getAllScheduleLogs, clearScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type PublishScheduleLog, type ActiveScheduleProgress } from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { ScheduleFormModal } from './ScheduleFormModal'
@@ -95,6 +95,8 @@ export function ScheduledPublish() {
   const [logTotal, setLogTotal] = useState(0)
   const [logPage, setLogPage] = useState(1)
   const [logTotalPages, setLogTotalPages] = useState(0)
+  const [showClearLogsConfirm, setShowClearLogsConfirm] = useState(false)
+  const [clearingLogs, setClearingLogs] = useState(false)
 
   const loadSchedules = useCallback(async (p = page) => {
     try {
@@ -238,6 +240,25 @@ export function ScheduledPublish() {
     finally { setDeleting(false) }
   }
 
+  const handleClearLogs = async () => {
+    setClearingLogs(true)
+    try {
+      const res = await clearScheduleLogs()
+      if (res.success) {
+        addToast({ type: 'success', message: res.message || '清空成功' })
+        setShowClearLogsConfirm(false)
+        if (logPage === 1) await loadLogs(1)
+        else setLogPage(1)
+      } else {
+        addToast({ type: 'error', message: res.message || '清空失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '清空失败' })
+    } finally {
+      setClearingLogs(false)
+    }
+  }
+
   if (loading) return <PageLoading />
 
   return (
@@ -370,7 +391,19 @@ export function ScheduledPublish() {
           className="vben-card flex flex-col" style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
           <div className="vben-card-header">
             <h2 className="vben-card-title"><History className="w-4 h-4" />执行历史</h2>
-            <span className="badge-primary">共 {logTotal} 条</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowClearLogsConfirm(true)}
+                className="btn-ios-danger btn-sm"
+                disabled={clearingLogs}
+              >
+                <Trash2 className="w-3.5 h-3.5" />清空日志
+              </button>
+              <button className="btn-ios-secondary btn-sm" onClick={() => loadLogs(logPage)}>
+                <RefreshCw className="w-3.5 h-3.5" />刷新
+              </button>
+              <span className="badge-primary">共 {logTotal} 条</span>
+            </div>
           </div>
           <div className="flex-1 overflow-x-auto overflow-y-auto">
             <table className="table-ios">
@@ -574,6 +607,18 @@ export function ScheduledPublish() {
         loading={deleting}
         onConfirm={handleDelete}
         onCancel={() => setDeleteConfirm(null)}
+      />
+
+      {/* 清空执行日志确认 */}
+      <ConfirmModal
+        isOpen={showClearLogsConfirm}
+        title="确认清空日志"
+        message="确认清空所有定时发布执行日志？此操作不可撤销。"
+        confirmText="清空"
+        type="danger"
+        loading={clearingLogs}
+        onConfirm={handleClearLogs}
+        onCancel={() => setShowClearLogsConfirm(false)}
       />
     </div>
   )

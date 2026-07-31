@@ -444,6 +444,7 @@ async def list_publish_logs(
 
 
 @router.delete("/logs/clear", response_model=ApiResponse)
+@router.post("/logs/clear", response_model=ApiResponse)
 async def clear_publish_logs(
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
