@@ -5,11 +5,11 @@
  * 1. Tab 1 - 定时规则列表：查看/新建/编辑/删除/开关/手动触发
  * 2. Tab 2 - 执行历史：查看所有规则的历史执行记录
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, Loader2, X } from 'lucide-react'
+import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, X, Layers, CheckCircle, XCircle } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, getAllScheduleLogs, type PublishSchedule, type PublishScheduleLog } from '@/api/productPublish'
+import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, getAllScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type PublishScheduleLog, type ActiveScheduleProgress } from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { ScheduleFormModal } from './ScheduleFormModal'
@@ -23,6 +23,24 @@ const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   completed: { label: '已完成', cls: 'badge-success' },
   failed:    { label: '失败',   cls: 'badge-danger' },
   cancelled: { label: '已取消', cls: 'badge-gray' },
+}
+
+const getSyncStatusLabel = (status: string) => {
+  if (status === 'success') return '已成功'
+  if (status === 'failed') return '失败'
+  if (status === 'running') return '获取中'
+  if (status === 'skipped') return '未触发'
+  if (status === 'unknown') return '状态未知'
+  return '待执行'
+}
+
+const getSyncStatusClassName = (status: string) => {
+  if (status === 'success') return 'badge-success'
+  if (status === 'failed') return 'badge-danger'
+  if (status === 'running') return 'badge-info'
+  if (status === 'skipped') return 'badge-warning'
+  if (status === 'unknown') return 'badge-warning'
+  return 'badge-secondary'
 }
 
 function formatNextTrigger(dt: string | null | undefined): string {
@@ -67,6 +85,11 @@ export function ScheduledPublish() {
   const [deleteConfirm, setDeleteConfirm] = useState<PublishSchedule | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // 活跃进度（定时任务执行时的实时进度面板）
+  const [activeProgressList, setActiveProgressList] = useState<ActiveScheduleProgress[]>([])
+  const [expandedPanels, setExpandedPanels] = useState<Set<number>>(new Set())
+  const progressPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   // 历史记录
   const [logs, setLogs] = useState<PublishScheduleLog[]>([])
   const [logTotal, setLogTotal] = useState(0)
@@ -104,6 +127,38 @@ export function ScheduledPublish() {
     if (tab === 'history') loadLogs()
   }, [tab, loadLogs])
 
+  // 轮询活跃的定时发布任务进度
+  useEffect(() => {
+    const pollProgress = async () => {
+      try {
+        const res = await getActiveScheduleProgress()
+        if (res.success && res.data?.tasks) {
+          setActiveProgressList(res.data.tasks)
+        }
+      } catch { /* 静默处理 */ }
+    }
+    // 立即查询一次
+    pollProgress()
+    // 每3秒轮询
+    progressPollRef.current = setInterval(pollProgress, 3000)
+    return () => {
+      if (progressPollRef.current) clearInterval(progressPollRef.current)
+    }
+  }, [])
+
+  /** 切换进度面板折叠 */
+  const togglePanel = (scheduleLogId: number) => {
+    setExpandedPanels(prev => {
+      const next = new Set(prev)
+      if (next.has(scheduleLogId)) {
+        next.delete(scheduleLogId)
+      } else {
+        next.add(scheduleLogId)
+      }
+      return next
+    })
+  }
+
   const handleRefresh = () => {
     loadSchedules(page)
     if (tab === 'history') loadLogs(logPage)
@@ -127,6 +182,40 @@ export function ScheduledPublish() {
       if (res.success) {
         addToast({ type: 'success', message: '已手动触发，请查看执行历史' })
         loadSchedules(page)
+        // 乐观更新：立即在进度面板中显示
+        const batchId = res.data?.batch_id as string | undefined
+        const logId = res.data?.log_id as number | undefined
+        if (batchId && logId) {
+          const total = s.account_ids.length * s.material_ids.length
+          const optimisticEntry: ActiveScheduleProgress = {
+            schedule_log_id: logId,
+            schedule_id: s.id,
+            schedule_name: s.name,
+            batch_id: batchId,
+            scheduled_at: new Date().toISOString(),
+            progress: {
+              total,
+              success: 0,
+              failed: 0,
+              publishing: 0,
+              pending: total,
+              finished: false,
+              account_statuses: s.account_ids.map(aid => ({
+                account_id: aid,
+                total: s.material_ids.length,
+                success: 0,
+                failed: 0,
+                publishing: 0,
+                pending: s.material_ids.length,
+                sync_status: 'pending' as const,
+                sync_message: '等待该账号发布完成后自动获取商品',
+                sync_total_count: 0,
+                sync_saved_count: 0,
+              })),
+            },
+          }
+          setActiveProgressList(prev => [optimisticEntry, ...prev.filter(p => p.schedule_log_id !== logId)])
+        }
       } else {
         addToast({ type: 'error', message: res.message || '触发失败' })
       }
@@ -340,6 +429,128 @@ export function ScheduledPublish() {
             </div>
           )}
         </motion.div>
+      )}
+
+      {/* 定时发布实时进度面板 */}
+      {activeProgressList.length > 0 && (
+        <div className="space-y-3">
+          {activeProgressList.map((task) => {
+            const isExpanded = expandedPanels.has(task.schedule_log_id)
+            const p = task.progress
+            const isFinished = p?.finished ?? false
+            return (
+              <motion.div
+                key={task.schedule_log_id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="vben-card"
+              >
+                {/* 折叠头 */}
+                <button
+                  onClick={() => togglePanel(task.schedule_log_id)}
+                  className="vben-card-header w-full text-left cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors rounded-t-xl"
+                >
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <h2 className="vben-card-title flex items-center gap-2 min-w-0">
+                      <Layers className="w-4 h-4 flex-shrink-0" />
+                      <span className="truncate">{task.schedule_name}</span>
+                    </h2>
+                    {isFinished ? (
+                      <span className="badge-success flex-shrink-0">已完成</span>
+                    ) : (
+                      <span className="badge-info flex-shrink-0 flex items-center gap-1">
+                        <Loader2 className="w-3 h-3 animate-spin" />执行中
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-slate-400 flex-shrink-0">
+                    {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                  </span>
+                </button>
+
+                {/* 折叠体 */}
+                {isExpanded && p && (
+                  <div className="vben-card-body border-t border-slate-200 dark:border-slate-700 pt-4">
+                    {/* 统计卡片 */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                      {[
+                        { label: '总数', value: p.total, icon: <Layers className="w-5 h-5" />, cls: 'stat-icon-primary' },
+                        { label: '成功', value: p.success, icon: <CheckCircle className="w-5 h-5" />, cls: 'stat-icon-success' },
+                        { label: '失败', value: p.failed, icon: <XCircle className="w-5 h-5" />, cls: 'stat-icon-warning' },
+                        { label: '进行中', value: p.publishing + p.pending, icon: <Clock className="w-5 h-5" />, cls: 'stat-icon-info' },
+                      ].map(item => (
+                        <div key={item.label} className="stat-card">
+                          <div className={item.cls}>{item.icon}</div>
+                          <div>
+                            <div className="stat-value">{item.value}</div>
+                            <div className="stat-label">{item.label}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 进度条 */}
+                    {p.total > 0 && (
+                      <>
+                        <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2 mb-1">
+                          <div className="bg-blue-500 h-2 rounded-full transition-all duration-500"
+                            style={{ width: `${Math.round((p.success + p.failed) / p.total * 100)}%` }} />
+                        </div>
+                        <div className="flex justify-between text-xs text-slate-400">
+                          <span>进度 {Math.round((p.success + p.failed) / p.total * 100)}%</span>
+                          {task.batch_id && <span>批次：{task.batch_id.slice(0, 8)}...</span>}
+                        </div>
+                      </>
+                    )}
+
+                    {!isFinished && <p className="text-xs text-slate-400 mt-2">每 3 秒自动刷新</p>}
+
+                    {/* 账号状态 */}
+                    {p.account_statuses.length > 0 && (
+                      <div className="mt-4 border-t border-slate-200 dark:border-slate-700 pt-4">
+                        <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">账号自动获取商品状态</h3>
+                        <div className="space-y-2 max-h-72 overflow-y-auto">
+                          {p.account_statuses.map(as => (
+                            <div key={as.account_id} className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 bg-slate-50/80 dark:bg-slate-800/60">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
+                                    {as.account_id}
+                                  </div>
+                                </div>
+                                <span className={getSyncStatusClassName(as.sync_status)}>
+                                  {getSyncStatusLabel(as.sync_status)}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-4 gap-2 mt-2 text-xs">
+                                <div className="rounded-lg bg-white dark:bg-slate-900 px-2 py-1.5">
+                                  <div className="text-slate-400">总数</div>
+                                  <div className="font-semibold">{as.total}</div>
+                                </div>
+                                <div className="rounded-lg bg-white dark:bg-slate-900 px-2 py-1.5">
+                                  <div className="text-slate-400">成功</div>
+                                  <div className="font-semibold text-emerald-600">{as.success}</div>
+                                </div>
+                                <div className="rounded-lg bg-white dark:bg-slate-900 px-2 py-1.5">
+                                  <div className="text-slate-400">失败</div>
+                                  <div className="font-semibold text-amber-600">{as.failed}</div>
+                                </div>
+                                <div className="rounded-lg bg-white dark:bg-slate-900 px-2 py-1.5">
+                                  <div className="text-slate-400">待处理</div>
+                                  <div className="font-semibold text-blue-600">{as.publishing + as.pending}</div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </motion.div>
+            )
+          })}
+        </div>
       )}
 
       {/* 新建/编辑弹窗 */}

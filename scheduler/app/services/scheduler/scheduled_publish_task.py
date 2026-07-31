@@ -239,6 +239,7 @@ class ScheduledPublishTaskService:
                     "user_id": schedule.user_id,
                     "account_ids": schedule.account_ids,
                     "material_ids": schedule.material_ids,
+                    "schedule_log_id": log_entry.id,
                 },
             )
             if result.get("success"):

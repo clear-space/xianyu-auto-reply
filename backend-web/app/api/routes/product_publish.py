@@ -783,8 +783,9 @@ async def _run_batch_publish_background(
     account_ids: List[str],
     materials: List[dict],
     batch_id: str,
+    schedule_log_id: int = None,
 ) -> None:
-    """后台异步执行批量发布任务"""
+    """后台异步执行批量发布任务（可选关联定时发布的执行记录）"""
     from common.db.session import async_session_maker
     from loguru import logger
     import traceback
@@ -793,12 +794,60 @@ async def _run_batch_publish_background(
         svc = PublishExecutorService(session)
         try:
             # 直接将 batch_id 传给 service，确保日志与路由返回值一致
-            await svc.batch_publish(
+            result = await svc.batch_publish(
                 user_id=user_id,
                 account_ids=account_ids,
                 materials=materials,
                 batch_id=batch_id,
             )
+            # 若关联了定时发布执行记录，同步更新结果
+            if schedule_log_id:
+                await _update_schedule_log_on_complete(
+                    schedule_log_id,
+                    success_count=result.get("success_count", 0),
+                    failed_count=result.get("failed_count", 0),
+                    is_error=False,
+                )
         except Exception as e:
             logger.error(f"批量发布后台任务异常: {e}\n{traceback.format_exc()}")
             await PublishBatchStatusService.clear_batch(batch_id)
+            if schedule_log_id:
+                await _update_schedule_log_on_complete(
+                    schedule_log_id,
+                    success_count=0,
+                    failed_count=0,
+                    is_error=True,
+                    error_message=str(e)[:800],
+                )
+
+
+async def _update_schedule_log_on_complete(
+    schedule_log_id: int,
+    success_count: int = 0,
+    failed_count: int = 0,
+    is_error: bool = False,
+    error_message: str = None,
+) -> None:
+    """更新定时发布执行记录为完成/失败状态"""
+    from common.db.session import async_session_maker
+    from common.models.publish_schedule_log import PublishScheduleLog
+    from sqlalchemy import select
+    from loguru import logger
+
+    try:
+        async with async_session_maker() as session:
+            stmt = select(PublishScheduleLog).where(PublishScheduleLog.id == schedule_log_id)
+            log_entry = (await session.execute(stmt)).scalar_one_or_none()
+            if log_entry:
+                log_entry.status = "failed" if is_error else "completed"
+                log_entry.success_count = success_count
+                log_entry.failed_count = failed_count
+                if error_message:
+                    log_entry.error_message = error_message
+                await session.commit()
+                logger.info(
+                    f"[定时发布] 执行记录 #{schedule_log_id} 已更新: "
+                    f"status={log_entry.status}, success={success_count}, failed={failed_count}"
+                )
+    except Exception as e:
+        logger.error(f"[定时发布] 更新执行记录 #{schedule_log_id} 失败: {e}")

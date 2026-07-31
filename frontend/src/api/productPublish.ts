@@ -445,3 +445,36 @@ export const getAllScheduleLogs = (page = 1, pageSize = 20): Promise<ScheduleLog
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
   return get(`${SCHEDULE_PREFIX}/logs/global?${params}`)
 }
+
+// ==================== 定时发布实时进度 ====================
+
+/** 活跃的定时发布任务进度 */
+export interface ActiveScheduleProgress {
+  schedule_log_id: number
+  schedule_id: number
+  schedule_name: string
+  batch_id: string | null
+  scheduled_at: string | null
+  progress: {
+    total: number
+    success: number
+    failed: number
+    publishing: number
+    pending: number
+    finished: boolean
+    account_statuses: BatchAccountStatus[]
+  } | null
+}
+
+/** 活跃任务进度列表响应 */
+export interface ActiveProgressResponse {
+  success: boolean
+  message: string
+  data: {
+    tasks: ActiveScheduleProgress[]
+  }
+}
+
+/** 查询当前用户所有正在执行的定时发布任务实时进度 */
+export const getActiveScheduleProgress = (): Promise<ActiveProgressResponse> =>
+  get(`${SCHEDULE_PREFIX}/active-progress`)

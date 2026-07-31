@@ -222,6 +222,7 @@ async def trigger_schedule(
             account_ids=account_ids,
             materials=materials,
             batch_id=batch_id,
+            schedule_log_id=log_entry.id,
         )
     )
 
@@ -237,7 +238,144 @@ async def trigger_schedule(
     )
 
 
-# ==================== 执行日志 ====================
+# ==================== 实时进度查询 ====================
+
+@router.get("/active-progress", response_model=ApiResponse)
+async def get_active_schedule_progress(
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """查询当前用户所有正在执行的定时发布任务的实时进度
+
+    用于前端轮询展示定时任务的批量发布进度面板。
+    返回 running 状态的执行记录及其关联的 batch 进度数据。
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from common.models.publish_log import PublishLog
+    from common.models.publish_schedule import PublishSchedule
+    from common.models.publish_schedule_log import PublishScheduleLog
+    from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+    from app.services.publish_batch_status_service import PublishBatchStatusService
+
+    query_user_id = None if _is_admin(current_user) else current_user.id
+
+    # 查询最近24h内 status=running 的执行记录
+    since = get_beijing_now_naive() - timedelta(hours=24)
+    conds = [
+        PublishScheduleLog.status == "running",
+        PublishScheduleLog.scheduled_at >= since,
+    ]
+    if query_user_id is not None:
+        # 通过关联 PublishSchedule 限制用户
+        conds.append(PublishSchedule.user_id == query_user_id)
+
+    stmt = (
+        select(
+            PublishScheduleLog.id,
+            PublishScheduleLog.schedule_id,
+            PublishScheduleLog.batch_id,
+            PublishScheduleLog.scheduled_at,
+            PublishSchedule.name,
+        )
+        .join(PublishSchedule, PublishScheduleLog.schedule_id == PublishSchedule.id)
+        .where(*conds)
+        .order_by(PublishScheduleLog.scheduled_at.asc())
+    )
+    rows = (await session.execute(stmt)).all()
+
+    if not rows:
+        return ApiResponse(success=True, message="没有进行中的任务", data={"tasks": []})
+
+    tasks = []
+    for row in rows:
+        schedule_log_id = row[0]
+        schedule_id = row[1]
+        batch_id = row[2]
+        scheduled_at = row[3]
+        schedule_name = row[4] or f"规则 #{schedule_id}"
+
+        progress = None
+        if batch_id:
+            # 统计 batch 进度（复刻 get_batch_status 的查询逻辑）
+            status_stmt = select(
+                PublishLog.status,
+                func.count().label("cnt"),
+            ).where(
+                PublishLog.batch_id == batch_id,
+            )
+            # 非管理员只查自己的
+            if query_user_id is not None:
+                status_stmt = status_stmt.where(PublishLog.user_id == query_user_id)
+
+            status_rows = (await session.execute(status_stmt)).all()
+            counts = {r.status: r.cnt for r in status_rows}
+
+            total = sum(counts.values())
+            success = int(counts.get("success", 0))
+            failed = int(counts.get("failed", 0))
+            publishing = int(counts.get("publishing", 0))
+            pending = int(counts.get("pending", 0))
+
+            # 从缓存快照获取账号级数据
+            batch_snapshot = await PublishBatchStatusService.get_batch_snapshot(batch_id)
+            account_statuses: List[Dict[str, Any]] = []
+            if batch_snapshot:
+                material_count = int(batch_snapshot.get("material_count") or 0)
+                account_order = batch_snapshot.get("account_order") or []
+                account_sync_map = batch_snapshot.get("accounts") or {}
+                for account_id in account_order:
+                    sync_info = account_sync_map.get(account_id, {})
+                    account_statuses.append({
+                        "account_id": account_id,
+                        "total": material_count,
+                        "success": 0,
+                        "failed": 0,
+                        "publishing": 0,
+                        "pending": material_count,
+                        "sync_status": sync_info.get("sync_status", "pending"),
+                        "sync_message": sync_info.get("sync_message", "等待该账号发布完成后自动获取商品"),
+                        "sync_total_count": int(sync_info.get("sync_total_count") or 0),
+                        "sync_saved_count": int(sync_info.get("sync_saved_count") or 0),
+                    })
+
+            finished = total > 0 and (publishing + pending) == 0
+
+            progress = {
+                "total": total,
+                "success": success,
+                "failed": failed,
+                "publishing": publishing,
+                "pending": pending,
+                "finished": finished,
+                "account_statuses": account_statuses,
+            }
+
+            # 若 batch 已完成，更新 schedule log（兜底）
+            if finished:
+                try:
+                    log_stmt = select(PublishScheduleLog).where(PublishScheduleLog.id == schedule_log_id)
+                    log_entry = (await session.execute(log_stmt)).scalar_one_or_none()
+                    if log_entry and log_entry.status == "running":
+                        log_entry.status = "failed" if failed > 0 else "completed"
+                        log_entry.success_count = success
+                        log_entry.failed_count = failed
+                        await session.commit()
+                except Exception:
+                    pass  # 非关键路径，静默处理
+
+        tasks.append({
+            "schedule_log_id": schedule_log_id,
+            "schedule_id": schedule_id,
+            "schedule_name": schedule_name,
+            "batch_id": batch_id,
+            "scheduled_at": safe_isoformat(scheduled_at) if scheduled_at else None,
+            "progress": progress,
+        })
+
+    return ApiResponse(success=True, message="查询成功", data={"tasks": tasks})
 
 @router.get("/{schedule_id}/logs", response_model=ApiResponse)
 async def list_schedule_logs(
