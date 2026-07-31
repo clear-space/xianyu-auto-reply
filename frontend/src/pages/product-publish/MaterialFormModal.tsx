@@ -11,7 +11,7 @@ import {
 } from '@/api/productPublish'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
-const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
+const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '电子资料', '其它闲置', '其他']
 
 interface Props {
   initial: ProductMaterial | null
@@ -36,6 +36,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     address: initial?.address ?? '',
     brand: initial?.brand ?? '',
     condition: initial?.condition ?? '全新',
+    stock: initial?.stock ?? 9999,
     remark: initial?.remark ?? '',
   })
 
@@ -147,6 +148,11 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
                     value={form.postage || ''} onChange={e => setForm(f => ({ ...f, postage: parseFloat(e.target.value) || 0 }))} />
                 </div>
               )}
+              <div className="input-group">
+                <label className="input-label">库存（鱼小铺可用）</label>
+                <input type="number" className="input-ios" placeholder="9999" min="1" step="1"
+                  value={form.stock || ''} onChange={e => setForm(f => ({ ...f, stock: parseInt(e.target.value) || 9999 }))} />
+              </div>
               <div className="input-group">
                 <label className="input-label">宝贝所在地</label>
                 <input className="input-ios" placeholder="如：北京市朝阳区；仅做素材记录，发布时统一走随机地址"

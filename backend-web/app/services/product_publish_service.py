@@ -39,6 +39,7 @@ class ProductMaterialService:
             address=data.get("address"),
             brand=data.get("brand"),
             condition=data.get("condition", "全新"),
+            stock=int(data.get("stock", 9999)),
             remark=data.get("remark"),
         )
         self.session.add(material)
@@ -130,13 +131,15 @@ class ProductMaterialService:
         updatable = [
             "title", "description", "price", "original_price", "category",
             "images", "delivery_method", "postage", "address", "brand",
-            "condition", "remark",
+            "condition", "stock", "remark",
         ]
         for field in updatable:
             if field in data and data[field] is not None:
                 value = data[field]
                 if field in ("price", "original_price", "postage"):
                     value = float(value) if value else (None if field == "original_price" else 0)
+                if field == "stock":
+                    value = int(value)
                 setattr(material, field, value)
 
         await self.session.commit()
@@ -189,6 +192,7 @@ def _material_to_dict(m: ProductMaterial) -> dict:
         "address": m.address,
         "brand": m.brand,
         "condition": m.condition,
+        "stock": int(m.stock) if m.stock is not None else 9999,
         "remark": m.remark,
         "created_at": safe_isoformat(m.created_at),
         "updated_at": safe_isoformat(m.updated_at),

@@ -28,6 +28,7 @@ export interface ProductMaterial {
   address?: string | null
   brand?: string | null
   condition: string
+  stock?: number
   remark?: string | null
   created_at: string
   updated_at: string
@@ -45,6 +46,7 @@ export interface MaterialCreateParams {
   address?: string
   brand?: string
   condition?: string
+  stock?: number
   remark?: string
 }
 
@@ -189,6 +191,7 @@ export const publishSingle = (params: {
   description: string
   price: number
   original_price?: number | null
+  stock?: number
   category?: string
   images: string[]        // 本地绝对路径，由 uploadProductImages 返回
   address?: string
@@ -283,11 +286,13 @@ export interface BatchImportParams {
     description: string
     images: string[]
     price: number
+    original_price?: number | null
     category: string
     condition: string
     brand: string
     delivery_method: 'express' | 'pickup'
     postage: number
+    stock?: number
   }[]
 }
 

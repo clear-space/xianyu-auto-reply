@@ -16,7 +16,7 @@ import { publishSingle, getMaterials, uploadProductImages, type ProductMaterial 
 import { getAccountDetails } from '@/api/accounts'
 import { PageLoading } from '@/components/common/Loading'
 
-const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
+const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '电子资料', '其它闲置', '其他']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 
 interface PublishForm {
@@ -25,6 +25,7 @@ interface PublishForm {
   description: string
   price: string
   original_price: string
+  stock: string
   category: string
   address: string
   delivery_method: 'express' | 'pickup'
@@ -102,7 +103,7 @@ export function ProductPublish() {
   const [imagePaths, setImagePaths] = useState<string[]>([])
   const [imagePreviews, setImagePreviews] = useState<string[]>([])
   const [form, setForm] = useState<PublishForm>({
-    account_id: '', title: '', description: '', price: '', original_price: '',
+    account_id: '', title: '', description: '', price: '', original_price: '', stock: '9999',
     category: '', address: '', delivery_method: 'express', postage: '0', brand: '', condition: '全新',
   })
 
@@ -147,6 +148,7 @@ export function ProductPublish() {
     setForm(f => ({
       ...f, title: m.title, description: m.description, price: String(m.price),
       original_price: m.original_price ? String(m.original_price) : '',
+      stock: String(m.stock ?? 9999),
       category: m.category || '', address: m.address || '',
       delivery_method: (m.delivery_method as 'express' | 'pickup') || 'express',
       postage: String(m.postage ?? 0), brand: m.brand || '', condition: m.condition || '全新',
@@ -172,6 +174,7 @@ export function ProductPublish() {
         account_id: form.account_id, title: form.title, description: form.description,
         price: parseFloat(form.price),
         original_price: form.original_price ? parseFloat(form.original_price) : undefined,
+        stock: parseInt(form.stock) || 9999,
         category: form.category || undefined, images: imagePaths, address: form.address || undefined,
         delivery_method: form.delivery_method, postage: parseFloat(form.postage) || 0,
         brand: form.brand || undefined, condition: form.condition,
@@ -295,8 +298,8 @@ export function ProductPublish() {
                 ))}
               </div>
             </div>
-            {/* 发货 + 邮费 */}
-            <div className="grid grid-cols-2 gap-4">
+            {/* 发货 + 邮费 + 库存 */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               <div className="input-group">
                 <label className="input-label">发货方式</label>
                 <select className="input-ios" value={form.delivery_method}
@@ -309,6 +312,11 @@ export function ProductPublish() {
                 <label className="input-label">邮费（元，0=包邮）</label>
                 <input type="number" className="input-ios" placeholder="0" min="0" step="0.01"
                   value={form.postage} onChange={e => setForm(f => ({ ...f, postage: e.target.value }))} />
+              </div>
+              <div className="input-group">
+                <label className="input-label">库存（鱼小铺可用）</label>
+                <input type="number" className="input-ios" placeholder="9999" min="1" step="1"
+                  value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} />
               </div>
             </div>
             {/* 所在地 */}

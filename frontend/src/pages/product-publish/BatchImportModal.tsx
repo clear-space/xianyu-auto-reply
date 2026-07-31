@@ -17,7 +17,7 @@ import {
   type BatchImportParams,
 } from '@/api/productPublish'
 
-const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
+const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '电子资料', '其它闲置', '其他']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 
 interface Props {
@@ -28,22 +28,26 @@ interface Props {
 /** 单条素材的可编辑字段 */
 interface ItemSettings {
   price: string
+  original_price: string
   category: string
   condition: string
   brand: string
   delivery_method: 'express' | 'pickup'
   postage: string
+  stock: string
 }
 
 /** 构建一条素材的最终设置（逐条覆盖统一默认值） */
 function buildItemSettings(defaults: ItemSettings, overrides: Partial<ItemSettings>): ItemSettings {
   return {
     price: overrides.price ?? defaults.price,
+    original_price: overrides.original_price ?? defaults.original_price,
     category: overrides.category ?? defaults.category,
     condition: overrides.condition ?? defaults.condition,
     brand: overrides.brand ?? defaults.brand,
     delivery_method: overrides.delivery_method ?? defaults.delivery_method,
     postage: overrides.postage ?? defaults.postage,
+    stock: overrides.stock ?? defaults.stock,
   }
 }
 
@@ -67,11 +71,13 @@ export function BatchImportModal({ onClose, onImported }: Props) {
   // 统一字段默认值
   const [defaults, setDefaults] = useState<ItemSettings>({
     price: '9.9',
+    original_price: '',
     category: '虚拟商品',
     condition: '全新',
     brand: '',
     delivery_method: 'express',
     postage: '0',
+    stock: '9999',
   })
 
   // 逐条覆盖值：{ code: Partial<ItemSettings> }
@@ -196,11 +202,13 @@ export function BatchImportModal({ onClose, onImported }: Props) {
             })(),
             images: m.images,
             price: parseFloat(s.price) || 0,
+            original_price: s.original_price ? parseFloat(s.original_price) : null,
             category: s.category,
             condition: s.condition,
             brand: s.brand.trim(),
             delivery_method: s.delivery_method,
             postage: parseFloat(s.postage) || 0,
+            stock: parseInt(s.stock) || 9999,
           }
         }),
       }
@@ -303,7 +311,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                     <p className="text-xs text-slate-400 mb-2">
                       所有素材的默认值，可点击右侧「应用到全部」清除逐条设置
                     </p>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       <div className="input-group">
                         <label className="input-label text-xs">售价（元）</label>
                         <input
@@ -312,6 +320,18 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                           min="0" step="0.01"
                           value={defaults.price}
                           onChange={e => setDefaults(d => ({ ...d, price: e.target.value }))}
+                          disabled={importing}
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label text-xs">原价（选填）</label>
+                        <input
+                          type="number"
+                          className="input-ios text-sm"
+                          min="0" step="0.01"
+                          placeholder="划线价"
+                          value={defaults.original_price}
+                          onChange={e => setDefaults(d => ({ ...d, original_price: e.target.value }))}
                           disabled={importing}
                         />
                       </div>
@@ -371,6 +391,17 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                           min="0" step="0.01"
                           value={defaults.postage}
                           onChange={e => setDefaults(d => ({ ...d, postage: e.target.value }))}
+                          disabled={importing}
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label text-xs">库存</label>
+                        <input
+                          type="number"
+                          className="input-ios text-sm"
+                          min="0" step="1"
+                          value={defaults.stock}
+                          onChange={e => setDefaults(d => ({ ...d, stock: e.target.value }))}
                           disabled={importing}
                         />
                       </div>
@@ -532,7 +563,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                   恢复默认
                                 </button>
                               </div>
-                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                                 <div className="input-group">
                                   <label className="input-label text-xs">售价（元）</label>
                                   <input
@@ -542,6 +573,18 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                     placeholder={defaults.price}
                                     value={s.price !== defaults.price ? s.price : ''}
                                     onChange={e => updateOverride(m.code, 'price', e.target.value)}
+                                    disabled={importing}
+                                  />
+                                </div>
+                                <div className="input-group">
+                                  <label className="input-label text-xs">原价（选填）</label>
+                                  <input
+                                    type="number"
+                                    className="input-ios text-sm"
+                                    min="0" step="0.01"
+                                    placeholder={defaults.original_price || '划线价'}
+                                    value={s.original_price !== defaults.original_price ? s.original_price : ''}
+                                    onChange={e => updateOverride(m.code, 'original_price', e.target.value)}
                                     disabled={importing}
                                   />
                                 </div>
@@ -602,6 +645,18 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                     placeholder={defaults.postage}
                                     value={s.postage !== defaults.postage ? s.postage : ''}
                                     onChange={e => updateOverride(m.code, 'postage', e.target.value)}
+                                    disabled={importing}
+                                  />
+                                </div>
+                                <div className="input-group">
+                                  <label className="input-label text-xs">库存</label>
+                                  <input
+                                    type="number"
+                                    className="input-ios text-sm"
+                                    min="0" step="1"
+                                    placeholder={defaults.stock}
+                                    value={s.stock !== defaults.stock ? s.stock : ''}
+                                    onChange={e => updateOverride(m.code, 'stock', e.target.value)}
                                     disabled={importing}
                                   />
                                 </div>

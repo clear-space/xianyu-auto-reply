@@ -48,6 +48,7 @@ class MaterialCreateRequest(BaseModel):
     address: Optional[str] = Field(None, max_length=200, description="宝贝所在地")
     brand: Optional[str] = Field(None, max_length=100, description="品牌")
     condition: str = Field("全新", description="成色")
+    stock: int = Field(9999, ge=0, description="库存数量（鱼小铺账号可用）")
     remark: Optional[str] = Field(None, max_length=500, description="备注（内部使用）")
 
 
@@ -64,6 +65,7 @@ class MaterialUpdateRequest(BaseModel):
     address: Optional[str] = None
     brand: Optional[str] = None
     condition: Optional[str] = None
+    stock: Optional[int] = Field(None, ge=0, description="库存数量")
     remark: Optional[str] = None
 
 
@@ -74,6 +76,7 @@ class PublishSingleRequest(BaseModel):
     description: str = Field(...)
     price: float = Field(..., gt=0)
     original_price: Optional[float] = None
+    stock: int = Field(9999, ge=0, description="库存数量（鱼小铺账号可用）")
     category: Optional[str] = Field(None, description="商品分类")
     images: List[str] = Field(..., min_length=1, description="图片本地路径列表（至少1张）")
     address: Optional[str] = None
@@ -490,11 +493,13 @@ class BatchImportMaterialItem(BaseModel):
     description: str = Field(..., min_length=1)
     images: List[str] = Field(default=[], description="本地图片路径列表")
     price: float = Field(..., gt=0)
+    original_price: Optional[float] = Field(None, description="原价（划线价）")
     category: str = Field("虚拟商品", max_length=100)
     condition: str = Field("全新")
     brand: str = Field("", max_length=100)
     delivery_method: str = Field("express")
     postage: float = Field(0, ge=0)
+    stock: int = Field(9999, ge=0, description="库存数量")
 
 
 class BatchImportRequest(BaseModel):
@@ -696,7 +701,7 @@ async def batch_import_materials(
                 "title": title,
                 "description": description,
                 "price": float(material_data.price),
-                "original_price": None,
+                "original_price": float(material_data.original_price) if material_data.original_price else None,
                 "category": material_data.category or "虚拟商品",
                 "images": [u for u in saved_urls if u],
                 "delivery_method": material_data.delivery_method or "express",
@@ -704,6 +709,7 @@ async def batch_import_materials(
                 "address": None,
                 "brand": material_data.brand.strip() if material_data.brand else None,
                 "condition": material_data.condition or "全新",
+                "stock": int(material_data.stock) if material_data.stock is not None else 9999,
                 "remark": f"批量导入自: {material_data.folder_name}",
             }
 

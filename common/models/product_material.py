@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, JSON, Numeric, String, Text
+from sqlalchemy import BigInteger, Index, Integer, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -35,4 +35,5 @@ class ProductMaterial(TimestampMixin, Base):
     address: Mapped[str | None] = mapped_column(String(200), comment="宝贝所在地")
     brand: Mapped[str | None] = mapped_column(String(100), comment="品牌")
     condition: Mapped[str] = mapped_column(String(20), default="全新", comment="成色：全新/99新/95新等")
+    stock: Mapped[int] = mapped_column(Integer, default=9999, comment="库存数量（鱼小铺账号可用）")
     remark: Mapped[str | None] = mapped_column(String(500), comment="备注（仅内部使用，不发布到闲鱼）")

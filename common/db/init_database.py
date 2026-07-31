@@ -1262,6 +1262,7 @@ class DatabaseInitializer:
                 address VARCHAR(200) DEFAULT NULL COMMENT '宝贝所在地',
                 brand VARCHAR(100) DEFAULT NULL COMMENT '品牌',
                 `condition` VARCHAR(20) DEFAULT '全新' COMMENT '成色',
+                stock INT DEFAULT 9999 COMMENT '库存数量（鱼小铺账号可用）',
                 remark VARCHAR(500) DEFAULT NULL COMMENT '备注（仅内部使用）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1769,6 +1770,9 @@ class DatabaseInitializer:
             ("publish_days", "INT DEFAULT NULL COMMENT '上新天数筛选（searchFilter 的 publishDays，单位天，NULL/0=不限）'", "price_max"),
             ("proxy_url", "VARCHAR(255) DEFAULT NULL COMMENT '代理API地址（GET返回IP:PORT列表，取一个作HTTP代理；空=不使用代理）'", "collect_pages"),
             ("direct_order", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '采集后是否直接下单（开启则新采集商品立即用下单账号下单后再入库）'", "order_batch_size"),
+        ],
+        "xy_product_materials": [
+            ("stock", "INT DEFAULT 9999 COMMENT '库存数量（鱼小铺账号可用）'", "condition"),
         ],
         "xy_listing_monitor_logs": [
             ("used_account_ids", "JSON DEFAULT NULL COMMENT '本次执行实际使用过的账号ID列表（可能多个）'", "account_id"),

@@ -19,7 +19,7 @@ import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { MaterialFormModal } from './MaterialFormModal'
 import { BatchImportModal } from './BatchImportModal'
 
-const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
+const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '电子资料', '其它闲置', '其他']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 
 export function ProductMaterials() {

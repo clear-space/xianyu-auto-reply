@@ -355,6 +355,8 @@ class XianyuPublisher:
 
             await self._fill_price(item_data)
 
+            await self._set_stock(item_data)
+
             logger.info("\n[步骤10] ⏭️ 跳过服务选择...")
             await asyncio.sleep(1)
             logger.info("\n[步骤11] ⏭️ 跳过服务选择...")
@@ -1575,6 +1577,40 @@ class XianyuPublisher:
                 logger.info("ℹ️ 未找到原价输入框，跳过（原价是可选的）")
         else:
             logger.info("ℹ️ 未设置原价，跳过")
+
+    async def _set_stock(self, item_data: dict):
+        """设置库存数量（鱼小铺账号可用，非鱼小铺账号静默跳过）"""
+        stock = item_data.get("stock", 9999)
+        if not stock:
+            stock = 9999
+        stock = int(stock)
+        logger.info(f"\n[步骤8.5] 📦 设置库存: {stock}...")
+
+        stock_input_selectors = [
+            'input[placeholder*="库存"]',
+            'input[placeholder*="数量"]',
+            'input[placeholder*="stock"]',
+            '.stock input',
+            '[class*="stock"] input',
+            '[class*="inventory"] input',
+            '[class*="quantity"] input',
+        ]
+
+        stock_input = None
+        for selector in stock_input_selectors:
+            try:
+                stock_input = await self.page.query_selector(selector)
+                if stock_input and await stock_input.is_visible():
+                    logger.info(f"✅ 找到库存输入框: {selector}")
+                    break
+            except Exception:
+                continue
+
+        if stock_input:
+            await stock_input.fill(str(stock))
+            logger.info(f"✅ 库存已设置为: {stock}")
+        else:
+            logger.info("ℹ️ 未找到库存输入框（非鱼小铺账号），跳过")
 
     async def _set_free_shipping(self):
         """设置发货方式为包邮（按原项目流程）"""
