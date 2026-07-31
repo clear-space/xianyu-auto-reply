@@ -9,7 +9,7 @@
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Clock, X, Loader2, Save } from 'lucide-react'
+import { Clock, X, Loader2, Save, ChevronLeft, ChevronRight, Search, Image } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { getAccountDetails } from '@/api/accounts'
 import { getMaterials, createSchedule, updateSchedule, type ProductMaterial, type PublishSchedule, type ScheduleConfig, type CreateScheduleParams, type UpdateScheduleParams } from '@/api/productPublish'
@@ -52,16 +52,40 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
     new Set(initial?.material_ids || prefills?.materialIds || [])
   )
   const [materialSearch, setMaterialSearch] = useState('')
+  const [materialPage, setMaterialPage] = useState(1)
+  const [materialPageSize, setMaterialPageSize] = useState(10)
+  const [materialTotal, setMaterialTotal] = useState(0)
+  const [materialTotalPages, setMaterialTotalPages] = useState(0)
+  const [materialLoading, setMaterialLoading] = useState(false)
+
+  /** 加载素材（分页） */
+  const loadMaterials = async (p = materialPage, size = materialPageSize) => {
+    setMaterialLoading(true)
+    try {
+      const filters: { title?: string } = {}
+      if (materialSearch.trim()) filters.title = materialSearch.trim()
+      const res = await getMaterials(p, size, Object.keys(filters).length > 0 ? filters : undefined)
+      if (res.success) {
+        setMaterials(res.data.list)
+        setMaterialTotal(res.data.total)
+        setMaterialTotalPages(res.data.total_pages)
+      }
+    } catch { /* ignore */ }
+    finally { setMaterialLoading(false) }
+  }
 
   useEffect(() => {
     Promise.all([
       getAccountDetails(),
-      getMaterials(1, 1000),
-    ]).then(([accList, matRes]) => {
+      loadMaterials(1, materialPageSize),
+    ]).then(([accList]) => {
       setAccounts(accList)
-      if (matRes.success) setMaterials(matRes.data.list)
     }).finally(() => setDataLoading(false))
   }, [])
+
+  useEffect(() => {
+    if (!dataLoading) loadMaterials(materialPage, materialPageSize)
+  }, [materialPage, materialPageSize])
 
   const buildConfig = (): ScheduleConfig => {
     const config: ScheduleConfig = {}
@@ -145,18 +169,26 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
     else setSelectedAccounts(new Set(accounts.map((a: any) => a.id)))
   }
   const toggleAllMaterials = () => {
-    const filtered = materialSearch.trim()
-      ? materials.filter(m => m.title.toLowerCase().includes(materialSearch.trim().toLowerCase()))
-      : materials
-    const ids = filtered.map(m => m.id)
-    const allSelected = ids.length > 0 && ids.every(id => selectedMaterials.has(id))
-    if (allSelected) setSelectedMaterials(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n })
-    else setSelectedMaterials(prev => { const n = new Set(prev); ids.forEach(id => n.add(id)); return n })
+    const currentPageIds = materials.map(m => m.id)
+    const allSelected = currentPageIds.length > 0 && currentPageIds.every(id => selectedMaterials.has(id))
+    if (allSelected) {
+      setSelectedMaterials(prev => { const n = new Set(prev); currentPageIds.forEach(id => n.delete(id)); return n })
+    } else {
+      setSelectedMaterials(prev => { const n = new Set(prev); currentPageIds.forEach(id => n.add(id)); return n })
+    }
   }
 
-  const filteredMaterials = materialSearch.trim()
-    ? materials.filter(m => m.title.toLowerCase().includes(materialSearch.trim().toLowerCase()))
-    : materials
+  const handleMaterialSearch = () => {
+    setMaterialPage(1)
+    loadMaterials(1, materialPageSize)
+  }
+
+  const handleMaterialPageSizeChange = (size: number) => {
+    setMaterialPageSize(size)
+    setMaterialPage(1)
+  }
+
+  const allCurrentMaterialsSelected = materials.length > 0 && materials.every(m => selectedMaterials.has(m.id))
 
   const totalPublishes = selectedAccounts.size * selectedMaterials.size
 
@@ -321,28 +353,111 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
           </div>
 
           {/* 选择素材 */}
-          <div className="vben-card">
+          <div className="vben-card flex flex-col">
             <div className="vben-card-header">
-              <h3 className="vben-card-title text-sm">选择素材</h3>
-              <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllMaterials}>
-                {filteredMaterials.length > 0 && filteredMaterials.every(m => selectedMaterials.has(m.id)) ? '取消全选' : '全选'}
-              </button>
+              <h3 className="vben-card-title text-sm"><Image className="w-4 h-4" />选择素材</h3>
+              <div className="flex items-center gap-2">
+                <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllMaterials}>
+                  {allCurrentMaterialsSelected && materials.length > 0 ? '取消全选' : '全选'}
+                </button>
+                <span className="badge-primary text-xs">已选 {selectedMaterials.size} 条</span>
+              </div>
             </div>
-            <div className="vben-card-body">
-              <input className="input-ios w-full mb-2" placeholder="搜索素材标题..."
-                value={materialSearch} onChange={e => setMaterialSearch(e.target.value)} />
-              {filteredMaterials.length === 0 ? (
-                <p className="text-center text-slate-400 py-4 text-sm">没有匹配的素材</p>
-              ) : (
-                <div className="space-y-1 max-h-40 overflow-y-auto">
-                  {filteredMaterials.map(m => (
-                    <label key={m.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${selectedMaterials.has(m.id) ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
-                      <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
-                        checked={selectedMaterials.has(m.id)} onChange={() => toggleMaterial(m.id)} />
-                      <span className="text-sm truncate flex-1 text-slate-700 dark:text-slate-200">{m.title}</span>
-                      <span className="text-xs text-amber-600 flex-shrink-0">¥{m.price}</span>
-                    </label>
-                  ))}
+            <div className="vben-card-body pt-0">
+              {/* 搜索栏 */}
+              <div className="flex items-center gap-2 mb-2">
+                <input className="input-ios flex-1" placeholder="搜索素材标题..."
+                  value={materialSearch} onChange={e => setMaterialSearch(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleMaterialSearch()} />
+                <button className="btn-ios-primary btn-sm" onClick={handleMaterialSearch}>
+                  <Search className="w-3.5 h-3.5" />搜索
+                </button>
+                {materialSearch && (
+                  <button className="btn-ios-secondary btn-sm" onClick={() => { setMaterialSearch(''); setMaterialPage(1); loadMaterials(1, materialPageSize); }}>
+                    <X className="w-3.5 h-3.5" />重置
+                  </button>
+                )}
+              </div>
+
+              {/* 素材表格 */}
+              <div className="max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+                <table className="table-ios">
+                  <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
+                    <tr>
+                      <th className="w-10">
+                        <input type="checkbox" checked={allCurrentMaterialsSelected && materials.length > 0}
+                          onChange={toggleAllMaterials}
+                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                      </th>
+                      <th>标题</th>
+                      <th>价格</th>
+                      <th>分类</th>
+                      <th>成色</th>
+                      <th>图片</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {materialLoading ? (
+                      <tr><td colSpan={6} className="text-center py-8">
+                        <Loader2 className="w-5 h-5 animate-spin text-blue-500 mx-auto" />
+                      </td></tr>
+                    ) : materials.length === 0 ? (
+                      <tr><td colSpan={6} className="text-center py-8 text-slate-400">
+                        <div className="flex flex-col items-center gap-1">
+                          <Image className="w-8 h-8 text-slate-300" />
+                          <p className="text-sm">没有匹配的素材</p>
+                        </div>
+                      </td></tr>
+                    ) : materials.map(m => (
+                      <tr key={m.id} className={selectedMaterials.has(m.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
+                        <td>
+                          <input type="checkbox" checked={selectedMaterials.has(m.id)}
+                            onChange={() => toggleMaterial(m.id)}
+                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                        </td>
+                        <td className="max-w-[160px]">
+                          <span className="truncate block font-medium text-slate-800 dark:text-slate-100 text-sm" title={m.title}>{m.title}</span>
+                        </td>
+                        <td>
+                          <span className="text-amber-600 font-medium text-sm">¥{m.price}</span>
+                          {m.original_price && (
+                            <span className="text-xs text-slate-400 line-through ml-1">¥{m.original_price}</span>
+                          )}
+                        </td>
+                        <td className="text-sm text-slate-500">{m.category || '-'}</td>
+                        <td><span className="badge-gray text-xs">{m.condition}</span></td>
+                        <td><span className="badge-info text-xs">{(m.images || []).length} 张</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 分页 */}
+              {materialTotal > 0 && (
+                <div className="flex items-center justify-between pt-2 text-sm text-slate-500">
+                  <div className="flex items-center gap-2">
+                    <span>每页</span>
+                    <select value={materialPageSize} onChange={e => handleMaterialPageSizeChange(Number(e.target.value))}
+                      className="px-2 py-0.5 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      <option value={10}>10 条</option>
+                      <option value={20}>20 条</option>
+                      <option value={50}>50 条</option>
+                      <option value={100}>100 条</option>
+                    </select>
+                    <span>共 {materialTotal} 条</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span>第 {materialPage} / {materialTotalPages} 页</span>
+                    <button onClick={() => setMaterialPage(p => Math.max(1, p - 1))} disabled={materialPage <= 1 || materialLoading}
+                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => setMaterialPage(p => Math.min(materialTotalPages, p + 1))} disabled={materialPage >= materialTotalPages || materialLoading}
+                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

@@ -79,11 +79,15 @@ export function ScheduledPublish() {
   const [schedules, setSchedules] = useState<PublishSchedule[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [totalPages, setTotalPages] = useState(0)
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [showForm, setShowForm] = useState(false)
   const [editTarget, setEditTarget] = useState<PublishSchedule | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<PublishSchedule | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
+  const [batchDeleting, setBatchDeleting] = useState(false)
 
   // 活跃进度（定时任务执行时的实时进度面板）
   const [activeProgressList, setActiveProgressList] = useState<ActiveScheduleProgress[]>([])
@@ -98,16 +102,18 @@ export function ScheduledPublish() {
   const [showClearLogsConfirm, setShowClearLogsConfirm] = useState(false)
   const [clearingLogs, setClearingLogs] = useState(false)
 
-  const loadSchedules = useCallback(async (p = page) => {
+  const loadSchedules = useCallback(async (p = page, size = pageSize) => {
     try {
-      const res = await getSchedules(p, 20)
+      const res = await getSchedules(p, size)
       if (res.success) {
         setSchedules(res.data.list)
         setTotal(res.data.total)
         setTotalPages(res.data.total_pages)
+        const currentIds = new Set(res.data.list.map((s: PublishSchedule) => s.id))
+        setSelectedIds(prev => prev.filter(id => currentIds.has(id)))
       }
     } catch { /* ignore */ }
-  }, [page])
+  }, [page, pageSize])
 
   const loadLogs = useCallback(async (p = logPage) => {
     try {
@@ -162,16 +168,39 @@ export function ScheduledPublish() {
   }
 
   const handleRefresh = () => {
-    loadSchedules(page)
+    loadSchedules(page, pageSize)
     if (tab === 'history') loadLogs(logPage)
   }
+
+  /** 全选/取消全选当前页 */
+  const handleSelectAll = () => {
+    if (schedules.length === 0) return
+    const currentPageIds = schedules.map(s => s.id)
+    const allSelected = currentPageIds.every(id => selectedIds.includes(id))
+    if (allSelected) {
+      setSelectedIds(prev => prev.filter(id => !currentPageIds.includes(id)))
+    } else {
+      setSelectedIds(prev => [...new Set([...prev, ...currentPageIds])])
+    }
+  }
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id])
+  }
+
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size)
+    setPage(1)
+  }
+
+  const allCurrentSelected = schedules.length > 0 && schedules.every(s => selectedIds.includes(s.id))
 
   const handleToggle = async (s: PublishSchedule) => {
     try {
       const res = await toggleSchedule(s.id)
       if (res.success) {
         addToast({ type: 'success', message: res.message })
-        loadSchedules(page)
+        loadSchedules(page, pageSize)
       } else {
         addToast({ type: 'error', message: res.message || '操作失败' })
       }
@@ -183,7 +212,7 @@ export function ScheduledPublish() {
       const res = await triggerSchedule(s.id)
       if (res.success) {
         addToast({ type: 'success', message: '已手动触发，请查看执行历史' })
-        loadSchedules(page)
+        loadSchedules(page, pageSize)
         // 乐观更新：立即在进度面板中显示
         const batchId = res.data?.batch_id as string | undefined
         const logId = res.data?.log_id as number | undefined
@@ -232,12 +261,41 @@ export function ScheduledPublish() {
       if (res.success) {
         addToast({ type: 'success', message: '规则已删除' })
         setDeleteConfirm(null)
-        loadSchedules(page)
+        loadSchedules(page, pageSize)
       } else {
         addToast({ type: 'error', message: res.message || '删除失败' })
       }
     } catch { addToast({ type: 'error', message: '删除失败' }) }
     finally { setDeleting(false) }
+  }
+
+  /** 批量删除 */
+  const handleBatchDelete = async () => {
+    if (selectedIds.length === 0) return
+    setBatchDeleting(true)
+    try {
+      let successCount = 0
+      let failCount = 0
+      for (const id of selectedIds) {
+        try {
+          const res = await deleteSchedule(id)
+          if (res.success) successCount++
+          else failCount++
+        } catch { failCount++ }
+      }
+      if (successCount > 0) {
+        addToast({ type: 'success', message: `成功删除 ${successCount} 条规则${failCount > 0 ? `，${failCount} 条失败` : ''}` })
+      } else {
+        addToast({ type: 'error', message: '删除失败' })
+      }
+      setBatchDeleteConfirm(false)
+      setSelectedIds([])
+      loadSchedules(page, pageSize)
+    } catch {
+      addToast({ type: 'error', message: '批量删除失败' })
+    } finally {
+      setBatchDeleting(false)
+    }
   }
 
   const handleClearLogs = async () => {
@@ -270,6 +328,11 @@ export function ScheduledPublish() {
           <p className="page-description">设置定时规则，到时间自动触发批量发布</p>
         </div>
         <div className="flex gap-2">
+          {selectedIds.length > 0 && (
+            <button className="btn-ios-danger" onClick={() => setBatchDeleteConfirm(true)}>
+              <Trash2 className="w-4 h-4" />批量删除 ({selectedIds.length})
+            </button>
+          )}
           <button className="btn-ios-secondary" onClick={handleRefresh}>
             <RefreshCw className="w-4 h-4" />刷新
           </button>
@@ -312,6 +375,11 @@ export function ScheduledPublish() {
             <table className="table-ios">
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
                 <tr>
+                  <th className="w-10">
+                    <input type="checkbox" checked={allCurrentSelected && schedules.length > 0}
+                      onChange={handleSelectAll}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                  </th>
                   <th>规则名称</th>
                   <th>模式</th>
                   <th>时间配置</th>
@@ -323,12 +391,17 @@ export function ScheduledPublish() {
               </thead>
               <tbody>
                 {schedules.length === 0 ? (
-                  <tr><td colSpan={7} className="text-center py-12 text-slate-400">
+                  <tr><td colSpan={8} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2"><Clock className="w-12 h-12 text-slate-300" />
                       <p>暂无定时规则，点击「新建规则」开始</p></div>
                   </td></tr>
                 ) : schedules.map(s => (
-                  <tr key={s.id}>
+                  <tr key={s.id} className={selectedIds.includes(s.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
+                    <td>
+                      <input type="checkbox" checked={selectedIds.includes(s.id)}
+                        onChange={() => toggleSelect(s.id)}
+                        className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                    </td>
                     <td>
                       <span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[180px]" title={s.name}>{s.name}</span>
                     </td>
@@ -369,15 +442,26 @@ export function ScheduledPublish() {
               </tbody>
             </table>
           </div>
-          {totalPages > 1 && (
-            <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700">
-              <span className="text-sm text-slate-500">{total} 条，第 {page}/{totalPages} 页</span>
-              <div className="flex gap-1">
+          {total > 0 && (
+            <div className="flex-shrink-0 flex flex-col sm:flex-row items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700 gap-3">
+              <div className="flex items-center gap-2 text-sm text-slate-500">
+                <span>每页</span>
+                <select value={pageSize} onChange={e => handlePageSizeChange(Number(e.target.value))}
+                  className="px-2 py-1 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value={10}>10 条</option>
+                  <option value={20}>20 条</option>
+                  <option value={50}>50 条</option>
+                  <option value={100}>100 条</option>
+                </select>
+                <span>共 {total} 条</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-slate-500">第 {page} / {totalPages} 页</span>
                 <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
-                  className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50">
+                  className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                   <ChevronLeft className="w-4 h-4" /></button>
                 <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
-                  className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50">
+                  className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                   <ChevronRight className="w-4 h-4" /></button>
               </div>
             </div>
@@ -592,7 +676,7 @@ export function ScheduledPublish() {
           <ScheduleFormModal
             initial={editTarget}
             onClose={() => { setShowForm(false); setEditTarget(null) }}
-            onSaved={() => { setShowForm(false); setEditTarget(null); loadSchedules(page) }}
+            onSaved={() => { setShowForm(false); setEditTarget(null); loadSchedules(page, pageSize) }}
           />
         )}
       </AnimatePresence>
@@ -607,6 +691,18 @@ export function ScheduledPublish() {
         loading={deleting}
         onConfirm={handleDelete}
         onCancel={() => setDeleteConfirm(null)}
+      />
+
+      {/* 批量删除确认 */}
+      <ConfirmModal
+        isOpen={batchDeleteConfirm}
+        title="确认批量删除"
+        message={`确认删除选中的 ${selectedIds.length} 条定时规则？关联的执行记录将保留。`}
+        confirmText={`删除 ${selectedIds.length} 条`}
+        type="danger"
+        loading={batchDeleting}
+        onConfirm={handleBatchDelete}
+        onCancel={() => setBatchDeleteConfirm(false)}
       />
 
       {/* 清空执行日志确认 */}
