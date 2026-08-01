@@ -20,7 +20,6 @@ import {
   Pause,
   Play,
   RefreshCw,
-  Save,
   Settings,
   X,
   Zap,

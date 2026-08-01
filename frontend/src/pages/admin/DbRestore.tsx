@@ -17,7 +17,6 @@ import {
   ChevronRight,
   Database,
   Download,
-  Eye,
   FileUp,
   FolderOpen,
   HardDrive,
