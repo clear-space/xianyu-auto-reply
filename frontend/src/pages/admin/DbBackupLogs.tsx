@@ -9,12 +9,21 @@
 import { useEffect, useState } from 'react'
 import {
   Calendar,
+  Check,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Database,
   Download,
+  Edit2,
   Loader2,
+  Pause,
+  Play,
   RefreshCw,
+  Save,
+  Settings,
+  X,
+  Zap,
 } from 'lucide-react'
 
 import {
@@ -22,10 +31,17 @@ import {
   getDbBackupLogs,
   type DbBackupLog,
 } from '@/api/admin'
+import {
+  getScheduledTasks,
+  triggerScheduledTask,
+  updateScheduledTask,
+  type ScheduledTask,
+} from '@/api/scheduledTasks'
+import { getSystemSettings } from '@/api/settings'
 import { PageLoading } from '@/components/common/Loading'
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
-import { getApiErrorMessage } from '@/utils/request'
+import { getApiErrorMessage, put } from '@/utils/request'
 
 // 备份状态中文映射 + 标签颜色
 const STATUS_LABELS: Record<string, { text: string; cls: string }> = {
@@ -78,6 +94,25 @@ export function DbBackupLogs() {
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
 
+  // ========== 备份配置 ==========
+  // 自动备份任务配置（来自 xy_scheduled_tasks）
+  const [taskConfig, setTaskConfig] = useState<ScheduledTask | null>(null)
+  const [taskConfigLoading, setTaskConfigLoading] = useState(true)
+
+  // 备份保留天数（来自 xy_system_settings）
+  const [retentionDays, setRetentionDays] = useState(10)
+  const [retentionDaysLoading, setRetentionDaysLoading] = useState(true)
+
+  // 编辑状态
+  const [editingInterval, setEditingInterval] = useState(false)
+  const [editIntervalValue, setEditIntervalValue] = useState(0)
+  const [editingRetention, setEditingRetention] = useState(false)
+  const [editRetentionValue, setEditRetentionValue] = useState(10)
+
+  // 按钮加载状态
+  const [savingConfig, setSavingConfig] = useState<string | null>(null)
+  const [triggeringBackup, setTriggeringBackup] = useState(false)
+
   const loadLogs = async (nextPage: number = currentPage, nextPageSize: number = pageSize) => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     try {
@@ -111,9 +146,156 @@ export function DbBackupLogs() {
   useEffect(() => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadLogs(1, pageSize)
+    loadTaskConfig()
+    loadRetentionDays()
     // 仅在认证态变更时初始化加载
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [_hasHydrated, isAuthenticated, token])
+
+  // ========== 备份配置加载 ==========
+
+  const loadTaskConfig = async () => {
+    try {
+      const result = await getScheduledTasks()
+      if (result.success && result.data) {
+        const dbBackup = result.data.find((t) => t.task_code === 'db_backup')
+        if (dbBackup) setTaskConfig(dbBackup)
+      }
+    } catch {
+      // 静默失败
+    } finally {
+      setTaskConfigLoading(false)
+    }
+  }
+
+  const loadRetentionDays = async () => {
+    try {
+      const { data } = await getSystemSettings()
+      if (data) {
+        const raw = (data as Record<string, unknown>)['db_backup.retention_days']
+        const days = raw !== undefined && raw !== null ? Number(raw) : 10
+        setRetentionDays(days >= 1 && days <= 365 ? days : 10)
+      }
+    } catch {
+      // 静默失败
+    } finally {
+      setRetentionDaysLoading(false)
+    }
+  }
+
+  // ========== 备份配置操作 ==========
+
+  const handleTriggerBackup = async () => {
+    setTriggeringBackup(true)
+    try {
+      const result = await triggerScheduledTask('db_backup')
+      if (result.success) {
+        addToast({ type: 'success', message: result.message || '备份任务已触发，正在执行...' })
+        // 轮询刷新日志列表，直到新记录出现或超时
+        // 备份通常需要 5-30 秒，每 3 秒检查一次，最多 15 次（45秒）
+        let pollCount = 0
+        const maxPolls = 15
+        const interval = setInterval(async () => {
+          pollCount++
+          await loadLogs(1, pageSize)
+          if (pollCount >= maxPolls) {
+            clearInterval(interval)
+          }
+        }, 3000)
+        // 组件卸载时清理
+        setTimeout(() => clearInterval(interval), maxPolls * 3000 + 1000)
+      } else {
+        addToast({ type: 'error', message: result.message || '触发备份失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '触发备份失败') })
+    } finally {
+      setTriggeringBackup(false)
+    }
+  }
+
+  const handleToggleEnabled = async () => {
+    if (!taskConfig) return
+    setSavingConfig('enabled')
+    try {
+      const result = await updateScheduledTask('db_backup', { enabled: !taskConfig.enabled })
+      if (result.success) {
+        addToast({ type: 'success', message: result.message })
+        loadTaskConfig()
+      } else {
+        addToast({ type: 'error', message: result.message || '更新失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '更新失败') })
+    } finally {
+      setSavingConfig(null)
+    }
+  }
+
+  const handleStartEditInterval = () => {
+    setEditIntervalValue(taskConfig?.interval_seconds ?? 3600)
+    setEditingInterval(true)
+  }
+
+  const handleCancelEditInterval = () => {
+    setEditingInterval(false)
+  }
+
+  const handleSaveInterval = async () => {
+    if (editIntervalValue < 1) {
+      addToast({ type: 'error', message: '间隔时间不能小于1秒' })
+      return
+    }
+    setSavingConfig('interval')
+    try {
+      const result = await updateScheduledTask('db_backup', { interval_seconds: editIntervalValue })
+      if (result.success) {
+        addToast({ type: 'success', message: result.message })
+        setEditingInterval(false)
+        loadTaskConfig()
+      } else {
+        addToast({ type: 'error', message: result.message || '更新失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '更新失败') })
+    } finally {
+      setSavingConfig(null)
+    }
+  }
+
+  const handleStartEditRetention = () => {
+    setEditRetentionValue(retentionDays)
+    setEditingRetention(true)
+  }
+
+  const handleCancelEditRetention = () => {
+    setEditingRetention(false)
+  }
+
+  const handleSaveRetention = async () => {
+    if (editRetentionValue < 1 || editRetentionValue > 365) {
+      addToast({ type: 'error', message: '保留天数必须在 1 到 365 之间' })
+      return
+    }
+    setSavingConfig('retention')
+    try {
+      const response = await put<{ success: boolean; message?: string }>(
+        '/api/v1/system-settings/db_backup.retention_days',
+        { value: String(editRetentionValue) },
+      )
+      if (response.success) {
+        addToast({ type: 'success', message: '备份保留天数已更新' })
+        setRetentionDays(editRetentionValue)
+        setEditingRetention(false)
+      } else {
+        addToast({ type: 'error', message: response.message || '更新失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '更新失败') })
+    } finally {
+      setSavingConfig(null)
+    }
+  }
 
   const handleSearch = () => {
     loadLogs(1, pageSize)
@@ -197,6 +379,196 @@ export function DbBackupLogs() {
         </div>
       </div>
 
+      {/* Backup Config Card */}
+      <div className="vben-card">
+        <div className="vben-card-header">
+          <h2 className="vben-card-title">
+            <Settings className="w-4 h-4 text-blue-500" />
+            备份配置
+          </h2>
+        </div>
+        <div className="vben-card-body">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* 手动备份 */}
+            <div className="flex flex-col gap-2">
+              <span className="text-sm text-slate-500 dark:text-slate-400">手动备份</span>
+              <button
+                onClick={handleTriggerBackup}
+                disabled={triggeringBackup}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:opacity-50"
+              >
+                {triggeringBackup ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4" />
+                )}
+                立即备份
+              </button>
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                点击立即执行一次数据库备份
+              </span>
+            </div>
+
+            {/* 执行间隔 */}
+            <div className="flex flex-col gap-2">
+              <span className="text-sm text-slate-500 dark:text-slate-400">
+                <Clock className="w-3.5 h-3.5 inline mr-1" />
+                执行间隔
+              </span>
+              {taskConfigLoading ? (
+                <span className="text-slate-400 text-sm">加载中...</span>
+              ) : editingInterval ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    value={editIntervalValue}
+                    onChange={(e) => setEditIntervalValue(Number(e.target.value))}
+                    className="w-24 px-2 py-1 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-sm"
+                  />
+                  <span className="text-sm text-slate-500">秒</span>
+                  <button
+                    onClick={handleSaveInterval}
+                    disabled={savingConfig === 'interval'}
+                    className="p-1 rounded hover:bg-green-50 dark:hover:bg-green-900/20"
+                    title="保存"
+                  >
+                    {savingConfig === 'interval' ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-green-500" />
+                    ) : (
+                      <Check className="w-4 h-4 text-green-500" />
+                    )}
+                  </button>
+                  <button
+                    onClick={handleCancelEditInterval}
+                    className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
+                    title="取消"
+                  >
+                    <X className="w-4 h-4 text-red-500" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-slate-900 dark:text-white">
+                    {taskConfig ? taskConfig.interval_seconds : '-'}
+                  </span>
+                  <span className="text-sm text-slate-500">秒</span>
+                  {taskConfig && (
+                    <button
+                      onClick={handleStartEditInterval}
+                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700"
+                      title="编辑间隔"
+                    >
+                      <Edit2 className="w-3.5 h-3.5 text-slate-400" />
+                    </button>
+                  )}
+                </div>
+              )}
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                自动备份的执行间隔
+              </span>
+            </div>
+
+            {/* 启用/禁用 */}
+            <div className="flex flex-col gap-2">
+              <span className="text-sm text-slate-500 dark:text-slate-400">自动备份</span>
+              {taskConfigLoading ? (
+                <span className="text-slate-400 text-sm">加载中...</span>
+              ) : taskConfig ? (
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`text-sm font-medium px-2.5 py-1 rounded ${
+                      taskConfig.enabled
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                        : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+                    }`}
+                  >
+                    {taskConfig.enabled ? '已启用' : '已禁用'}
+                  </span>
+                  <button
+                    onClick={handleToggleEnabled}
+                    disabled={savingConfig === 'enabled'}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      taskConfig.enabled
+                        ? 'bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30'
+                        : 'bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/30'
+                    }`}
+                  >
+                    {savingConfig === 'enabled' ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : taskConfig.enabled ? (
+                      <Pause className="w-4 h-4" />
+                    ) : (
+                      <Play className="w-4 h-4" />
+                    )}
+                    {taskConfig.enabled ? '禁用' : '启用'}
+                  </button>
+                </div>
+              ) : (
+                <span className="text-slate-400 text-sm">不可用</span>
+              )}
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                {taskConfig?.enabled ? '定时备份正在运行' : '定时备份已暂停'}
+              </span>
+            </div>
+
+            {/* 保留天数 */}
+            <div className="flex flex-col gap-2">
+              <span className="text-sm text-slate-500 dark:text-slate-400">保留天数</span>
+              {retentionDaysLoading ? (
+                <span className="text-slate-400 text-sm">加载中...</span>
+              ) : editingRetention ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="365"
+                    value={editRetentionValue}
+                    onChange={(e) => setEditRetentionValue(Number(e.target.value))}
+                    className="w-24 px-2 py-1 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-sm"
+                  />
+                  <span className="text-sm text-slate-500">天</span>
+                  <button
+                    onClick={handleSaveRetention}
+                    disabled={savingConfig === 'retention'}
+                    className="p-1 rounded hover:bg-green-50 dark:hover:bg-green-900/20"
+                    title="保存"
+                  >
+                    {savingConfig === 'retention' ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-green-500" />
+                    ) : (
+                      <Check className="w-4 h-4 text-green-500" />
+                    )}
+                  </button>
+                  <button
+                    onClick={handleCancelEditRetention}
+                    className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
+                    title="取消"
+                  >
+                    <X className="w-4 h-4 text-red-500" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-slate-900 dark:text-white">{retentionDays}</span>
+                  <span className="text-sm text-slate-500">天</span>
+                  <button
+                    onClick={handleStartEditRetention}
+                    className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700"
+                    title="编辑保留天数"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-slate-400" />
+                  </button>
+                </div>
+              )}
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                备份文件保留 {retentionDays} 天后自动清理
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Filter */}
       <div className="vben-card">
         <div className="vben-card-body">
@@ -242,7 +614,7 @@ export function DbBackupLogs() {
       {/* Logs List */}
       <div
         className="vben-card flex flex-col"
-        style={{ height: 'calc(100vh - 380px)', minHeight: '400px' }}
+        style={{ height: 'calc(100vh - 480px)', minHeight: '400px' }}
       >
         <div className="vben-card-header flex-shrink-0">
           <h2 className="vben-card-title">

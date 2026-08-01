@@ -588,6 +588,28 @@ export const getBackupFiles = async (): Promise<{ success: boolean; data?: Backu
   return { success: Boolean(result.success), data: result.data || [], message: result.message }
 }
 
+/** 下载备份目录中的 .sql.gz 文件（通过 fetch 获取 Blob，便于携带鉴权头并处理错误） */
+export const downloadBackupFile = async (
+  fileName: string,
+): Promise<{ success: boolean; blob?: Blob; filename?: string; message?: string }> => {
+  const token = localStorage.getItem('auth_token')
+  const response = await fetch(`${RESTORE_PREFIX}/backup-files/${encodeURIComponent(fileName)}/download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+
+  const contentType = response.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) {
+    const data = await response.json()
+    return { success: false, message: data?.message || '下载失败' }
+  }
+
+  const blob = await response.blob()
+  const disposition = response.headers.get('content-disposition') || ''
+  const match = disposition.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i)
+  const filename = match ? decodeURIComponent(match[1]) : fileName
+  return { success: true, blob, filename }
+}
+
 /** 执行数据库恢复 */
 export const executeRestore = async (
   referenceId: string,

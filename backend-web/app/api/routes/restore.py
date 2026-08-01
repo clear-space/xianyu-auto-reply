@@ -11,12 +11,16 @@
 """
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api import deps
 from app.services.restore_service import RESTORE_CATEGORY_MAP, RestoreService
 from common.models.user import User
+from common.utils.backup_paths import get_backup_root
 
 router = APIRouter(prefix="/restore", tags=["数据库恢复"])
 
@@ -114,6 +118,45 @@ async def list_backup_files(
         return {"success": True, "data": files}
     except Exception as exc:
         return {"success": False, "message": f"列出备份文件失败: {exc}", "data": []}
+
+
+# ==================== 下载备份文件 ====================
+
+
+@router.get("/backup-files/{file_name}/download")
+async def download_backup_file(
+    file_name: str,
+    _: User = Depends(deps.get_current_admin_user),
+) -> StreamingResponse:
+    """下载备份目录中的 .sql.gz 文件（仅管理员）。
+
+    文件不存在时返回统一的错误结构（HTTP 200 + success=False）。
+    """
+    # 安全检查：拒绝路径穿越
+    if "/" in file_name or "\\" in file_name or ".." in file_name:
+        return {"success": False, "message": "无效的文件名", "data": None}
+
+    root = get_backup_root()
+    file_path = (root / file_name).resolve()
+    try:
+        file_path.relative_to(root.resolve())
+    except ValueError:
+        return {"success": False, "message": "无效的文件路径", "data": None}
+
+    if not file_path.is_file():
+        return {"success": False, "message": "备份文件不存在或已被删除", "data": None}
+
+    def iter_file():
+        with file_path.open("rb") as f:
+            while chunk := f.read(64 * 1024):
+                yield chunk
+
+    disposition = f"attachment; filename*=UTF-8''{quote(file_name)}"
+    return StreamingResponse(
+        iter_file(),
+        media_type="application/gzip",
+        headers={"Content-Disposition": disposition},
+    )
 
 
 # ==================== 执行恢复 ====================

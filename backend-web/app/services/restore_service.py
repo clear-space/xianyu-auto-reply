@@ -25,6 +25,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.utils.backup_paths import get_backup_root, ensure_backup_root
+from common.utils.security import get_password_hash
+
+# 匹配 :word 模式（SQLAlchemy text() 的 bind parameter 语法）
+# 备份 SQL 中的 JSON 值（如 "category_id": 636）会导致 text() 报错
+# "A value is required for bind parameter '636'"
+_BIND_PARAM_RE = re.compile(r":(\w+)")
 
 # DROP TABLE IF EXISTS `tablename` 正则
 _DROP_TABLE_RE = re.compile(r"DROP\s+TABLE\s+IF\s+EXISTS\s+`(\w+)`", re.IGNORECASE)
@@ -256,6 +262,11 @@ class RestoreService:
 
         Returns:
             {restored_tables, skipped_tables, failed_tables, total_rows_inserted, total_duration_ms}
+
+        设计要点：
+        - 使用 text() 执行所有 SQL，转义 \\:word 防止被误解析为 bind parameter
+        - 原子表替换：先恢复到 {table}_restore，全部成功后再 RENAME 原子替换
+        - 恢复完成后显式 rollback + commit，重置 session 的事务状态
         """
         if not file_path.is_file():
             raise FileNotFoundError(f"备份文件不存在: {file_path}")
@@ -270,7 +281,7 @@ class RestoreService:
                 if cat_info and cat_info.get("tables"):
                     selected_tables.update(cat_info["tables"])
 
-            # "other" 动态计算：备份中不在任何已知分类中的表
+            # "other" 动态计算
             if "other" in category_keys:
                 backup_table_names = set()
                 with gzip.open(file_path, "rt", encoding="utf-8", errors="replace") as fp:
@@ -292,8 +303,14 @@ class RestoreService:
         failed_tables: list[dict] = []
         total_rows = 0
 
+        # Helper: 执行一条备份 SQL
+        # 使用 text() 但先转义 :word 防止被当成 bind parameter
+        # （备份数据中的 JSON 如 "category_id": 636 会被 text() 解析为 :636）
+        async def _exec_sql(sql: str) -> None:
+            escaped = _BIND_PARAM_RE.sub(r"\\:\1", sql)
+            await self.session.execute(text(escaped))
+
         try:
-            # 开始恢复：禁用外键检查
             await self.session.execute(text("SET FOREIGN_KEY_CHECKS=0;"))
 
             current_table: str | None = None
@@ -301,7 +318,7 @@ class RestoreService:
             current_sql_parts: list[str] = []
 
             async def _flush_current_table():
-                """将当前表的累积 SQL 执行到数据库"""
+                """原子性恢复单张表。"""
                 nonlocal in_current_table, total_rows
 
                 if not current_table or not in_current_table:
@@ -314,30 +331,60 @@ class RestoreService:
                     current_sql_parts.clear()
                     return
 
-                is_log = _is_log_table(current_table)
+                restore_table = f"{current_table}_restore"
                 try:
+                    # 1. 清理可能残留的临时表
+                    await _exec_sql(f"DROP TABLE IF EXISTS `{restore_table}`")
+
+                    # 2. 将原表名替换为临时表名，执行全部 DDL + DML
                     combined = "\n".join(current_sql_parts)
-                    # DDL (DROP + CREATE) 作为整体执行
-                    # INSERT 逐条执行避免大事务
-                    statements = combined.split(";\n")
+                    combined_restore = combined.replace(
+                        f"`{current_table}`", f"`{restore_table}`"
+                    )
+                    statements = combined_restore.split(";\n")
                     for stmt in statements:
                         stmt = stmt.strip()
                         if not stmt:
                             continue
-                        # 跳过注释行
                         if stmt.startswith("--"):
                             continue
-                        await self.session.execute(text(stmt))
+                        await _exec_sql(stmt)
                         if stmt.upper().startswith("INSERT"):
-                            total_rows += 1  # 每条 INSERT 是一批数据
+                            total_rows += 1
+
+                    # 3. 原子性替换
+                    result = await self.session.execute(
+                        text(
+                            "SELECT COUNT(*) FROM information_schema.TABLES "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :tbl"
+                        ),
+                        {"tbl": current_table},
+                    )
+                    original_exists = result.scalar() > 0
+
+                    if original_exists:
+                        await _exec_sql(
+                            f"RENAME TABLE `{current_table}` TO `{current_table}_old`, "
+                            f"`{restore_table}` TO `{current_table}`"
+                        )
+                        await _exec_sql(f"DROP TABLE IF EXISTS `{current_table}_old`")
+                    else:
+                        await _exec_sql(
+                            f"RENAME TABLE `{restore_table}` TO `{current_table}`"
+                        )
 
                     restored_tables.append(current_table)
-                    logger.info(f"恢复表 {current_table} 完成")
+                    logger.info(f"恢复表 {current_table} 完成（原子模式）")
                 except Exception as exc:
                     error_msg = str(exc)[:500]
                     logger.error(f"恢复表 {current_table} 失败: {error_msg}")
                     failed_tables.append({"table": current_table, "error": error_msg})
-                    # 回滚当前表的部分执行
+                    # 清理临时表
+                    try:
+                        await _exec_sql(f"DROP TABLE IF EXISTS `{restore_table}`")
+                    except Exception:
+                        pass
+                    # 回滚 DML（临时表上的 INSERT 等）
                     try:
                         await self.session.rollback()
                     except Exception:
@@ -348,10 +395,8 @@ class RestoreService:
 
             with gzip.open(file_path, "rt", encoding="utf-8", errors="replace") as fp:
                 for line in fp:
-                    # 检测新表开始
                     m = _DROP_TABLE_RE.search(line)
                     if m:
-                        # 刷新上一个表
                         await _flush_current_table()
                         current_table = m.group(1)
                         in_current_table = True
@@ -359,14 +404,11 @@ class RestoreService:
                         continue
 
                     if in_current_table:
-                        # 跳过备份文件头部的 SET / 注释
                         if current_sql_parts:
                             current_sql_parts.append(line.rstrip("\n"))
 
-                # 刷新最后一个表
                 await _flush_current_table()
 
-            # 恢复外键检查
             await self.session.execute(text("SET FOREIGN_KEY_CHECKS=1;"))
 
         except Exception as exc:
@@ -377,6 +419,13 @@ class RestoreService:
                 pass
             raise
         finally:
+            # 关键：显式回滚再提交，清除因 DDL 隐式提交导致的
+            # SQLAlchemy 事务状态不一致问题
+            # 这样 session 归还连接池时连接是干净的
+            try:
+                await self.session.rollback()
+            except Exception:
+                pass
             try:
                 await self.session.commit()
             except Exception:

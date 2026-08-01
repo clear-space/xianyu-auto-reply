@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronRight,
   Database,
+  Download,
   FileUp,
   FolderOpen,
   HardDrive,
@@ -28,6 +29,7 @@ import {
 } from 'lucide-react'
 
 import {
+  downloadBackupFile,
   executeRestore,
   getBackupFiles,
   parseExistingBackup,
@@ -176,6 +178,33 @@ export function DbRestore() {
       setParseError(getApiErrorMessage(error, '解析备份文件失败'))
     } finally {
       setLoading(false)
+    }
+  }
+
+  // ---- Download backup file ----
+  const [downloadingFile, setDownloadingFile] = useState<string | null>(null)
+
+  const handleDownload = async (fileName: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setDownloadingFile(fileName)
+    try {
+      const res = await downloadBackupFile(fileName)
+      if (res.success && res.blob) {
+        const url = window.URL.createObjectURL(res.blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = res.filename || fileName
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        window.URL.revokeObjectURL(url)
+      } else {
+        addToast({ type: 'error', message: res.message || '下载失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '下载备份文件失败' })
+    } finally {
+      setDownloadingFile(null)
     }
   }
 
@@ -390,6 +419,7 @@ export function DbRestore() {
                       <th>文件名</th>
                       <th>大小</th>
                       <th>修改时间</th>
+                      <th>下载</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -408,6 +438,20 @@ export function DbRestore() {
                         <td className="text-slate-500">{f.size_formatted}</td>
                         <td className="text-slate-500 text-sm">
                           {new Date(f.modified_at).toLocaleString('zh-CN')}
+                        </td>
+                        <td>
+                          <button
+                            onClick={(e) => handleDownload(f.name, e)}
+                            disabled={downloadingFile === f.name}
+                            className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition-colors"
+                            title={`下载 ${f.name}`}
+                          >
+                            {downloadingFile === f.name ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Download className="w-4 h-4" />
+                            )}
+                          </button>
                         </td>
                         <td>
                           {selectedExistingFile === f.name && (

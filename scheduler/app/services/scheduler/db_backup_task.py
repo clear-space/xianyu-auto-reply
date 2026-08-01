@@ -36,8 +36,8 @@ from common.utils.time_utils import get_beijing_now, get_beijing_now_naive
 # 每批读取的数据行数，避免大表一次性载入内存
 _BATCH_SIZE = 1000
 
-# 备份文件与备份日志的保留天数，超过该天数的备份文件与日志记录会被自动清理
-_RETENTION_DAYS = 10
+# 备份保留天数默认值（当 xy_system_settings 中未配置 db_backup.retention_days 时使用）
+_DEFAULT_RETENTION_DAYS = 10
 
 
 def _is_log_table(table: str) -> bool:
@@ -299,15 +299,43 @@ class DbBackupTaskService:
         except Exception as exc:
             logger.error(f"【{self.task_name}】记录备份日志失败: {exc}")
 
+    async def _get_retention_days(self) -> int:
+        """从 xy_system_settings 读取备份保留天数。
+
+        每次备份执行时重新读取（不缓存），管理员修改后下次备份即生效。
+        未配置或值无效时回退到默认值 10 天。
+        """
+        from sqlalchemy import select
+
+        from common.models.system_setting import SystemSetting
+
+        try:
+            async with async_session_maker() as session:
+                stmt = select(SystemSetting.value).where(
+                    SystemSetting.key == "db_backup.retention_days"
+                )
+                result = await session.execute(stmt)
+                row = result.scalar_one_or_none()
+                if row:
+                    days = int(str(row).strip())
+                    if 1 <= days <= 365:
+                        return days
+        except Exception as exc:
+            logger.warning(f"【{self.task_name}】读取保留天数配置失败，使用默认值: {exc}")
+        return _DEFAULT_RETENTION_DAYS
+
     async def _cleanup_expired_backups(self) -> None:
-        """清理过期的备份文件与备份日志记录（保留最近 _RETENTION_DAYS 天）。
+        """清理过期的备份文件与备份日志记录。
 
         说明：
         - 仅删除备份文件与备份日志记录，绝不触碰任何业务数据表
         - 文件删除依据文件修改时间，日志删除依据 created_at
         - 任意一步失败均不影响本次备份主流程
+        - 保留天数从 xy_system_settings 读取（key: db_backup.retention_days），
+          默认 10 天
         """
-        cutoff = get_beijing_now() - timedelta(days=_RETENTION_DAYS)
+        retention_days = await self._get_retention_days()
+        cutoff = get_beijing_now() - timedelta(days=retention_days)
 
         # 1. 删除过期备份文件
         try:
@@ -323,13 +351,13 @@ class DbBackupTaskService:
                     except Exception as file_exc:
                         logger.warning(f"【{self.task_name}】删除过期备份文件失败 {file.name}: {file_exc}")
                 if removed:
-                    logger.info(f"【{self.task_name}】已清理 {removed} 个超过 {_RETENTION_DAYS} 天的备份文件")
+                    logger.info(f"【{self.task_name}】已清理 {removed} 个超过 {retention_days} 天的备份文件")
         except Exception as exc:
             logger.error(f"【{self.task_name}】清理过期备份文件异常: {exc}")
 
         # 2. 删除过期备份日志记录
         try:
-            cutoff_naive = get_beijing_now_naive() - timedelta(days=_RETENTION_DAYS)
+            cutoff_naive = get_beijing_now_naive() - timedelta(days=retention_days)
             async with async_session_maker() as session:
                 result = await session.execute(
                     delete(DbBackupLog).where(DbBackupLog.created_at < cutoff_naive)
@@ -337,7 +365,7 @@ class DbBackupTaskService:
                 await session.commit()
                 deleted = int(result.rowcount or 0)
                 if deleted:
-                    logger.info(f"【{self.task_name}】已清理 {deleted} 条超过 {_RETENTION_DAYS} 天的备份日志")
+                    logger.info(f"【{self.task_name}】已清理 {deleted} 条超过 {retention_days} 天的备份日志")
         except Exception as exc:
             logger.error(f"【{self.task_name}】清理过期备份日志异常: {exc}")
 
