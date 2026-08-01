@@ -4,36 +4,30 @@
 
 用法：在 Dockerfile 中 COPY 此脚本和 chrome-linux64.zip，pip install 后执行。
 """
+import importlib
 import json
 import os
 import sys
 import zipfile
-
-
-def find_package_site_packages(package_name: str):
-    """查找包的 site-packages 路径"""
-    for p in sys.path:
-        if not p:
-            continue
-        candidate = os.path.join(p, package_name)
-        if os.path.isdir(candidate):
-            return p
-    raise RuntimeError(f"找不到 {package_name} 包，请先 pip install")
+from pathlib import Path
 
 
 def get_expected_revision(package_name: str, browser_name: str) -> str:
-    """从已安装的包读取浏览器预期 revision"""
-    site = find_package_site_packages(package_name)
-    browsers_json = os.path.join(site, package_name, "driver", "browsers.json")
-    if not os.path.exists(browsers_json):
-        raise RuntimeError(f"找不到 browsers.json: {browsers_json}")
-    with open(browsers_json, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    browsers = data.get("browsers", data) if isinstance(data, dict) else data
+    """从已安装的包读取浏览器预期 revision（与 browser_utils.py 逻辑一致）"""
+    pkg = importlib.import_module(package_name)
+    pkg_dir = Path(pkg.__file__).parent
+    # 新版 playwright/patchright 的 browsers.json 在 driver/package/ 下
+    browsers_json = pkg_dir / "driver" / "package" / "browsers.json"
+    if not browsers_json.exists():
+        # 旧版回退
+        browsers_json = pkg_dir / "driver" / "browsers.json"
+    if not browsers_json.exists():
+        raise RuntimeError(f"找不到 browsers.json，已检查: {pkg_dir}/driver/package/browsers.json 和 {pkg_dir}/driver/browsers.json")
+    browsers = json.loads(browsers_json.read_text(encoding="utf-8"))["browsers"]
     for b in browsers:
         if b.get("name") == browser_name:
             return str(b["revision"])
-    raise RuntimeError(f"{browsers_json} 中找不到 {browser_name}")
+    raise RuntimeError(f"browsers.json 中找不到 {browser_name}")
 
 
 def install_from_zip(
