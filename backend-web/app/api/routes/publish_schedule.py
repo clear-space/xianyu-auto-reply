@@ -119,7 +119,7 @@ async def get_active_schedule_progress(
     from common.models.publish_log import PublishLog
     from common.models.publish_schedule import PublishSchedule
     from common.models.publish_schedule_log import PublishScheduleLog
-    from common.utils.time_utils import get_beijing_now, get_beijing_now_naive, safe_isoformat
+    from common.utils.time_utils import get_beijing_now, safe_isoformat
     from app.services.publish_batch_status_service import PublishBatchStatusService
 
     query_user_id = None if _is_admin(current_user) else current_user.id
@@ -342,9 +342,9 @@ async def trigger_schedule(
     batch_id = str(uuid.uuid4())
 
     # 创建执行记录
-    from common.utils.time_utils import get_beijing_now_naive
+    from common.utils.time_utils import get_beijing_now
     total_count = len(account_ids) * len(materials)
-    log_entry = await svc.create_log(schedule_id, get_beijing_now_naive(), total_count)
+    log_entry = await svc.create_log(schedule_id, get_beijing_now(), total_count)
     await svc.update_log(log_entry.id, {"batch_id": batch_id, "status": "running"})
 
     # 初始化 batch 状态

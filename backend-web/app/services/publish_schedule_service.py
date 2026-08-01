@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.publish_schedule import PublishSchedule
 from common.models.publish_schedule_log import PublishScheduleLog
-from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+from common.utils.time_utils import BEIJING_TZ, get_beijing_now, safe_isoformat
 
 
 def _compute_next_trigger(schedule_mode: str, schedule_config: dict, after: datetime = None) -> Optional[datetime]:
@@ -37,7 +37,7 @@ def _compute_next_trigger(schedule_mode: str, schedule_config: dict, after: date
     Returns:
         下次触发的 datetime，如无法计算（如 once 已过期）返回 None
     """
-    now = after if after else get_beijing_now_naive()
+    now = after if after else get_beijing_now()
     today = now.date()
 
     if schedule_mode == "once":
@@ -48,6 +48,9 @@ def _compute_next_trigger(schedule_mode: str, schedule_config: dict, after: date
             dt = datetime.fromisoformat(dt_str)
         except (ValueError, TypeError):
             return None
+        # 确保时区一致：如果解析的是 naive datetime，补上北京时间
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BEIJING_TZ)
         # 如果时间已过，返回 None（调用方应禁用规则）
         if dt <= now:
             return None
@@ -73,10 +76,10 @@ def _next_daily(config: dict, now: datetime, today) -> Optional[datetime]:
         start_str = time_range.get("start", "00:00")
         end_str = time_range.get("end", "23:59")
         trigger_time = _random_time_between(start_str, end_str)
-        candidate = datetime.combine(today, trigger_time)
+        candidate = datetime.combine(today, trigger_time).replace(tzinfo=BEIJING_TZ)
         if candidate <= now:
             # 今天已过，算明天的
-            candidate = datetime.combine(today + timedelta(days=1), _random_time_between(start_str, end_str))
+            candidate = datetime.combine(today + timedelta(days=1), _random_time_between(start_str, end_str)).replace(tzinfo=BEIJING_TZ)
         return candidate
 
     if times:
@@ -84,17 +87,17 @@ def _next_daily(config: dict, now: datetime, today) -> Optional[datetime]:
         time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
         time_points.sort()
         for tp in time_points:
-            candidate = datetime.combine(today, tp)
+            candidate = datetime.combine(today, tp).replace(tzinfo=BEIJING_TZ)
             if candidate > now:
                 return candidate
         # 今天都过了，取明天第一个时间点
         if time_points:
-            return datetime.combine(today + timedelta(days=1), time_points[0])
+            return datetime.combine(today + timedelta(days=1), time_points[0]).replace(tzinfo=BEIJING_TZ)
 
     # 默认 00:00
-    candidate = datetime.combine(today, time(0, 0))
+    candidate = datetime.combine(today, time(0, 0)).replace(tzinfo=BEIJING_TZ)
     if candidate <= now:
-        candidate = datetime.combine(today + timedelta(days=1), time(0, 0))
+        candidate = datetime.combine(today + timedelta(days=1), time(0, 0)).replace(tzinfo=BEIJING_TZ)
     return candidate
 
 
@@ -108,40 +111,29 @@ def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
     time_range = config.get("time_range")
     times = config.get("times", [])
 
-    # 当前星期几（1=周一, 7=周日）
-    current_weekday = today.isoweekday()
-
-    # 找到下一个符合条件的 day
-    sorted_days = sorted(days)
     for offset in range(8):  # 最多查一周
-        candidate_day_offset = offset
-        candidate_date = today + timedelta(days=candidate_day_offset)
+        candidate_date = today + timedelta(days=offset)
         candidate_weekday = candidate_date.isoweekday()
 
         if candidate_weekday in days:
             # 如果就是今天，检查时间是否已过
-            if candidate_day_offset == 0:
-                # 需要判断今天的时间点
+            if offset == 0:
                 if use_random and time_range:
                     trigger_time = _random_time_between(time_range.get("start", "00:00"), time_range.get("end", "23:59"))
-                    candidate = datetime.combine(candidate_date, trigger_time)
+                    candidate = datetime.combine(candidate_date, trigger_time).replace(tzinfo=BEIJING_TZ)
                     if candidate > now:
                         return candidate
                     continue  # 今天已过，找下一个
                 if times:
                     time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
                     time_points.sort()
-                    found = False
                     for tp in time_points:
-                        candidate = datetime.combine(candidate_date, tp)
+                        candidate = datetime.combine(candidate_date, tp).replace(tzinfo=BEIJING_TZ)
                         if candidate > now:
                             return candidate
-                            found = True
-                    if found:
-                        break
                     continue  # 今天已过，找下一个
                 # 默认用 00:00
-                candidate = datetime.combine(candidate_date, time(0, 0))
+                candidate = datetime.combine(candidate_date, time(0, 0)).replace(tzinfo=BEIJING_TZ)
                 if candidate > now:
                     return candidate
                 continue
@@ -156,7 +148,7 @@ def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
             else:
                 trigger_time = time(0, 0)
 
-            return datetime.combine(candidate_date, trigger_time)
+            return datetime.combine(candidate_date, trigger_time).replace(tzinfo=BEIJING_TZ)
 
     return None
 
@@ -212,6 +204,7 @@ def _log_to_dict(l: PublishScheduleLog) -> dict:
         "failed_count": l.failed_count,
         "error_message": l.error_message,
         "created_at": safe_isoformat(l.created_at),
+        "updated_at": safe_isoformat(l.updated_at),
     }
 
 
@@ -430,7 +423,7 @@ class PublishScheduleService:
 
     async def get_due_schedules(self) -> List[PublishSchedule]:
         """查询所有到期的启用规则（scheduler 调用）"""
-        now = get_beijing_now_naive()
+        now = get_beijing_now()
         stmt = select(PublishSchedule).where(
             PublishSchedule.enabled == True,
             PublishSchedule.next_trigger_at != None,
@@ -440,7 +433,7 @@ class PublishScheduleService:
 
     async def advance_schedule(self, schedule: PublishSchedule) -> None:
         """触发后推进 next_trigger_at，once 模式完成后自动禁用"""
-        schedule.last_triggered_at = get_beijing_now_naive()
+        schedule.last_triggered_at = get_beijing_now()
 
         if schedule.schedule_mode == "once":
             schedule.enabled = False

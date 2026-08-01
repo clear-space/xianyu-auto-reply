@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import random
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 
 from loguru import logger
+
+BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 # ==================== 时间计算工具（与 backend-web 的 publish_schedule_service 保持一致） ====================
@@ -46,24 +48,24 @@ def _next_daily(config: dict, now: datetime, today) -> Optional[datetime]:
         start_str = time_range.get("start", "00:00")
         end_str = time_range.get("end", "23:59")
         trigger_time = _random_time_between(start_str, end_str)
-        candidate = datetime.combine(today, trigger_time)
+        candidate = datetime.combine(today, trigger_time).replace(tzinfo=BEIJING_TZ)
         if candidate <= now:
-            candidate = datetime.combine(today + timedelta(days=1), _random_time_between(start_str, end_str))
+            candidate = datetime.combine(today + timedelta(days=1), _random_time_between(start_str, end_str)).replace(tzinfo=BEIJING_TZ)
         return candidate
 
     if times:
         time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
         time_points.sort()
         for tp in time_points:
-            candidate = datetime.combine(today, tp)
+            candidate = datetime.combine(today, tp).replace(tzinfo=BEIJING_TZ)
             if candidate > now:
                 return candidate
         if time_points:
-            return datetime.combine(today + timedelta(days=1), time_points[0])
+            return datetime.combine(today + timedelta(days=1), time_points[0]).replace(tzinfo=BEIJING_TZ)
 
-    candidate = datetime.combine(today, time(0, 0))
+    candidate = datetime.combine(today, time(0, 0)).replace(tzinfo=BEIJING_TZ)
     if candidate <= now:
-        candidate = datetime.combine(today + timedelta(days=1), time(0, 0))
+        candidate = datetime.combine(today + timedelta(days=1), time(0, 0)).replace(tzinfo=BEIJING_TZ)
     return candidate
 
 
@@ -84,7 +86,7 @@ def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
         if offset == 0:
             if use_random and time_range:
                 trigger_time = _random_time_between(time_range.get("start", "00:00"), time_range.get("end", "23:59"))
-                candidate = datetime.combine(candidate_date, trigger_time)
+                candidate = datetime.combine(candidate_date, trigger_time).replace(tzinfo=BEIJING_TZ)
                 if candidate > now:
                     return candidate
                 continue
@@ -92,11 +94,11 @@ def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
                 time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
                 time_points.sort()
                 for tp in time_points:
-                    candidate = datetime.combine(candidate_date, tp)
+                    candidate = datetime.combine(candidate_date, tp).replace(tzinfo=BEIJING_TZ)
                     if candidate > now:
                         return candidate
                 continue
-            candidate = datetime.combine(candidate_date, time(0, 0))
+            candidate = datetime.combine(candidate_date, time(0, 0)).replace(tzinfo=BEIJING_TZ)
             if candidate > now:
                 return candidate
             continue
@@ -110,13 +112,16 @@ def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
             trigger_time = time_points[0] if time_points else time(0, 0)
         else:
             trigger_time = time(0, 0)
-        return datetime.combine(candidate_date, trigger_time)
+        return datetime.combine(candidate_date, trigger_time).replace(tzinfo=BEIJING_TZ)
 
     return None
 
 
 def _compute_next_trigger(schedule_mode: str, schedule_config: dict, after: datetime = None) -> Optional[datetime]:
-    now = after
+    if after is None:
+        now = datetime.now(BEIJING_TZ)
+    else:
+        now = after
     today = now.date()
 
     if schedule_mode == "once":
@@ -127,6 +132,9 @@ def _compute_next_trigger(schedule_mode: str, schedule_config: dict, after: date
             dt = datetime.fromisoformat(dt_str)
         except (ValueError, TypeError):
             return None
+        # 确保时区一致
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BEIJING_TZ)
         if dt <= now:
             return None
         return dt
@@ -160,14 +168,14 @@ class ScheduledPublishTaskService:
     async def _execute_inner(self):
         from common.db.session import async_session_maker
         from common.models.publish_schedule import PublishSchedule
-        from common.utils.time_utils import get_beijing_now_naive
+        from common.utils.time_utils import get_beijing_now
         from sqlalchemy import select
 
         logger.debug(f"【{self.task_name}】开始扫描到期规则")
 
         try:
             async with async_session_maker() as session:
-                now = get_beijing_now_naive()
+                now = get_beijing_now()
                 stmt = select(PublishSchedule).where(
                     PublishSchedule.enabled == True,
                     PublishSchedule.next_trigger_at != None,
@@ -190,10 +198,14 @@ class ScheduledPublishTaskService:
                         await self._trigger_schedule(session, schedule, now)
                     except Exception as e:
                         logger.error(f"【{self.task_name}】触发规则 #{schedule.id} 失败: {e}")
-                        try:
-                            await self._advance_schedule(session, schedule)
-                        except Exception as e2:
-                            logger.error(f"【{self.task_name}】推进规则 #{schedule.id} 失败: {e2}")
+                        await session.rollback()
+
+                    # 无论成功或失败都推进（_trigger_schedule 成功路径已自行 commit）
+                    try:
+                        await self._advance_schedule(session, schedule)
+                    except Exception as e2:
+                        logger.error(f"【{self.task_name}】推进规则 #{schedule.id} 失败: {e2}")
+                        await session.rollback()
 
                     await asyncio.sleep(2)
 
@@ -262,13 +274,11 @@ class ScheduledPublishTaskService:
         log_entry.executed_at = now
         await session.commit()
 
-        await self._advance_schedule(session, schedule)
-
     async def _advance_schedule(self, session, schedule):
         """推进规则的 next_trigger_at，once 模式完成后自动禁用"""
-        from common.utils.time_utils import get_beijing_now_naive
+        from common.utils.time_utils import get_beijing_now
 
-        schedule.last_triggered_at = get_beijing_now_naive()
+        schedule.last_triggered_at = get_beijing_now()
 
         if schedule.schedule_mode == "once":
             schedule.enabled = False
@@ -277,7 +287,7 @@ class ScheduledPublishTaskService:
         else:
             schedule.next_trigger_at = _compute_next_trigger(
                 schedule.schedule_mode, schedule.schedule_config,
-                after=get_beijing_now_naive(),
+                after=get_beijing_now(),
             )
             logger.info(
                 f"【{self.task_name}】规则 #{schedule.id} "

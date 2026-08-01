@@ -7,7 +7,7 @@
  * 3. 预览扫描结果，统一设置字段，也可逐条单独调整
  * 4. 确认后批量导入到素材库
  */
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { X, Loader2, Search, FolderOpen, Image, ChevronDown, ChevronUp, Pencil } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
@@ -67,6 +67,10 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
   // 展开单条编辑的素材编号
   const [expandedCode, setExpandedCode] = useState<string | null>(null)
+
+  // 清理定时器
+  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
 
   // 统一字段默认值
   const [defaults, setDefaults] = useState<ItemSettings>({
@@ -217,7 +221,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
         setImportResult(res.data)
         if (res.data.failed === 0) {
           addToast({ type: 'success', message: `成功导入 ${res.data.imported} 条素材！` })
-          setTimeout(() => onImported(), 1200)
+          timerRef.current = setTimeout(() => onImported(), 1200)
         } else {
           addToast({
             type: 'warning',

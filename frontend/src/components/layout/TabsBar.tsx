@@ -62,6 +62,7 @@ const routeTitles: Record<string, string> = {
   '/admin/cookies-refresh-batches': 'COOKIES刷新日志',
   '/admin/close-notice-batches': '消息通知关闭日志',
   '/admin/db-backup-logs': '数据库备份日志',
+  '/admin/db-restore': '数据库恢复',
   '/admin/scheduled-tasks': '定时任务',
   '/admin/announcements': '公告管理',
   '/admin/ad-manage': '广告管理',

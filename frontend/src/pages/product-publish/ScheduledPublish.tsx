@@ -7,7 +7,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, X, Layers, CheckCircle, XCircle } from 'lucide-react'
+import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Layers, CheckCircle, XCircle } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, getAllScheduleLogs, clearScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type PublishScheduleLog, type ActiveScheduleProgress } from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
@@ -273,29 +273,24 @@ export function ScheduledPublish() {
   const handleBatchDelete = async () => {
     if (selectedIds.length === 0) return
     setBatchDeleting(true)
-    try {
-      let successCount = 0
-      let failCount = 0
-      for (const id of selectedIds) {
-        try {
-          const res = await deleteSchedule(id)
-          if (res.success) successCount++
-          else failCount++
-        } catch { failCount++ }
-      }
-      if (successCount > 0) {
-        addToast({ type: 'success', message: `成功删除 ${successCount} 条规则${failCount > 0 ? `，${failCount} 条失败` : ''}` })
-      } else {
-        addToast({ type: 'error', message: '删除失败' })
-      }
-      setBatchDeleteConfirm(false)
-      setSelectedIds([])
-      loadSchedules(page, pageSize)
-    } catch {
-      addToast({ type: 'error', message: '批量删除失败' })
-    } finally {
-      setBatchDeleting(false)
+    let successCount = 0
+    let failCount = 0
+    for (const id of selectedIds) {
+      try {
+        const res = await deleteSchedule(id)
+        if (res.success) successCount++
+        else failCount++
+      } catch { failCount++ }
     }
+    if (successCount > 0) {
+      addToast({ type: 'success', message: `成功删除 ${successCount} 条规则${failCount > 0 ? `，${failCount} 条失败` : ''}` })
+    } else {
+      addToast({ type: 'error', message: '删除失败' })
+    }
+    setBatchDeleteConfirm(false)
+    setSelectedIds([])
+    loadSchedules(page, pageSize)
+    setBatchDeleting(false)
   }
 
   const handleClearLogs = async () => {

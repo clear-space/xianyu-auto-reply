@@ -514,7 +514,7 @@ class SchedulerService:
             logger.info("[定时任务调度] 手动触发采集商品自动下单任务")
             await self._auto_order_task.execute()
         elif task_code == TASK_CODE_SCHEDULED_PUBLISH:
-            logger.info("[定时任务调度] 手动触定发布任务")
+            logger.info("[定时任务调度] 手动触发发布任务")
             await self._scheduled_publish_task.execute()
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
