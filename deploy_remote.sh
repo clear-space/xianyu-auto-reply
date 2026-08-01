@@ -276,6 +276,8 @@ services:
       - BACKUP_DIR=/app/backups
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-false}
+      - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
+      - TOKEN_CACHE_TTL_MAX_HOURS=${TOKEN_CACHE_TTL_MAX_HOURS:-10}
       - TZ=Asia/Shanghai
     volumes:
       - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs
@@ -286,8 +288,6 @@ services:
     networks:
       - xianyu-network
     depends_on:
-      websocket:
-        condition: service_healthy
       backend-web:
         condition: service_healthy
     healthcheck:

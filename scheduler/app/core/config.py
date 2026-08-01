@@ -35,7 +35,7 @@ class SchedulerConfig(BaseConfig):
     )
     backend_service_url: str = Field(
         default="http://localhost:8089",
-        alias="BACKEND_SERVICE_URL"
+        alias="BACKEND_WEB_SERVICE_URL"
     )
 
 
