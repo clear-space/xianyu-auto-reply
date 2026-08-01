@@ -32,10 +32,13 @@ open('/tmp/requirements.txt','w').write('\n'.join(deps))" && \
 
 # 从本地 zip 安装 Chromium 到 playwright/patchright 缓存（避免 CDN 被墙）
 COPY docker/chrome-linux64.zip /tmp/
+COPY docker/chrome-headless-shell-linux64.zip /tmp/
 COPY docker/install-local-chrome.py /tmp/
-RUN python /tmp/install-local-chrome.py /tmp/chrome-linux64.zip --package playwright && \
-    python /tmp/install-local-chrome.py /tmp/chrome-linux64.zip --package patchright && \
-    rm /tmp/chrome-linux64.zip /tmp/install-local-chrome.py
+RUN python /tmp/install-local-chrome.py /tmp/chrome-linux64.zip --package playwright --browser chromium && \
+    python /tmp/install-local-chrome.py /tmp/chrome-headless-shell-linux64.zip --package playwright --browser chromium-headless-shell && \
+    python /tmp/install-local-chrome.py /tmp/chrome-linux64.zip --package patchright --browser chromium && \
+    python /tmp/install-local-chrome.py /tmp/chrome-headless-shell-linux64.zip --package patchright --browser chromium-headless-shell && \
+    rm /tmp/chrome-linux64.zip /tmp/chrome-headless-shell-linux64.zip /tmp/install-local-chrome.py
 
 # 安装系统依赖 + 验证浏览器（浏览器已从本地 zip 安装，跳过下载）
 RUN python -m playwright install --with-deps chromium

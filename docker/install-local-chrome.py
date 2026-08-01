@@ -12,22 +12,20 @@ import zipfile
 from pathlib import Path
 
 
-def get_expected_revision(package_name: str, browser_name: str) -> str:
-    """从已安装的包读取浏览器预期 revision（与 browser_utils.py 逻辑一致）"""
+def get_expected_revision(package_name: str, browser_name: str) -> str | None:
+    """从已安装的包读取浏览器预期 revision，不存在则返回 None"""
     pkg = importlib.import_module(package_name)
     pkg_dir = Path(pkg.__file__).parent
-    # 新版 playwright/patchright 的 browsers.json 在 driver/package/ 下
     browsers_json = pkg_dir / "driver" / "package" / "browsers.json"
     if not browsers_json.exists():
-        # 旧版回退
         browsers_json = pkg_dir / "driver" / "browsers.json"
     if not browsers_json.exists():
-        raise RuntimeError(f"找不到 browsers.json，已检查: {pkg_dir}/driver/package/browsers.json 和 {pkg_dir}/driver/browsers.json")
+        return None
     browsers = json.loads(browsers_json.read_text(encoding="utf-8"))["browsers"]
     for b in browsers:
         if b.get("name") == browser_name:
             return str(b["revision"])
-    raise RuntimeError(f"browsers.json 中找不到 {browser_name}")
+    return None
 
 
 def install_from_zip(
@@ -41,6 +39,9 @@ def install_from_zip(
         browsers_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright")
 
     revision = get_expected_revision(package_name, browser_name)
+    if revision is None:
+        print(f"[local-chrome] [{package_name}] {browser_name} 不在 browsers.json 中，跳过")
+        return
     target_dir = os.path.join(browsers_root, f"{browser_name}-{revision}")
     chrome_dir = os.path.join(target_dir, "chrome-linux")
     marker = os.path.join(target_dir, "INSTALLATION_COMPLETE")
