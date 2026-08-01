@@ -34,6 +34,10 @@ class ExecuteRequest(BaseModel):
     categories: list[str] = Field(..., min_length=1, description="要恢复的分类 key 列表")
 
 
+class PreviewRequest(BaseModel):
+    file_name: str = Field(..., description="备份文件名或 reference_id")
+
+
 # ==================== 上传并解析 ====================
 
 
@@ -98,6 +102,33 @@ async def parse_existing(
     try:
         result = RestoreService.parse_backup_file(file_path)
         result["reference_id"] = body.file_name
+        return {"success": True, "data": result}
+    except ValueError as exc:
+        return {"success": False, "message": str(exc), "data": None}
+    except FileNotFoundError as exc:
+        return {"success": False, "message": str(exc), "data": None}
+
+
+# ==================== 预览备份统计 ====================
+
+
+@router.post("/preview")
+async def preview_backup(
+    body: PreviewRequest,
+    _: User = Depends(deps.get_current_admin_user),
+) -> dict:
+    """预览备份文件统计信息（每张表的数据行数，按分类汇总）。
+
+    与 parse-existing 不同，本接口会完整扫描备份文件以统计行数，
+    适合在恢复前了解备份内容概况。
+    """
+    try:
+        file_path = RestoreService.resolve_file_path(body.file_name)
+    except (ValueError, FileNotFoundError) as exc:
+        return {"success": False, "message": str(exc), "data": None}
+
+    try:
+        result = RestoreService.preview_backup_file(file_path)
         return {"success": True, "data": result}
     except ValueError as exc:
         return {"success": False, "message": str(exc), "data": None}

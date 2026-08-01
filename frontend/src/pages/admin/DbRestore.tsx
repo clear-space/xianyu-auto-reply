@@ -17,14 +17,17 @@ import {
   ChevronRight,
   Database,
   Download,
+  Eye,
   FileUp,
   FolderOpen,
   HardDrive,
   Loader2,
   RefreshCw,
   RotateCcw,
+  Search,
   ShieldAlert,
   Upload,
+  X,
   XCircle,
 } from 'lucide-react'
 
@@ -33,8 +36,10 @@ import {
   executeRestore,
   getBackupFiles,
   parseExistingBackup,
+  previewBackupFile,
   uploadAndParseBackup,
   type BackupFileItem,
+  type PreviewResult,
   type RestoreCategoryInfo,
   type RestoreExecuteResult,
   type RestoreParseResult,
@@ -184,6 +189,11 @@ export function DbRestore() {
   // ---- Download backup file ----
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null)
 
+  // ---- Preview state ----
+  const [previewLoadingFile, setPreviewLoadingFile] = useState<string | null>(null)
+  const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null)
+  const [showPreviewModal, setShowPreviewModal] = useState(false)
+
   const handleDownload = async (fileName: string, e: React.MouseEvent) => {
     e.stopPropagation()
     setDownloadingFile(fileName)
@@ -205,6 +215,26 @@ export function DbRestore() {
       addToast({ type: 'error', message: '下载备份文件失败' })
     } finally {
       setDownloadingFile(null)
+    }
+  }
+
+  // ---- Preview backup ----
+  const handlePreview = async (fileName: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setPreviewLoadingFile(fileName)
+    setPreviewResult(null)
+    try {
+      const res = await previewBackupFile(fileName)
+      if (res.success && res.data) {
+        setPreviewResult(res.data)
+        setShowPreviewModal(true)
+      } else {
+        addToast({ type: 'error', message: res.message || '预览备份文件失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '预览备份文件失败') })
+    } finally {
+      setPreviewLoadingFile(null)
     }
   }
 
@@ -420,6 +450,7 @@ export function DbRestore() {
                       <th>大小</th>
                       <th>修改时间</th>
                       <th>下载</th>
+                      <th>预览</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -450,6 +481,20 @@ export function DbRestore() {
                               <Loader2 className="w-4 h-4 animate-spin" />
                             ) : (
                               <Download className="w-4 h-4" />
+                            )}
+                          </button>
+                        </td>
+                        <td>
+                          <button
+                            onClick={(e) => handlePreview(f.name, e)}
+                            disabled={previewLoadingFile === f.name}
+                            className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition-colors"
+                            title={`预览 ${f.name}`}
+                          >
+                            {previewLoadingFile === f.name ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Search className="w-4 h-4" />
                             )}
                           </button>
                         </td>
@@ -770,6 +815,13 @@ export function DbRestore() {
       {step === 'configure' && renderConfigure()}
       {step === 'executing' && renderExecuting()}
       {step === 'result' && renderResult()}
+
+      {/* Preview modal */}
+      <PreviewModal
+        isOpen={showPreviewModal}
+        result={previewResult}
+        onClose={() => setShowPreviewModal(false)}
+      />
     </div>
   )
 }
@@ -871,6 +923,129 @@ function CategoryCheckRow({
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ==================== Preview Modal ====================
+
+function PreviewModal({
+  isOpen,
+  result,
+  onClose,
+}: {
+  isOpen: boolean
+  result: PreviewResult | null
+  onClose: () => void
+}) {
+  if (!isOpen || !result) return null
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        onClick={onClose}
+      />
+
+      {/* Modal */}
+      <div className="relative w-full max-w-3xl max-h-[85vh] mx-4 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 pb-4 border-b border-slate-200 dark:border-slate-700">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+              备份预览
+            </h3>
+            <p className="text-sm text-slate-500 mt-0.5 truncate max-w-md" title={result.source_file}>
+              {result.source_file}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Summary bar */}
+        <div className="flex flex-wrap gap-x-6 gap-y-1 px-5 py-3 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700 text-sm">
+          <span className="text-slate-600 dark:text-slate-400">
+            文件大小: <span className="font-medium text-slate-900 dark:text-slate-200">{result.file_size_formatted}</span>
+          </span>
+          <span className="text-slate-600 dark:text-slate-400">
+            总行数: <span className="font-medium text-blue-600 dark:text-blue-400">{result.total_rows.toLocaleString()}</span>
+          </span>
+          <span className="text-slate-600 dark:text-slate-400">
+            分类数: <span className="font-medium text-slate-900 dark:text-slate-200">{result.categories.length}</span>
+          </span>
+        </div>
+
+        {/* Category cards grid (scrollable) */}
+        <div className="flex-1 overflow-y-auto p-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {result.categories.map((cat) => (
+              <div
+                key={cat.key}
+                className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
+              >
+                {/* Category header */}
+                <div className="flex items-center justify-between mb-2">
+                  <p className="font-medium text-sm text-slate-900 dark:text-slate-100">
+                    {cat.label}
+                  </p>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 font-medium">
+                    {cat.total_rows.toLocaleString()} 行
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mb-2">{cat.table_count} 张表</p>
+
+                {/* Table list */}
+                <div className="space-y-0.5 max-h-[200px] overflow-y-auto">
+                  {cat.tables.map((t) => (
+                    <div
+                      key={t.name}
+                      className={`flex items-center justify-between text-xs py-1 px-1.5 rounded hover:bg-slate-50 dark:hover:bg-slate-700/50 ${
+                        t.rows === 0 ? 'opacity-50' : ''
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {t.label ? (
+                          <>
+                            <span className="text-slate-700 dark:text-slate-300 truncate font-medium" title={t.label}>
+                              {t.label}
+                            </span>
+                            <span className="text-[10px] text-slate-400 truncate hidden sm:inline" title={t.name}>
+                              ({t.name})
+                            </span>
+                          </>
+                        ) : (
+                          <span className="font-mono text-slate-500 dark:text-slate-400 truncate" title={t.name}>
+                            {t.name}
+                          </span>
+                        )}
+                      </div>
+                      <span className="flex-shrink-0 text-slate-500 dark:text-slate-400 ml-2 tabular-nums">
+                        {t.rows.toLocaleString()} 行
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-4 border-t border-slate-200 dark:border-slate-700 flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-5 py-2 rounded-lg font-medium transition-colors text-sm bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600"
+          >
+            关闭
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

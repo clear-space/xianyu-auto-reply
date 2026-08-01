@@ -127,6 +127,51 @@ for _cat_key, _cat_info in RESTORE_CATEGORY_MAP.items():
 # 日志类表（仅结构无数据），按备份文件生成逻辑 _is_log_table 保持一致
 _LOG_TABLE_SUFFIXES = ("_log", "_logs")
 
+# 表名 → 中文标签映射（预览功能用），仅列出用户关心的核心表
+PREVIEW_TABLE_LABELS: dict[str, str] = {
+    # 用户与账号
+    "xy_users": "用户", "xy_accounts": "账号", "xy_token_cache": "Token 缓存",
+    "xy_user_settings": "用户设置",
+    # 业务核心
+    "xy_catalog_items": "商品目录", "xy_orders": "订单", "xy_cards": "卡卷",
+    "xy_card_item_relations": "卡卷关联", "xy_keyword_rules": "关键词规则",
+    "xy_default_replies": "默认回复", "xy_default_reply_records": "回复记录",
+    "xy_ai_chat_messages": "AI 聊天消息", "xy_chat_quick_phrases": "快捷短语",
+    # 广告与反馈
+    "xy_advertisements": "广告", "xy_announcements": "公告",
+    "xy_popup_announcements": "弹窗公告", "xy_feedbacks": "反馈",
+    "xy_feedback_messages": "反馈消息",
+    # 分销与财务
+    "xy_agent_orders": "代理订单", "xy_fund_flows": "资金流水",
+    "xy_recharge_orders": "充值订单", "xy_settlement_records": "结算记录",
+    "xy_dock_records": "对接记录", "xy_dock_code_bindings": "邀请码绑定",
+    "xy_activation_logs": "激活日志",
+    # 商品发布与采集
+    "xy_product_materials": "商品素材", "xy_publish_addresses": "发布地址",
+    "xy_user_publish_addresses": "用户发布地址",
+    "xy_goofish_crawl_jobs": "采集任务", "xy_goofish_crawl_items": "采集商品",
+    "xy_listing_monitor_tasks": "监控任务", "xy_listing_monitor_items": "监控商品",
+    # 返佣
+    "fy_accounts": "返佣账号", "fy_materials": "返佣素材",
+    "fy_product_rules": "返佣商品规则", "fy_publish_rules": "返佣发布规则",
+    # 系统配置
+    "xy_system_settings": "系统设置", "xy_scheduled_tasks": "定时任务",
+    "xy_cookie_refresh_schedules": "Cookie 刷新计划",
+    # 风控/黑名单
+    "xy_risk_control_logs": "风控日志", "xy_personal_blacklist": "个人黑名单",
+    "xy_platform_blacklist": "平台黑名单", "xy_account_login_logs": "登录日志",
+    "xy_delivery_block_rules": "发货拦截规则",
+    # 消息
+    "xy_message_filters": "消息过滤", "xy_message_notifications": "消息通知",
+    "xy_notification_channels": "通知渠道", "xy_confirm_receipt_messages": "确认收货消息",
+    "xy_auto_rate_configs": "自动评价配置",
+    # 其他
+    "xy_shared_scan_sessions": "共享扫码会话", "xy_shared_scan_workers": "共享扫码工作器",
+    "xy_order_fallback_accounts": "订单回落账号", "xy_collect_fallback_accounts": "采集回落账号",
+    "xy_listing_monitor_categories": "监控分类", "xy_listing_monitor_logs": "监控日志",
+    "fy_delete_rules": "返佣删除规则",
+}
+
 
 def _is_log_table(table_name: str) -> bool:
     """判断是否为日志类表"""
@@ -248,6 +293,127 @@ class RestoreService:
             "source_file": file_path.name,
             "total_tables": len(unique_tables),
             "tables": table_details,
+            "categories": ordered_categories,
+        }
+
+    # ==================== 预览备份统计 ====================
+
+    @staticmethod
+    def preview_backup_file(file_path: Path) -> dict:
+        """流式扫描 .sql.gz 备份文件，统计每张表的数据行数。
+
+        与 parse_backup_file() 不同，本方法额外统计每张表的 INSERT 行数
+        （即数据行数），并按分类汇总。适用于在恢复前预览备份内容。
+
+        Args:
+            file_path: .sql.gz 文件的绝对路径
+
+        Returns:
+            {
+                "source_file": str,
+                "file_size": int,
+                "file_size_formatted": str,
+                "total_rows": int,
+                "categories": [{key, label, table_count, total_rows, tables: [{name, label, rows}]}],
+            }
+        """
+        if not file_path.is_file():
+            raise FileNotFoundError(f"备份文件不存在: {file_path}")
+
+        file_size = file_path.stat().st_size
+
+        # 每张表的行数统计
+        table_rows: dict[str, int] = {}  # table_name → row count
+        current_table: str | None = None
+
+        try:
+            with gzip.open(file_path, "rt", encoding="utf-8", errors="replace") as fp:
+                for line in fp:
+                    # 遇到新的 DROP TABLE → 切换当前表
+                    m = _DROP_TABLE_RE.search(line)
+                    if m:
+                        current_table = m.group(1)
+                        if current_table not in table_rows:
+                            table_rows[current_table] = 0
+                        continue
+
+                    # 累计 INSERT 行数
+                    if current_table:
+                        m = _INSERT_RE.search(line)
+                        if m:
+                            table_rows[current_table] += 1
+        except gzip.BadGzipFile:
+            raise ValueError("文件不是有效的 gzip 格式")
+
+        if not table_rows:
+            raise ValueError("未在备份文件中找到任何数据表")
+
+        # 构建表详情列表
+        all_table_details: list[dict] = []
+        for tbl_name, rows in table_rows.items():
+            all_table_details.append({
+                "name": tbl_name,
+                "label": PREVIEW_TABLE_LABELS.get(tbl_name, ""),
+                "rows": rows,
+            })
+
+        # 按分类组织
+        table_to_category: dict[str, str] = {}
+        for cat_key, cat_info in RESTORE_CATEGORY_MAP.items():
+            if cat_key == "all":
+                continue
+            for tbl in (cat_info.get("tables") or []):
+                if tbl not in table_to_category:
+                    table_to_category[tbl] = cat_key
+
+        categories: dict[str, dict] = {}
+        unclassified: list[dict] = []
+        total_rows = 0
+
+        for td in all_table_details:
+            total_rows += td["rows"]
+            cat_key = table_to_category.get(td["name"])
+            if cat_key is None:
+                unclassified.append(td)
+                continue
+            if cat_key not in categories:
+                categories[cat_key] = {
+                    "key": cat_key,
+                    "label": RESTORE_CATEGORY_MAP[cat_key]["label"],
+                    "table_count": 0,
+                    "total_rows": 0,
+                    "tables": [],
+                }
+            categories[cat_key]["tables"].append(td)
+            categories[cat_key]["table_count"] += 1
+            categories[cat_key]["total_rows"] += td["rows"]
+
+        # 未归类的归入 "other"
+        if unclassified:
+            other_rows = sum(t["rows"] for t in unclassified)
+            categories["other"] = {
+                "key": "other",
+                "label": "其他（未归类的表）",
+                "table_count": len(unclassified),
+                "total_rows": other_rows,
+                "tables": unclassified,
+            }
+
+        # 按 RESTORE_CATEGORY_MAP 定义顺序返回
+        ordered_categories = []
+        for cat_key in RESTORE_CATEGORY_MAP:
+            if cat_key == "all":
+                continue
+            if cat_key in categories:
+                ordered_categories.append(categories[cat_key])
+        if "other" in categories:
+            ordered_categories.append(categories["other"])
+
+        return {
+            "source_file": file_path.name,
+            "file_size": file_size,
+            "file_size_formatted": RestoreService._format_size(file_size),
+            "total_rows": total_rows,
             "categories": ordered_categories,
         }
 

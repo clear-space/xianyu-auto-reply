@@ -555,6 +555,32 @@ export interface BackupFileItem {
   modified_at: string
 }
 
+// ========== 备份预览 ==========
+
+export interface PreviewTableStat {
+  name: string
+  label: string
+  rows: number
+}
+
+export interface PreviewCategoryStat {
+  key: string
+  label: string
+  table_count: number
+  total_rows: number
+  tables: PreviewTableStat[]
+}
+
+export interface PreviewResult {
+  source_file: string
+  file_size: number
+  file_size_formatted: string
+  total_rows: number
+  categories: PreviewCategoryStat[]
+}
+
+// ========== 上传/解析/执行 ==========
+
 /** 上传 .sql.gz 备份文件并解析 */
 export const uploadAndParseBackup = async (
   file: File,
@@ -586,6 +612,18 @@ export const getBackupFiles = async (): Promise<{ success: boolean; data?: Backu
     `${RESTORE_PREFIX}/backup-files`,
   )
   return { success: Boolean(result.success), data: result.data || [], message: result.message }
+}
+
+/** 预览备份文件统计信息（每张表的数据行数，按分类汇总） */
+export const previewBackupFile = async (
+  fileName: string,
+): Promise<{ success: boolean; data?: PreviewResult; message?: string }> => {
+  const result = await post<{ success: boolean; data?: PreviewResult; message?: string }>(
+    `${RESTORE_PREFIX}/preview`,
+    { file_name: fileName },
+    { timeout: 120000 },
+  )
+  return { success: Boolean(result.success), data: result.data, message: result.message }
 }
 
 /** 下载备份目录中的 .sql.gz 文件（通过 fetch 获取 Blob，便于携带鉴权头并处理错误） */
