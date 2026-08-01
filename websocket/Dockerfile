@@ -30,7 +30,14 @@ deps = tomllib.load(open('/app/websocket/pyproject.toml','rb')).get('project',{}
 open('/tmp/requirements.txt','w').write('\n'.join(deps))" && \
     pip install --no-cache-dir -r /tmp/requirements.txt
 
-# 安装Playwright浏览器（--with-deps 自动安装系统依赖）
+# 从本地 zip 安装 Chromium 到 playwright/patchright 缓存（避免 CDN 被墙）
+COPY docker/chrome-linux64.zip /tmp/
+COPY docker/install-local-chrome.py /tmp/
+RUN python /tmp/install-local-chrome.py /tmp/chrome-linux64.zip --package playwright && \
+    python /tmp/install-local-chrome.py /tmp/chrome-linux64.zip --package patchright && \
+    rm /tmp/chrome-linux64.zip /tmp/install-local-chrome.py
+
+# 安装系统依赖 + 验证浏览器（浏览器已从本地 zip 安装，跳过下载）
 RUN python -m playwright install --with-deps chromium
 RUN python -m patchright install --with-deps chromium
 
