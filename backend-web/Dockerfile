@@ -40,9 +40,9 @@ RUN python /tmp/install-local-chrome.py /tmp/chrome-linux64.zip --package playwr
     python /tmp/install-local-chrome.py /tmp/chrome-headless-shell-linux64.zip --package patchright --browser chromium-headless-shell && \
     rm /tmp/chrome-linux64.zip /tmp/chrome-headless-shell-linux64.zip /tmp/install-local-chrome.py
 
-# 安装系统依赖 + 验证浏览器（浏览器已从本地 zip 安装，跳过下载）
-RUN python -m playwright install --with-deps chromium
-RUN python -m patchright install --with-deps chromium
+# 只安装系统依赖（浏览器已从本地 zip 安装，install-deps 不触发下载）
+RUN python -m playwright install-deps chromium
+RUN python -m patchright install-deps chromium
 
 # 创建日志目录
 RUN mkdir -p /app/backend-web/logs /app/static/uploads
