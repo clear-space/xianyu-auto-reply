@@ -119,13 +119,13 @@ async def get_active_schedule_progress(
     from common.models.publish_log import PublishLog
     from common.models.publish_schedule import PublishSchedule
     from common.models.publish_schedule_log import PublishScheduleLog
-    from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+    from common.utils.time_utils import get_beijing_now, get_beijing_now_naive, safe_isoformat
     from app.services.publish_batch_status_service import PublishBatchStatusService
 
     query_user_id = None if _is_admin(current_user) else current_user.id
 
     # 查询最近24h内 status=running 的执行记录
-    since = get_beijing_now_naive() - timedelta(hours=24)
+    since = get_beijing_now() - timedelta(hours=24)
     conds = [
         PublishScheduleLog.status == "running",
         PublishScheduleLog.scheduled_at >= since,

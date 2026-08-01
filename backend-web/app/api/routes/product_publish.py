@@ -24,7 +24,7 @@ from app.services.publish_execution_service import PublishExecutorService, Publi
 from common.models.user import User, UserRole
 from common.schemas.common import ApiResponse
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
-from common.utils.time_utils import get_beijing_now_naive
+from common.utils.time_utils import get_beijing_now, get_beijing_now_naive
 
 def _is_admin(user: User) -> bool:
     """判断用户是否为管理员"""
@@ -446,10 +446,11 @@ async def list_publish_logs(
 @router.delete("/logs/clear", response_model=ApiResponse)
 @router.post("/logs/clear", response_model=ApiResponse)
 async def clear_publish_logs(
+    days: int | None = Query(default=None, ge=0, description="保留最近N天的日志；0或不传则清空全部"),
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """清空发布日志（只清空10天前的数据）"""
+    """清空发布日志（可指定保留最近 N 天，不传或传 0 则清空全部）"""
     from datetime import timedelta
 
     from loguru import logger
@@ -458,20 +459,23 @@ async def clear_publish_logs(
     from common.models.publish_log import PublishLog
 
     try:
-        ten_days_ago = get_beijing_now_naive() - timedelta(days=10)
-        stmt = delete(PublishLog).where(
-            PublishLog.user_id == current_user.id,
-            PublishLog.created_at < ten_days_ago,
-        )
+        stmt = delete(PublishLog).where(PublishLog.user_id == current_user.id)
+
+        if days and days > 0:
+            cutoff = get_beijing_now() - timedelta(days=days)
+            stmt = stmt.where(PublishLog.created_at < cutoff)
+            scope_label = f"{days}天前的"
+        else:
+            scope_label = "全部"
 
         result = await session.execute(stmt)
         await session.commit()
 
         deleted_count = result.rowcount or 0
-        logger.info(f"[发布日志] 用户 {current_user.id} 已清空 {deleted_count} 条10天前的日志")
+        logger.info(f"[发布日志] 用户 {current_user.id} 已清空 {deleted_count} 条{scope_label}日志")
         return ApiResponse(
             success=True,
-            message=f"已清空 {deleted_count} 条10天前的发布日志",
+            message=f"已清空 {deleted_count} 条{scope_label}发布日志",
         )
     except Exception as e:
         await session.rollback()

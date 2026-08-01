@@ -46,6 +46,7 @@ export function PublishLogs() {
   const [filterStatus, setFilterStatus] = useState('')
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [clearDays, setClearDays] = useState(10) // 保留天数，0=清空全部，默认10天
 
   const load = async (p = page, size = pageSize, account = filterAccount, status = filterStatus) => {
     setTableLoading(true)
@@ -91,7 +92,7 @@ export function PublishLogs() {
   const handleClearLogs = async () => {
     try {
       setClearing(true)
-      const result = await clearPublishLogs()
+      const result = await clearPublishLogs(clearDays > 0 ? clearDays : undefined)
       if (result.success) {
         addToast({ type: 'success', message: result.message || '清空成功' })
         setShowClearConfirm(false)
@@ -124,10 +125,25 @@ export function PublishLogs() {
           <p className="page-description">查看所有商品发布记录及结果</p>
         </div>
         <div className="flex gap-2">
+          {isAdmin && (
+            <div className="flex items-center gap-1">
+              <span className="text-sm text-slate-500">保留</span>
+              <input
+                type="number"
+                min={0}
+                max={3650}
+                value={clearDays}
+                onChange={e => setClearDays(Math.max(0, parseInt(e.target.value) || 0))}
+                className="input-ios w-16 text-center"
+                title="0=清空全部，N=保留最近N天"
+              />
+              <span className="text-sm text-slate-500">天</span>
+            </div>
+          )}
           <button
             onClick={() => setShowClearConfirm(true)}
             className="btn-ios-danger"
-            title="清空10天前的日志"
+            title={clearDays > 0 ? `清空${clearDays}天前的日志` : '清空全部日志'}
             disabled={tableLoading || clearing}
           >
             <Trash2 className="w-4 h-4" />
@@ -307,7 +323,9 @@ export function PublishLogs() {
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-md w-full p-6">
             <h3 className="text-lg font-semibold mb-4">确认清空日志</h3>
             <p className="text-slate-600 dark:text-slate-400 mb-6">
-              此操作将清空10天前的发布日志数据，最近10天的日志将被保留。确定要继续吗？
+              {clearDays > 0
+                ? `此操作将清空 ${clearDays} 天前的发布日志，最近 ${clearDays} 天的日志将被保留。确定要继续吗？`
+                : '此操作将清空全部发布日志，此操作不可撤销。确定要继续吗？'}
             </p>
             <div className="flex justify-end gap-3">
               <button

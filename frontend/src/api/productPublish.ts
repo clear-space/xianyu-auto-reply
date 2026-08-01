@@ -243,8 +243,12 @@ export const getPublishLogs = (
   return get(`${PREFIX}/logs?${params}`)
 }
 
-export const clearPublishLogs = async (): Promise<{ success: boolean; message: string }> => {
-  return post<{ success: boolean; message: string }>(`${PREFIX}/logs/clear`)
+/** 清空发布日志（可指定保留最近 N 天，不传则清空全部） */
+export const clearPublishLogs = async (days?: number): Promise<{ success: boolean; message: string }> => {
+  const params = new URLSearchParams()
+  if (days !== undefined && days !== null && days > 0) params.set('days', String(days))
+  const qs = params.toString()
+  return post<{ success: boolean; message: string }>(`${PREFIX}/logs/clear${qs ? `?${qs}` : ''}`)
 }
 
 // ==================== 批量导入 ====================
