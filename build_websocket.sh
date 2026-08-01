@@ -42,8 +42,8 @@ $DC_CMD rm -f websocket 2>/dev/null || true
 echo -e "${GREEN}✓ 已停止${NC}"
 echo ""
 
-echo -e "${YELLOW}[2/3] 重新构建 WebSocket 镜像（--no-cache）...${NC}"
-$DC_CMD build --no-cache websocket
+echo -e "${YELLOW}[2/3] 重新构建 WebSocket 镜像...${NC}"
+$DC_CMD build websocket
 echo -e "${GREEN}✓ 构建完成${NC}"
 echo ""
 
