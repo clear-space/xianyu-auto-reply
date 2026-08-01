@@ -28,13 +28,22 @@ def get_expected_revision(package_name: str, browser_name: str) -> str | None:
     return None
 
 
+def _zip_dir_mapping(browser_name: str) -> tuple[str, str]:
+    """返回 (zip内目录名, playwright缓存目录名)"""
+    m = {
+        "chromium": ("chrome-linux64", "chrome-linux"),
+        "chromium-headless-shell": ("chrome-headless-shell-linux64", "chrome-headless-shell-linux"),
+    }
+    return m.get(browser_name, ("chrome-linux64", "chrome-linux"))
+
+
 def install_from_zip(
     zip_path: str,
     package_name: str = "playwright",
     browser_name: str = "chromium",
     browsers_root: str | None = None,
 ):
-    """将 chrome-linux64.zip 解压到浏览器缓存目录"""
+    """将 chrome zip 解压到 playwright/patchright 浏览器缓存目录"""
     if browsers_root is None:
         browsers_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright")
 
@@ -42,8 +51,10 @@ def install_from_zip(
     if revision is None:
         print(f"[local-chrome] [{package_name}] {browser_name} 不在 browsers.json 中，跳过")
         return
+
     target_dir = os.path.join(browsers_root, f"{browser_name}-{revision}")
-    chrome_dir = os.path.join(target_dir, "chrome-linux")
+    zip_extracted, target_subdir = _zip_dir_mapping(browser_name)
+    chrome_dir = os.path.join(target_dir, target_subdir)
     marker = os.path.join(target_dir, "INSTALLATION_COMPLETE")
 
     if os.path.exists(chrome_dir):
@@ -56,23 +67,24 @@ def install_from_zip(
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(target_dir)
 
-    # playwright/patchright 的 chrome-linux64.zip 解压后顶层是 chrome-linux64/
-    extracted = os.path.join(target_dir, "chrome-linux64")
+    extracted = os.path.join(target_dir, zip_extracted)
     if os.path.isdir(extracted) and not os.path.exists(chrome_dir):
         os.rename(extracted, chrome_dir)
 
     if not os.path.exists(chrome_dir):
-        raise RuntimeError(f"解压后找不到 chrome 目录: {chrome_dir}，目录内容: {os.listdir(target_dir)}")
+        raise RuntimeError(
+            f"解压后找不到目录: {chrome_dir}，"
+            f"期望 {zip_extracted} -> {target_subdir}，"
+            f"实际: {os.listdir(target_dir)}"
+        )
 
-    # 标记安装完成
     with open(marker, "w") as f:
         f.write(".\n")
 
-    chrome_bin = os.path.join(chrome_dir, "chrome")
-    if os.path.exists(chrome_bin):
+    if os.path.exists(os.path.join(chrome_dir, "chrome")):
         print(f"[local-chrome] ✓ [{package_name}] {browser_name} r{revision} 安装完成")
     else:
-        print(f"[local-chrome] ⚠ [{package_name}] chrome 可执行文件未找到: {chrome_bin}")
+        print(f"[local-chrome] ⚠ [{package_name}] chrome 可执行文件未找到")
 
 
 if __name__ == "__main__":
