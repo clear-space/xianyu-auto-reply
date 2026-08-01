@@ -9,7 +9,7 @@
  *
  * 流程：选择文件 → 解析预览 → 选择分类 → 确认执行 → 查看结果
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle,

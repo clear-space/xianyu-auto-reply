@@ -199,7 +199,7 @@ export function ScheduledPublish() {
     try {
       const res = await toggleSchedule(s.id)
       if (res.success) {
-        addToast({ type: 'success', message: res.message })
+        addToast({ type: 'success', message: res.message || '操作成功' })
         loadSchedules(page, pageSize)
       } else {
         addToast({ type: 'error', message: res.message || '操作失败' })
@@ -214,8 +214,9 @@ export function ScheduledPublish() {
         addToast({ type: 'success', message: '已手动触发，请查看执行历史' })
         loadSchedules(page, pageSize)
         // 乐观更新：立即在进度面板中显示
-        const batchId = res.data?.batch_id as string | undefined
-        const logId = res.data?.log_id as number | undefined
+        const data = res.data as Record<string, unknown> | undefined
+        const batchId = data?.batch_id as string | undefined
+        const logId = data?.log_id as number | undefined
         if (batchId && logId) {
           const total = s.account_ids.length * s.material_ids.length
           const optimisticEntry: ActiveScheduleProgress = {
