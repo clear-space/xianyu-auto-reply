@@ -317,6 +317,12 @@ export const batchImportMaterials = (
 ): Promise<BatchImportResponse> =>
   post(`${PREFIX}/materials/batch-import`, params)
 
+/** 批量导入素材（客户端上传文件，支持远程访问） */
+export const batchImportMaterialsUpload = (
+  formData: FormData
+): Promise<BatchImportResponse> =>
+  post(`${PREFIX}/materials/batch-import-upload`, formData, { timeout: 300000 })
+
 // ==================== 定时发布 ====================
 
 /** 定时规则 */

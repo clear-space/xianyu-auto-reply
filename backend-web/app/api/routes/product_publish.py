@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -725,6 +725,125 @@ async def batch_import_materials(
             failed += 1
             failed_items.append({"code": material_data.code, "reason": str(e)})
             logger.error(f"[批量导入] 失败: {material_data.code} - {e}")
+
+    return ApiResponse(
+        success=True,
+        message=f"导入完成：成功 {imported} 条，失败 {failed} 条",
+        data={
+            "imported": imported,
+            "failed": failed,
+            "failed_items": failed_items,
+        },
+    )
+
+
+@router.post("/materials/batch-import-upload", response_model=ApiResponse)
+async def batch_import_materials_upload(
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """批量导入素材（客户端上传文件，支持远程访问）
+
+    接收 multipart/form-data：
+    - materials: JSON 字符串，素材元数据数组，每项含 image_count 字段
+    - img_{i}_{j}: 第 i 个素材的第 j 张图片文件
+
+    客户端先解析本地目录结构（txt + 图片），再通过本接口上传到服务器。
+    与 /materials/batch-import 不同，本接口直接接收文件而非服务器本地路径。
+    """
+    import json as json_mod
+    import os
+    import uuid as uuid_mod
+
+    from loguru import logger
+
+    from app.core.paths import UPLOADS_PRODUCTS
+
+    form = await request.form()
+
+    # 解析 materials JSON
+    materials_raw = form.get("materials")
+    if not materials_raw or not isinstance(materials_raw, str):
+        return ApiResponse(success=False, message="缺少 materials 字段")
+
+    try:
+        materials_list: List[Dict[str, Any]] = json_mod.loads(materials_raw)
+    except json_mod.JSONDecodeError as e:
+        return ApiResponse(success=False, message=f"materials JSON 解析失败: {e}")
+
+    if not isinstance(materials_list, list) or len(materials_list) == 0:
+        return ApiResponse(success=False, message="materials 必须是非空数组")
+
+    svc = ProductMaterialService(session)
+    imported = 0
+    failed = 0
+    failed_items: List[Dict[str, str]] = []
+    IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}
+
+    for i, mat in enumerate(materials_list):
+        try:
+            # 收集该素材的图片文件
+            saved_urls: List[str] = []
+            j = 0
+            max_images = int(mat.get("image_count", 20))
+            while j < max_images:
+                field_name = f"img_{i}_{j}"
+                upload_file = form.get(field_name)
+                if upload_file is None:
+                    break
+                if not hasattr(upload_file, "filename"):
+                    break
+
+                filename_parts = getattr(upload_file, "filename", None)
+                if not filename_parts:
+                    j += 1
+                    continue
+
+                ext = os.path.splitext(str(filename_parts))[1].lower()
+                if ext not in IMAGE_EXTS:
+                    ext = '.jpg'
+
+                unique_name = f"{uuid_mod.uuid4().hex}{ext}"
+                dest_dir = str(UPLOADS_PRODUCTS)
+                os.makedirs(dest_dir, exist_ok=True)
+                dest = os.path.join(dest_dir, unique_name)
+
+                content = await upload_file.read()
+                with open(dest, "wb") as f:
+                    f.write(content)
+                saved_urls.append(f"/static/uploads/products/{unique_name}")
+                j += 1
+
+            # 构建创建数据
+            title = str(mat.get("title", mat.get("folder_name", ""))).strip()
+            description = str(mat.get("description", "")).strip() or title
+            folder_name = str(mat.get("folder_name", ""))
+
+            create_data = {
+                "title": title,
+                "description": description,
+                "price": float(mat.get("price", 0)),
+                "original_price": float(mat.get("original_price", 0)) if mat.get("original_price") else None,
+                "category": str(mat.get("category", "虚拟商品")),
+                "images": [u for u in saved_urls if u],
+                "delivery_method": str(mat.get("delivery_method", "express")),
+                "postage": float(mat.get("postage", 0)),
+                "address": None,
+                "brand": str(mat.get("brand", "")).strip() or None,
+                "condition": str(mat.get("condition", "全新")),
+                "stock": int(mat.get("stock", 9999)),
+                "remark": f"批量导入自: {folder_name}" if folder_name else None,
+            }
+
+            await svc.create(current_user.id, create_data)
+            imported += 1
+            logger.info(f"[批量导入上传] 成功: {mat.get('code', '?')} - {title}")
+        except Exception as e:
+            failed += 1
+            code = mat.get("code", f"unknown_{i}")
+            failed_items.append({"code": code, "reason": str(e)})
+            logger.error(f"[批量导入上传] 失败: {code} - {e}")
 
     return ApiResponse(
         success=True,
