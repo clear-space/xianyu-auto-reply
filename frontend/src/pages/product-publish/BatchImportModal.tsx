@@ -405,7 +405,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
       const formData = new FormData()
 
       // 构建元数据数组（不含图片文件本身）
-      const metadataList = selected.map((m, i) => {
+      const metadataList = selected.map((m) => {
         const s = getSettings(m.code)
         return {
           code: m.code,
