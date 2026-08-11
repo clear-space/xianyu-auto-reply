@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from loguru import logger
 
 from common.models.publish_schedule import PublishSchedule
 from common.models.publish_schedule_log import PublishScheduleLog
@@ -174,6 +175,19 @@ def _random_time_between(start_str: str, end_str: str) -> time:
     return time(random_minutes // 60, random_minutes % 60)
 
 
+DEFAULT_PUBLISH_CONFIG = {"publish_mode": "specified", "random_count": 1, "deduplicate": True}
+
+
+def _normalize_publish_config(raw: dict | None) -> dict:
+    """规范化发布配置，填充默认值"""
+    cfg = dict(raw) if (raw is not None and isinstance(raw, dict)) else {}
+    if "publish_mode" not in cfg or cfg["publish_mode"] not in ("specified", "random"):
+        cfg["publish_mode"] = "specified"
+    cfg.setdefault("random_count", 1)
+    cfg.setdefault("deduplicate", True)
+    return cfg
+
+
 def _schedule_to_dict(s: PublishSchedule) -> dict:
     return {
         "id": s.id,
@@ -183,6 +197,7 @@ def _schedule_to_dict(s: PublishSchedule) -> dict:
         "schedule_config": s.schedule_config or {},
         "account_ids": s.account_ids or [],
         "material_ids": s.material_ids or [],
+        "publish_config": _normalize_publish_config(s.publish_config),
         "enabled": s.enabled,
         "last_triggered_at": safe_isoformat(s.last_triggered_at),
         "next_trigger_at": safe_isoformat(s.next_trigger_at),
@@ -225,6 +240,7 @@ class PublishScheduleService:
             schedule_config=data.get("schedule_config", {}),
             account_ids=data.get("account_ids", []),
             material_ids=data.get("material_ids", []),
+            publish_config=_normalize_publish_config(data.get("publish_config")),
             enabled=data.get("enabled", True),
         )
         # 计算首次触发时间
@@ -287,11 +303,14 @@ class PublishScheduleService:
 
         updatable = [
             "name", "schedule_mode", "schedule_config",
-            "account_ids", "material_ids", "enabled",
+            "account_ids", "material_ids", "enabled", "publish_config",
         ]
         for field in updatable:
             if field in data and data[field] is not None:
-                setattr(schedule, field, data[field])
+                if field == "publish_config":
+                    setattr(schedule, field, _normalize_publish_config(data[field]))
+                else:
+                    setattr(schedule, field, data[field])
 
         # 重新计算下次触发时间
         schedule.next_trigger_at = _compute_next_trigger(
@@ -445,6 +464,111 @@ class PublishScheduleService:
 
         await self.session.commit()
         await self.session.refresh(schedule)
+
+    async def resolve_publish_material_ids(self, schedule: PublishSchedule, account_id: str | None = None) -> list[int]:
+        """先去重后随机选取素材（发布前刷新账号商品列表确保去重准确）
+
+        若 publish_mode == "specified"：直接返回全部 material_ids
+        若 publish_mode == "random"：随机选取 random_count 条；若 deduplicate == True，
+        先刷新账号商品列表再过滤已存在编号。
+        """
+        import re as _re
+        from common.models.product_material import ProductMaterial
+        from common.models.xy_catalog_item import XYCatalogItem
+        from common.models.xy_account import XYAccount
+        from common.services.item_service import ItemService
+        from sqlalchemy import select as sa_select
+
+        cfg = _normalize_publish_config(schedule.publish_config)
+        material_ids = list(schedule.material_ids)
+
+        if cfg["publish_mode"] != "random":
+            return material_ids
+
+        random_count = max(1, int(cfg.get("random_count", 1)))
+        deduplicate = bool(cfg.get("deduplicate", True))
+        available = list(material_ids)
+
+        if not deduplicate:
+            return random.sample(available, min(random_count, len(available)))
+
+        # ====== 去重逻辑 ======
+
+        # 1. 刷新每个账号的商品列表
+        for aid in schedule.account_ids:
+            try:
+                stmt = sa_select(XYAccount).where(
+                    XYAccount.account_id == aid, XYAccount.owner_id == schedule.user_id
+                )
+                account = (await self.session.execute(stmt)).scalar_one_or_none()
+                if account:
+                    item_svc = ItemService(self.session)
+                    await item_svc.fetch_all_items_from_account(account=account)
+            except Exception:
+                pass
+
+        # 2. 查询账号现有商品编号（先做 account_id 字符串 → 主键映射）
+        code_pattern = _re.compile(r'^(A\d+)')
+        # xy_catalog_items.account_id 存的是 xy_accounts 的主键，不是 account_id 字符串
+        acct_stmt = sa_select(XYAccount.id).where(
+            XYAccount.account_id.in_(schedule.account_ids)
+        )
+        acct_rows = (await self.session.execute(acct_stmt)).all()
+        acct_pks = [row[0] for row in acct_rows]
+        logger.info(
+            f"[定时发布去重] 🔍 account_id 字符串→主键: "
+            f"{dict(zip(schedule.account_ids, acct_pks))}"
+        )
+        stmt = sa_select(XYCatalogItem.title).where(
+            XYCatalogItem.account_pk.in_(acct_pks),
+        )
+        item_rows = (await self.session.execute(stmt)).all()
+        logger.info(f"[定时发布去重] 🔍 查询到 {len(item_rows)} 条商品记录")
+        existing_codes = set()
+        for row in item_rows:
+            m = code_pattern.search(row.title or "")
+            if m:
+                existing_codes.add(m.group(1))
+        logger.info(
+            f"[定时发布去重] 🔍 账号现有商品编号: "
+            f"{sorted(existing_codes)}" if existing_codes else "（无）"
+        )
+
+        # 3. 素材标题 → 编号
+        stmt = sa_select(ProductMaterial.id, ProductMaterial.title).where(
+            ProductMaterial.id.in_(available)
+        )
+        mat_rows = (await self.session.execute(stmt)).all()
+        mat_code_map = {}
+        for row in mat_rows:
+            m = code_pattern.search(row.title or "")
+            if m:
+                mat_code_map[row.id] = m.group(1)
+        logger.info(
+            f"[定时发布去重] 🔍 素材编号映射: "
+            f"{ {mid: code for mid, code in mat_code_map.items()} }" if mat_code_map else "（无素材有编号）"
+        )
+
+        # 4. 过滤
+        kept = []
+        removed = []
+        for mid in available:
+            mat_code = mat_code_map.get(mid)
+            if mat_code in existing_codes:
+                removed.append(f"{mid}({mat_code})")
+            else:
+                kept.append(mid)
+        if removed:
+            logger.info(f"[定时发布去重] 🔍 过滤掉的素材: {removed}")
+        available = kept
+
+        if not available:
+            return []
+
+        sel = random.sample(available, min(random_count, len(available)))
+        sel_codes = [(mid, mat_code_map.get(mid, "无编号")) for mid in sel]
+        logger.info(f"[定时发布去重] 🔍 最终选中: {sel_codes}")
+        return sel
 
 
 # 计算函数导出供外部使用

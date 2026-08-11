@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, JSON, String
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, JSON, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -39,6 +39,10 @@ class PublishSchedule(TimestampMixin, Base):
     # 发布配置
     account_ids: Mapped[list] = mapped_column(JSON, nullable=False, comment="闲鱼账号ID列表")
     material_ids: Mapped[list] = mapped_column(JSON, nullable=False, comment="素材ID列表")
+    publish_config: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=lambda: {}, server_default=text("(JSON_OBJECT())"),
+        comment="发布配置JSON：publish_mode(specified/random), random_count(随机选取数量), deduplicate(是否去重)"
+    )
 
     # 状态
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")

@@ -199,3 +199,14 @@ export const updateItemCards = (
 export const batchClearItemRelations = (itemIds: string[]): Promise<ApiResponse> => {
   return post(`${CARD_PREFIX}/batch-clear-item-relations`, { item_ids: itemIds })
 }
+
+// 一键关联卡券：按商品标题和卡券名称前面的编号自动匹配
+export interface AutoLinkResult {
+  total_matched: number
+  new_relations: number
+  skipped_existing: number
+}
+
+export const autoLinkCardsByCode = (): Promise<ApiResponse<AutoLinkResult>> => {
+  return post(`${CARD_PREFIX}/auto-link-by-code`)
+}

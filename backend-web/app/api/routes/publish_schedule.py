@@ -45,6 +45,7 @@ class CreateScheduleRequest(BaseModel):
     schedule_config: Dict = Field(..., description="时间配置")
     account_ids: List[str] = Field(..., min_length=1, description="闲鱼账号ID列表")
     material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
+    publish_config: Optional[Dict] = Field(None, description="发布配置：publish_mode(specified/random), random_count, deduplicate")
 
 
 class UpdateScheduleRequest(BaseModel):
@@ -54,6 +55,7 @@ class UpdateScheduleRequest(BaseModel):
     schedule_config: Optional[Dict] = None
     account_ids: Optional[List[str]] = None
     material_ids: Optional[List[int]] = None
+    publish_config: Optional[Dict] = Field(None, description="发布配置：publish_mode(specified/random), random_count, deduplicate")
     enabled: Optional[bool] = None
 
 
@@ -74,6 +76,7 @@ async def create_schedule(
             "schedule_config": req.schedule_config,
             "account_ids": req.account_ids,
             "material_ids": req.material_ids,
+            "publish_config": req.publish_config,
         })
         from app.services.publish_schedule_service import _schedule_to_dict
         return ApiResponse(success=True, message="定时规则创建成功", data=_schedule_to_dict(schedule))
@@ -167,7 +170,7 @@ async def get_active_schedule_progress(
                 func.count().label("cnt"),
             ).where(
                 PublishLog.batch_id == batch_id,
-            )
+            ).group_by(PublishLog.status)
             # 非管理员只查自己的
             if query_user_id is not None:
                 status_stmt = status_stmt.where(PublishLog.user_id == query_user_id)
@@ -329,11 +332,14 @@ async def trigger_schedule(
     if not schedule:
         return ApiResponse(success=False, message="规则不存在或无权操作")
 
-    # 加载素材
+    # 加载素材 — 根据 publish_config 决定使用哪些素材
     mat_svc = ProductMaterialService(session)
+    resolved_material_ids = await svc.resolve_publish_material_ids(schedule, None)
+    if not resolved_material_ids:
+        return ApiResponse(success=False, message="没有可发布的素材（可能因为去重过滤后素材池为空）")
     materials = [
         _material_to_dict(m)
-        for m in await mat_svc.list_by_ids(schedule.material_ids, current_user.id)
+        for m in await mat_svc.list_by_ids(resolved_material_ids, current_user.id)
     ]
     if not materials:
         return ApiResponse(success=False, message="没有找到有效的素材")
@@ -364,8 +370,13 @@ async def trigger_schedule(
             materials=materials,
             batch_id=batch_id,
             schedule_log_id=log_entry.id,
+            schedule_id=schedule_id,
         )
     )
+
+    # 手动触发后推进 next_trigger_at，避免 scheduler 立即重复触发
+    if schedule.schedule_mode != "once":
+        await svc.advance_schedule(schedule)
 
     logger.info(
         f"[定时发布] 手动触发 schedule_id={schedule_id}, batch_id={batch_id}, "

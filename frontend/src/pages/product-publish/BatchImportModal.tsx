@@ -201,6 +201,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
   // 导入状态
   const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 })
   const [importResult, setImportResult] = useState<{
     imported: number
     failed: number
@@ -392,7 +393,8 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     })
   }
 
-  /** 执行导入 */
+  /** 执行导入（分批上传，每批最多 10 个素材，避免单次请求过大） */
+  const BATCH_SIZE = 10
   const handleImport = async () => {
     const selected = materials.filter(m => selectedCodes.has(m.code))
     if (selected.length === 0) {
@@ -400,71 +402,100 @@ export function BatchImportModal({ onClose, onImported }: Props) {
       return
     }
     setImporting(true)
+
+    const batches: typeof selected[] = []
+    for (let i = 0; i < selected.length; i += BATCH_SIZE) {
+      batches.push(selected.slice(i, i + BATCH_SIZE))
+    }
+    setImportProgress({ current: 0, total: batches.length })
     setImportResult(null)
+
+    let totalImported = 0
+    let totalFailed = 0
+    const totalFailedItems: { code: string; reason: string }[] = []
+
     try {
-      const formData = new FormData()
+      for (let bi = 0; bi < batches.length; bi++) {
+        const batch = batches[bi]
 
-      // 构建元数据数组（不含图片文件本身）
-      const metadataList = selected.map((m) => {
-        const s = getSettings(m.code)
-        return {
-          code: m.code,
-          folder_name: m.folder_name,
-          title: (() => {
-            const t = m.title
-            if (codeInsertMode === 'title' || codeInsertMode === 'both') {
-              return `${m.code} ${t}`
+        const formData = new FormData()
+
+        // 构建元数据数组
+        const metadataList = batch.map((m) => {
+          const s = getSettings(m.code)
+          return {
+            code: m.code,
+            folder_name: m.folder_name,
+            title: (() => {
+              const t = m.title
+              if (codeInsertMode === 'title' || codeInsertMode === 'both') {
+                return `${m.code} ${t}`
+              }
+              return t
+            })(),
+            description: (() => {
+              const d = m.description
+              if (codeInsertMode === 'description' || codeInsertMode === 'both') {
+                return `${d}\n\n${m.code}`
+              }
+              return d
+            })(),
+            image_count: m.image_count,
+            price: parseFloat(s.price) || 0,
+            original_price: s.original_price ? parseFloat(s.original_price) : null,
+            category: s.category,
+            condition: s.condition,
+            brand: s.brand.trim(),
+            delivery_method: s.delivery_method,
+            postage: parseFloat(s.postage) || 0,
+            stock: parseInt(s.stock) || 9999,
+          }
+        })
+
+        formData.append('materials', JSON.stringify(metadataList))
+
+        // 添加图片文件（在批次内重新编号 0, 1, 2...）
+        batch.forEach((m, i) => {
+          const imgFiles = materialFilesRef.current.get(m.code)
+          if (imgFiles) {
+            imgFiles.forEach((file, j) => {
+              formData.append(`img_${i}_${j}`, file, file.name)
+            })
+          }
+        })
+
+        // 显示进度
+        setImportProgress({ current: bi + 1, total: batches.length })
+
+        try {
+          const res = await batchImportMaterialsUpload(formData)
+          if (res.success && res.data) {
+            totalImported += res.data.imported
+            totalFailed += res.data.failed
+            if (res.data.failed_items) {
+              totalFailedItems.push(...res.data.failed_items)
             }
-            return t
-          })(),
-          description: (() => {
-            const d = m.description
-            if (codeInsertMode === 'description' || codeInsertMode === 'both') {
-              return `${d}\n\n${m.code}`
-            }
-            return d
-          })(),
-          image_count: m.image_count,
-          price: parseFloat(s.price) || 0,
-          original_price: s.original_price ? parseFloat(s.original_price) : null,
-          category: s.category,
-          condition: s.condition,
-          brand: s.brand.trim(),
-          delivery_method: s.delivery_method,
-          postage: parseFloat(s.postage) || 0,
-          stock: parseInt(s.stock) || 9999,
+          } else {
+            totalFailed += batch.length
+          }
+        } catch {
+          totalFailed += batch.length
         }
-      })
+      }
 
-      formData.append('materials', JSON.stringify(metadataList))
-
-      // 添加图片文件：img_{materialIndex}_{imageIndex}
-      selected.forEach((m, i) => {
-        const imgFiles = materialFilesRef.current.get(m.code)
-        if (imgFiles) {
-          imgFiles.forEach((file, j) => {
-            formData.append(`img_${i}_${j}`, file, file.name)
-          })
-        }
-      })
-
-      const res = await batchImportMaterialsUpload(formData)
-      if (res.success && res.data) {
-        setImportResult(res.data)
-        if (res.data.failed === 0) {
-          addToast({ type: 'success', message: `成功导入 ${res.data.imported} 条素材！` })
-          timerRef.current = setTimeout(() => {
-            revokeAllBlobs()
-            onImported()
-          }, 1200)
-        } else {
-          addToast({
-            type: 'warning',
-            message: `导入完成：成功 ${res.data.imported} 条，失败 ${res.data.failed} 条`,
-          })
-        }
+      // 汇总结果
+      setImportResult({ imported: totalImported, failed: totalFailed, failed_items: totalFailedItems })
+      if (totalFailed === 0) {
+        addToast({ type: 'success', message: `成功导入 ${totalImported} 条素材！` })
+        timerRef.current = setTimeout(() => {
+          revokeAllBlobs()
+          onImported()
+        }, 1200)
       } else {
-        addToast({ type: 'error', message: res.message || '导入失败' })
+        addToast({
+          type: 'warning',
+          message: `导入完成：成功 ${totalImported} 条，失败 ${totalFailed} 条`,
+        })
       }
     } catch {
       addToast({ type: 'error', message: '导入失败，请重试' })
@@ -969,7 +1000,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
             disabled={!scanned || selectedCount === 0 || importing}
           >
             {importing && <Loader2 className="w-4 h-4 animate-spin" />}
-            {importing ? '导入中...' : `导入选中 (${selectedCount})`}
+            {importing ? (importProgress.total > 1 ? `导入中... (${importProgress.current}/${importProgress.total})` : '导入中...') : `导入选中 (${selectedCount})`}
           </button>
         </div>
       </div>

@@ -908,30 +908,53 @@ async def _run_batch_publish_background(
     materials: List[dict],
     batch_id: str,
     schedule_log_id: int = None,
+    schedule_id: int = None,
 ) -> None:
-    """后台异步执行批量发布任务（可选关联定时发布的执行记录）"""
+    """后台异步执行批量发布任务（可选关联定时发布的执行记录）
+
+    若关联了定时规则且为随机模式，发布完成后检测成功数是否达标，
+    不足时自动补发直到达到 random_count 或素材池耗尽。
+    """
     from common.db.session import async_session_maker
     from loguru import logger
     import traceback
 
+    total_success = 0
+    total_failed = 0
+    tried_material_ids: set[int] = set()
+    target_count: int | None = None
+
+    # 如果有 schedule_id，获取目标随机数量
+    if schedule_id:
+        try:
+            async with async_session_maker() as s:
+                from app.services.publish_schedule_service import PublishScheduleService, _normalize_publish_config
+                svc_schedule = PublishScheduleService(s)
+                schedule = await svc_schedule.get(schedule_id)
+                if schedule:
+                    cfg = _normalize_publish_config(schedule.publish_config)
+                    if cfg["publish_mode"] == "random":
+                        target_count = max(1, int(cfg.get("random_count", 1)))
+        except Exception:
+            pass
+
+    # 记录本轮已尝试的素材
+    for m in materials:
+        mid = m.get("id")
+        if mid is not None:
+            tried_material_ids.add(int(mid))
+
     async with async_session_maker() as session:
         svc = PublishExecutorService(session)
         try:
-            # 直接将 batch_id 传给 service，确保日志与路由返回值一致
             result = await svc.batch_publish(
                 user_id=user_id,
                 account_ids=account_ids,
                 materials=materials,
                 batch_id=batch_id,
             )
-            # 若关联了定时发布执行记录，同步更新结果
-            if schedule_log_id:
-                await _update_schedule_log_on_complete(
-                    schedule_log_id,
-                    success_count=result.get("success_count", 0),
-                    failed_count=result.get("failed_count", 0),
-                    is_error=False,
-                )
+            total_success += result.get("success_count", 0)
+            total_failed += result.get("failed_count", 0)
         except Exception as e:
             logger.error(f"批量发布后台任务异常: {e}\n{traceback.format_exc()}")
             await PublishBatchStatusService.clear_batch(batch_id)
@@ -943,6 +966,169 @@ async def _run_batch_publish_background(
                     is_error=True,
                     error_message=str(e)[:800],
                 )
+            return
+
+    # 随机模式补发循环
+    while target_count and total_success < target_count and schedule_id:
+        remaining = target_count - total_success
+        logger.info(f"[定时发布补发] 已成功 {total_success}/{target_count}，还需补发 {remaining} 条")
+
+        try:
+            import re as _re
+            async with async_session_maker() as s:
+                from app.services.publish_schedule_service import PublishScheduleService
+                from app.services.product_publish_service import ProductMaterialService, _material_to_dict
+                svc_schedule = PublishScheduleService(s)
+                schedule = await svc_schedule.get(schedule_id)
+                if not schedule:
+                    break
+
+                # 素材池：排除已尝试过的
+                pool = [mid for mid in schedule.material_ids if mid not in tried_material_ids]
+
+                # 去重：查询账号现有商品编号，排除已存在的
+                dedup = bool((schedule.publish_config or {}).get("deduplicate", True))
+                if dedup and pool:
+                    from common.models.product_material import ProductMaterial
+                    from common.models.xy_catalog_item import XYCatalogItem
+                    from sqlalchemy import select as _sel
+                    code_pattern = _re.compile(r'^(A\d+)')
+                    # 素材编号映射
+                    rows = (await s.execute(_sel(ProductMaterial.id, ProductMaterial.title).where(
+                        ProductMaterial.id.in_(pool)
+                    ))).all()
+                    mat_code_map = {row.id: code_pattern.search(row.title or "").group(1)
+                                   for row in rows if code_pattern.search(row.title or "")}
+                    # 账号现有编号（先做 account_id 字符串 → 主键映射）
+                    from common.models.xy_account import XYAccount
+                    acct_stmt = _sel(XYAccount.id).where(XYAccount.account_id.in_(account_ids))
+                    acct_rows = (await s.execute(acct_stmt)).all()
+                    acct_pks = [r[0] for r in acct_rows]
+                    rows2 = (await s.execute(_sel(XYCatalogItem.title).where(
+                        XYCatalogItem.account_pk.in_(acct_pks)
+                    ))).all()
+                    existing_codes = {code_pattern.search(r.title or "").group(1)
+                                     for r in rows2 if code_pattern.search(r.title or "")}
+                    pool = [mid for mid in pool if mat_code_map.get(mid) not in existing_codes]
+                    logger.info(f"[定时发布补发] 去重: 素材池 {len(schedule.material_ids)} → 已有 {len(existing_codes)} 个编号 → 可用 {len(pool)}")
+
+                if not pool:
+                    logger.warning(f"[定时发布补发] 去重后素材池耗尽，已尝试 {len(tried_material_ids)} 条")
+                    break
+
+                import random as _random
+                pick = _random.sample(pool, min(remaining, len(pool)))
+                for mid in pick:
+                    tried_material_ids.add(mid)
+
+                mat_svc = ProductMaterialService(s)
+                extra_materials = [
+                    _material_to_dict(m)
+                    for m in await mat_svc.list_by_ids(pick, user_id)
+                ]
+                if not extra_materials:
+                    break
+
+                import uuid as _uuid
+                retry_batch_id = str(_uuid.uuid4())
+                await PublishBatchStatusService.init_batch(
+                    batch_id=retry_batch_id,
+                    account_ids=account_ids,
+                    material_count=len(extra_materials),
+                )
+
+                retry_result = await svc.batch_publish(
+                    user_id=user_id,
+                    account_ids=account_ids,
+                    materials=extra_materials,
+                    batch_id=retry_batch_id,
+                )
+                total_success += retry_result.get("success_count", 0)
+                total_failed += retry_result.get("failed_count", 0)
+        except Exception as e:
+            logger.error(f"[定时发布补发] 补发异常: {e}")
+            break
+
+    # 更新执行记录
+    if schedule_log_id:
+        await _update_schedule_log_on_complete(
+            schedule_log_id,
+            success_count=total_success,
+            failed_count=total_failed,
+            is_error=False,
+        )
+
+    # 发布成功后：刷新账号商品 + 一键关联卡券
+    if total_success > 0 and account_ids:
+        try:
+            import re as _re
+            # 1. 刷新每个账号的商品列表
+            for aid in account_ids:
+                try:
+                    async with async_session_maker() as s:
+                        from common.models.xy_account import XYAccount
+                        from common.services.item_service import ItemService
+                        from sqlalchemy import select as sa_sel
+                        stmt = sa_sel(XYAccount).where(XYAccount.account_id == aid, XYAccount.owner_id == user_id)
+                        account = (await s.execute(stmt)).scalar_one_or_none()
+                        if account:
+                            item_svc = ItemService(s)
+                            await item_svc.fetch_all_items_from_account(account=account)
+                            logger.info(f"[定时发布] 账号 {aid} 商品已刷新")
+                except Exception as e:
+                    logger.warning(f"[定时发布] 刷新账号 {aid} 商品失败: {e}")
+
+            # 2. 一键关联卡券（按编号匹配）
+            async with async_session_maker() as s:
+                from common.models.card import Card
+                from common.models.xy_catalog_item import XYCatalogItem
+                from common.models.card_item_relation import CardItemRelation
+                from sqlalchemy import select as sa_sel2
+
+                code_pattern = _re.compile(r'^(A\d+)')
+
+                # 加载卡券编号
+                card_rows = (await s.execute(sa_sel2(Card.id, Card.name).where(Card.user_id == user_id))).all()
+                cards_by_code: dict[str, int] = {}
+                for row in card_rows:
+                    m = code_pattern.match(row.name or "")
+                    if m:
+                        cards_by_code.setdefault(m.group(1), row.id)
+
+                if cards_by_code:
+                    # 加载商品编号
+                    item_rows = (await s.execute(
+                        sa_sel2(XYCatalogItem.item_id, XYCatalogItem.title).where(XYCatalogItem.owner_id == user_id)
+                    )).all()
+                    matched_pairs: list[tuple[str, int]] = []
+                    for row in item_rows:
+                        m = code_pattern.match(row.title or "")
+                        if m and m.group(1) in cards_by_code:
+                            matched_pairs.append((row.item_id, cards_by_code[m.group(1)]))
+
+                    # 查已有避免重复
+                    existing_pairs = set()
+                    if matched_pairs:
+                        existing_rows = (await s.execute(
+                            sa_sel2(CardItemRelation.item_id, CardItemRelation.card_id).where(
+                                CardItemRelation.user_id == user_id
+                            )
+                        )).all()
+                        existing_pairs = {(r.item_id, r.card_id) for r in existing_rows}
+
+                    new_count = 0
+                    for item_id, card_id in matched_pairs:
+                        if (item_id, card_id) not in existing_pairs:
+                            s.add(CardItemRelation(user_id=user_id, card_id=card_id, item_id=item_id, source="own"))
+                            new_count += 1
+
+                    if new_count > 0:
+                        await s.commit()
+                        logger.info(f"[定时发布] 一键关联卡券完成: 匹配 {len(matched_pairs)} 对，新增 {new_count} 对")
+                    else:
+                        logger.info(f"[定时发布] 一键关联卡券: 已匹配 {len(matched_pairs)} 对，无新增")
+        except Exception as e:
+            logger.error(f"[定时发布] 后处理（刷新商品+关联卡券）异常: {e}")
 
 
 async def _update_schedule_log_on_complete(

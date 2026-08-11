@@ -23,7 +23,7 @@ from app.services.item_service import ItemService
 from common.models.publish_log import PublishLog
 from common.models.xy_account import XYAccount
 from common.services.publish_execution_service import execute_single_publish
-from common.services.xianyu_publish_service import create_xianyu_publisher
+from common.services.xianyu_new_publisher import create_xianyu_publisher
 
 
 from common.utils.time_utils import safe_isoformat
@@ -310,12 +310,46 @@ class PublishExecutorService:
 
                     try:
                         reuse = idx > 0
-                        result = await publisher.publish_item(
-                            item_data=publish_material,
-                            cookie_data={"cookie": cookies_str},
-                            reuse_browser=reuse,
-                            should_close=False,
-                        )
+                        retries_left = 5
+                        result = None
+
+                        while retries_left > 0:
+                            try:
+                                result = await publisher.publish_item(
+                                    item_data=publish_material,
+                                    cookie_data={"cookie": cookies_str},
+                                    reuse_browser=reuse,
+                                    should_close=False,
+                                )
+                                break
+                            except Exception as addr_error:
+                                retries_left -= 1
+                                error_msg = str(addr_error)
+                                is_addr_err = "地址" in error_msg or "所在地" in error_msg
+                                if is_addr_err and retries_left > 0:
+                                    logger.warning(
+                                        f"地址「{publish_material.get('address', '')}」设置失败，"
+                                        f"换一条地址重试（剩余 {retries_left} 次）..."
+                                    )
+                                    try:
+                                        await publisher.close()
+                                        resolved_address = await address_svc.resolve_publish_address(account_id, material, queue_state)
+                                        publish_material = resolved_address.apply_to_item_data(material)
+                                        await log_svc.update_log(
+                                            log_id=log.id, status="publishing",
+                                            resolved_address_id=resolved_address.resolved_address_id,
+                                            resolved_address_text=resolved_address.resolved_address_text,
+                                            address_source=resolved_address.address_source,
+                                        )
+                                        publisher = create_xianyu_publisher(static_root=STATIC_ROOT)
+                                        reuse = False
+                                        continue
+                                    except ValueError:
+                                        pass
+                                raise
+
+                        if result is None:
+                            continue  # all retries exhausted, skip to next material
 
                         if result.get("success"):
                             success_count += 1

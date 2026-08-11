@@ -19,7 +19,7 @@ from common.models.xy_account import XYAccount
 from common.services.item_service import ItemService
 from common.services.publish_address_service import PublishAddressService
 from common.services.publish_log_service import PublishLogService
-from common.services.xianyu_publish_service import publish_single_item
+from common.services.xianyu_new_publisher import publish_single_item
 
 
 async def _get_account(session: AsyncSession, account_id: str, user_id: int) -> Optional[XYAccount]:
