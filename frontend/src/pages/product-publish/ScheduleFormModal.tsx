@@ -9,7 +9,7 @@
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Clock, X, Loader2, Save, ChevronLeft, ChevronRight, Search, Image } from 'lucide-react'
+import { Clock, X, Loader2, Save, ChevronLeft, ChevronRight, Search, Image, Shuffle } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { getAccountDetails } from '@/api/accounts'
 import { getMaterials, createSchedule, updateSchedule, type ProductMaterial, type PublishSchedule, type ScheduleConfig, type CreateScheduleParams, type UpdateScheduleParams } from '@/api/productPublish'
@@ -45,6 +45,15 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
   const [timeRange, setTimeRange] = useState(initial?.schedule_config?.time_range || DEFAULT_TIME_RANGE)
   const [days, setDays] = useState<number[]>(initial?.schedule_config?.days || [1, 2, 3, 4, 5])
   const [onceDatetime, setOnceDatetime] = useState(initial?.schedule_config?.datetime?.slice(0, 16) || '')
+  const [publishMode, setPublishMode] = useState<'specified' | 'random'>(
+    initial?.publish_config?.publish_mode || 'specified'
+  )
+  const [randomCount, setRandomCount] = useState<number>(
+    initial?.publish_config?.random_count || 1
+  )
+  const [deduplicate, setDeduplicate] = useState<boolean>(
+    initial?.publish_config?.deduplicate ?? true
+  )
   const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(
     new Set(initial?.account_ids || prefills?.accountIds || [])
   )
@@ -57,6 +66,7 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
   const [materialTotal, setMaterialTotal] = useState(0)
   const [materialTotalPages, setMaterialTotalPages] = useState(0)
   const [materialLoading, setMaterialLoading] = useState(false)
+  const [selectingAll, setSelectingAll] = useState(false)
 
   /** 加载素材（分页） */
   const loadMaterials = async (p = materialPage, size = materialPageSize) => {
@@ -125,6 +135,11 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
         schedule_config: buildConfig(),
         account_ids: Array.from(selectedAccounts),
         material_ids: Array.from(selectedMaterials),
+        publish_config: {
+          publish_mode: publishMode,
+          random_count: randomCount,
+          deduplicate: deduplicate,
+        },
       }
 
       if (initial) {
@@ -176,6 +191,33 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
     } else {
       setSelectedMaterials(prev => { const n = new Set(prev); currentPageIds.forEach(id => n.add(id)); return n })
     }
+  }
+
+  /** 全选全部素材（跨页加载所有素材ID） */
+  const handleSelectAllMaterials = async () => {
+    // 已全选→取消全选
+    if (selectedMaterials.size >= materialTotal) {
+      setSelectedMaterials(new Set())
+      return
+    }
+    setSelectingAll(true)
+    try {
+      const allIds: number[] = []
+      const BIG_PAGE = 100
+      const res = await getMaterials(1, BIG_PAGE, materialSearch.trim() ? { title: materialSearch.trim() } : undefined)
+      if (res.success) {
+        res.data.list.forEach((m: ProductMaterial) => allIds.push(m.id))
+        // 如果还超出一页，继续加载
+        let p = 2
+        while (p <= res.data.total_pages) {
+          const r2 = await getMaterials(p, BIG_PAGE, materialSearch.trim() ? { title: materialSearch.trim() } : undefined)
+          if (r2.success) r2.data.list.forEach((m: ProductMaterial) => allIds.push(m.id))
+          p++
+        }
+        setSelectedMaterials(new Set(allIds))
+      }
+    } catch { /* ignore */ }
+    finally { setSelectingAll(false) }
   }
 
   const handleMaterialSearch = () => {
@@ -327,6 +369,51 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
             </div>
           </div>
 
+          {/* 发布模式 */}
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h3 className="vben-card-title text-sm"><Shuffle className="w-4 h-4" />发布模式</h3>
+            </div>
+            <div className="vben-card-body space-y-3">
+              <div className="flex gap-2">
+                {([
+                  { key: 'specified', label: '指定发布', desc: '将所选素材全部发布到所选账号' },
+                  { key: 'random', label: '随机发布', desc: '每次从素材池中随机选取N条发布' },
+                ] as { key: typeof publishMode; label: string; desc: string }[]).map(m => (
+                  <button key={m.key} type="button" onClick={() => setPublishMode(m.key)}
+                    className={`flex-1 px-4 py-3 rounded-lg border text-sm text-left transition-colors ${
+                      publishMode === m.key
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600'
+                        : 'border-slate-300 dark:border-slate-600 text-slate-600 hover:border-blue-400'
+                    }`}>
+                    <div className="font-medium">{m.label}</div>
+                    <div className="text-xs text-slate-400 mt-0.5">{m.desc}</div>
+                  </button>
+                ))}
+              </div>
+
+              {publishMode === 'random' && (
+                <>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-slate-500">每次随机发布</span>
+                    <input type="number" min={1} max={selectedMaterials.size || 99} className="input-ios w-20"
+                      value={randomCount} onChange={e => setRandomCount(Math.max(1, Number(e.target.value)))} />
+                    <span className="text-sm text-slate-500">条素材</span>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 cursor-pointer">
+                    <input type="checkbox" checked={deduplicate} onChange={e => setDeduplicate(e.target.checked)}
+                      className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500" />
+                    确保发布内容未曾在所选账号中发布过（去重）
+                  </label>
+                </>
+              )}
+
+              {publishMode === 'specified' && (
+                <p className="text-xs text-slate-400">将所选素材全部发布到所选账号，不做去重过滤。</p>
+              )}
+            </div>
+          </div>
+
           {/* 选择账号 */}
           <div className="vben-card">
             <div className="vben-card-header">
@@ -358,8 +445,17 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
               <h3 className="vben-card-title text-sm"><Image className="w-4 h-4" />选择素材</h3>
               <div className="flex items-center gap-2">
                 <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllMaterials}>
-                  {allCurrentMaterialsSelected && materials.length > 0 ? '取消全选' : '全选'}
+                  {allCurrentMaterialsSelected && materials.length > 0 ? '取消全选' : '本页全选'}
                 </button>
+                {materialTotal > materials.length && (
+                  <button
+                    className="text-sm text-blue-500 hover:underline"
+                    onClick={handleSelectAllMaterials}
+                    disabled={selectingAll}
+                  >
+                    {selectingAll ? '加载中...' : selectedMaterials.size >= materialTotal ? `取消全选(${materialTotal})` : `全选全部 ${materialTotal} 条`}
+                  </button>
+                )}
                 <span className="badge-primary text-xs">已选 {selectedMaterials.size} 条</span>
               </div>
             </div>
@@ -465,11 +561,17 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
 
           {/* 预览 */}
           <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-            <span className="text-sm text-slate-500">
-              {selectedAccounts.size} 账号 × {selectedMaterials.size} 素材
-            </span>
+            <div>
+              <span className="text-sm text-slate-500">
+                {selectedAccounts.size} 账号
+                {publishMode === 'random'
+                  ? ` × 随机 ${randomCount} / ${selectedMaterials.size} 素材池`
+                  : ` × ${selectedMaterials.size} 素材`
+                }
+              </span>
+            </div>
             <span className="text-lg font-semibold text-blue-600 dark:text-blue-400">
-              = {totalPublishes} 次发布
+              = {publishMode === 'random' ? `${selectedAccounts.size} × 随机${randomCount}` : totalPublishes} 次发布
             </span>
           </div>
         </div>

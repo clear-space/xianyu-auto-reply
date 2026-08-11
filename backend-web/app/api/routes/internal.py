@@ -25,6 +25,7 @@ class InternalBatchPublishRequest(BaseModel):
     account_ids: List[str] = Field(..., min_length=1, description="账号ID列表")
     material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
     schedule_log_id: Optional[int] = Field(None, description="关联的定时发布执行记录ID（scheduler 传入）")
+    schedule_id: Optional[int] = Field(None, description="关联的定时规则ID（scheduler 传入，用于补发）")
 
 
 @router.post("/publish/batch", response_model=ApiResponse)
@@ -66,6 +67,7 @@ async def internal_publish_batch(
         materials=materials,
         batch_id=batch_id,
         schedule_log_id=req.schedule_log_id,
+        schedule_id=req.schedule_id,
     )
 
     return ApiResponse(

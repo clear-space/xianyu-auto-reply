@@ -424,6 +424,93 @@ async def batch_bind_cards(
     )
 
 
+@router.post("/auto-link-by-code")
+async def auto_link_cards_by_code(
+    current_user: User = Depends(deps.get_current_active_user),
+    card_service: CardService = Depends(get_card_service),
+):
+    """一键关联卡券：按商品标题和卡券名称前面的编号（如 A014）自动匹配并建立关联"""
+    import re
+    from sqlalchemy import select, and_
+    from common.models.xy_catalog_item import XYCatalogItem
+    from common.models.card import Card
+    from common.models.card_item_relation import CardItemRelation
+
+    code_pattern = re.compile(r'^(A\d+)')
+
+    # 加载所有卡券
+    stmt = select(Card.id, Card.name).where(Card.user_id == current_user.id)
+    card_rows = (await card_service.session.execute(stmt)).all()
+    cards_by_code: dict[str, int] = {}
+    for row in card_rows:
+        m = code_pattern.match(row.name or "")
+        if m:
+            code = m.group(1)
+            if code not in cards_by_code:
+                cards_by_code[code] = row.id
+
+    if not cards_by_code:
+        return ApiResponse(success=False, message="没有找到带编号的卡券，请先在卡券名称前加上编号（如 A014 xxx）")
+
+    # 加载所有商品
+    stmt = select(XYCatalogItem.item_id, XYCatalogItem.title).where(
+        XYCatalogItem.owner_id == current_user.id
+    )
+    item_rows = (await card_service.session.execute(stmt)).all()
+
+    # 匹配并查询已有关联
+    matched_pairs: list[tuple[str, int]] = []  # (item_id, card_id)
+    items_by_code: dict[str, list[str]] = {}
+    for row in item_rows:
+        m = code_pattern.match(row.title or "")
+        if m:
+            code = m.group(1)
+            items_by_code.setdefault(code, []).append(row.item_id)
+
+    for code, item_ids in items_by_code.items():
+        card_id = cards_by_code.get(code)
+        if card_id:
+            for item_id in item_ids:
+                matched_pairs.append((item_id, card_id))
+
+    if not matched_pairs:
+        return ApiResponse(success=False, message="没有匹配到任何商品与卡券，请确认商品标题和卡券名称的前面编号一致")
+
+    # 查询已有关联，避免重复
+    existing_stmt = select(CardItemRelation.item_id, CardItemRelation.card_id).where(
+        CardItemRelation.user_id == current_user.id
+    )
+    existing_rows = (await card_service.session.execute(existing_stmt)).all()
+    existing = {(row.item_id, row.card_id) for row in existing_rows}
+
+    new_relations = [(item_id, card_id) for item_id, card_id in matched_pairs
+                     if (item_id, card_id) not in existing]
+
+    if not new_relations:
+        return ApiResponse(success=True, message=f"所有匹配关系已存在（共 {len(matched_pairs)} 对），无需新增")
+
+    # 批量插入
+    for item_id, card_id in new_relations:
+        card_service.session.add(CardItemRelation(
+            user_id=current_user.id,
+            card_id=card_id,
+            item_id=item_id,
+            source="own",
+        ))
+
+    await card_service.session.commit()
+
+    return ApiResponse(
+        success=True,
+        message=f"一键关联完成：匹配 {len(matched_pairs)} 对，新增 {len(new_relations)} 对，跳过 {len(matched_pairs) - len(new_relations)} 对（已存在）",
+        data={
+            "total_matched": len(matched_pairs),
+            "new_relations": len(new_relations),
+            "skipped_existing": len(matched_pairs) - len(new_relations),
+        },
+    )
+
+
 @router.post("/batch-save")
 async def batch_save_card(
     request: BatchSaveCardRequest,

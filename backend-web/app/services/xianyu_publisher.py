@@ -223,8 +223,8 @@ class XianyuPublisher:
 
             await self.set_cookies(cookie_data["cookie"])
 
-            logger.info("\n[步骤1] 🌐 先访问闲鱼首页，触发Cookie初始化...")
-            await self.page.goto("https://www.goofish.com", wait_until="networkidle", timeout=30000)
+            logger.info("\n[步骤1] 🌐 先访问卖家首页，触发Cookie初始化...")
+            await self.page.goto("https://seller.goofish.com", wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(1)
 
             logger.info("\n[步骤2] 🌐 访问登录页面...")
@@ -235,7 +235,7 @@ class XianyuPublisher:
             )
             await asyncio.sleep(1)
 
-            publish_url = "https://www.goofish.com/publish?spm=a21ybx.item.sidebar.1.297e3da6aDZAmV"
+            publish_url = "https://seller.goofish.com/?site=COMMONPRO&spm=a21107h.42826273.0.0#/seller-item/publish"
             logger.info(f"\n[步骤3] 🌐 访问发布页面: {publish_url}")
             await self.page.goto(publish_url, wait_until="networkidle", timeout=60000)
             await asyncio.sleep(3)
@@ -1579,38 +1579,62 @@ class XianyuPublisher:
             logger.info("ℹ️ 未设置原价，跳过")
 
     async def _set_stock(self, item_data: dict):
-        """设置库存数量（鱼小铺账号可用，非鱼小铺账号静默跳过）"""
-        stock = item_data.get("stock", 9999)
-        if not stock:
-            stock = 9999
-        stock = int(stock)
-        logger.info(f"\n[步骤8.5] 📦 设置库存: {stock}...")
+        """填写库存（完全照搬 promotion_xianyu_publisher._fill_stock 已验证逻辑）"""
+        if not self.page:
+            raise Exception("浏览器页面未初始化")
 
-        stock_input_selectors = [
+        stock = int(item_data.get("stock", 999) or 999)
+        if stock <= 0:
+            stock = 999
+
+        logger.info("\n[步骤8.5] 📦 输入库存...")
+        logger.info(f"库存: {stock}")
+
+        stock_selectors = [
             'input[placeholder*="库存"]',
+            'input[aria-label*="库存"]',
             'input[placeholder*="数量"]',
-            'input[placeholder*="stock"]',
-            '.stock input',
+            'input[aria-label*="数量"]',
+            'input[name*="stock"]',
+            'input[id*="stock"]',
             '[class*="stock"] input',
             '[class*="inventory"] input',
-            '[class*="quantity"] input',
+            'xpath=//*[contains(normalize-space(.), "库存")]/following::input[1]',
+            'xpath=//*[contains(normalize-space(.), "数量")]/following::input[1]',
         ]
 
         stock_input = None
-        for selector in stock_input_selectors:
+        for selector in stock_selectors:
             try:
-                stock_input = await self.page.query_selector(selector)
-                if stock_input and await stock_input.is_visible():
+                candidate = await self.page.wait_for_selector(selector, timeout=2000)
+                if candidate and await candidate.is_visible() and await candidate.is_enabled():
+                    stock_input = candidate
                     logger.info(f"✅ 找到库存输入框: {selector}")
                     break
             except Exception:
                 continue
 
-        if stock_input:
-            await stock_input.fill(str(stock))
-            logger.info(f"✅ 库存已设置为: {stock}")
-        else:
-            logger.info("ℹ️ 未找到库存输入框（非鱼小铺账号），跳过")
+        if not stock_input:
+            raise Exception("未找到库存输入框，无法填写素材库存")
+
+        try:
+            await stock_input.click()
+            await asyncio.sleep(0.2)
+        except Exception:
+            pass
+
+        try:
+            await stock_input.fill("")
+        except Exception:
+            try:
+                await stock_input.press("Control+A")
+                await stock_input.press("Backspace")
+            except Exception:
+                pass
+
+        await stock_input.fill(str(stock))
+        logger.info(f"✅ 库存已设置为: {stock}")
+        logger.info(f"✅ 库存已设置为: {stock}")
 
     async def _set_free_shipping(self):
         """设置发货方式为包邮（按原项目流程）"""

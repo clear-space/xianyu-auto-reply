@@ -1,8 +1,8 @@
 ﻿import { useEffect, useState, useRef } from 'react'
-import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
+import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Link2 } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
-import { batchClearItemRelations } from '@/api/cards'
+import { batchClearItemRelations, autoLinkCardsByCode } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
@@ -109,6 +109,7 @@ export function Items() {
   const [deleteAiPromptConfirm, setDeleteAiPromptConfirm] = useState(false)
   const [batchDeleteAiPromptConfirm, setBatchDeleteAiPromptConfirm] = useState(false)
   const [batchClearCardRelationsConfirm, setBatchClearCardRelationsConfirm] = useState(false)
+  const [autoLinking, setAutoLinking] = useState(false)
   const [deleting, setDeleting] = useState(false)
   // const hasSearchEffectInitializedRef = useRef(false)  // 已改为手动查询，不再需要
   const skipNextSearchEffectRef = useRef(false)
@@ -1022,6 +1023,27 @@ export function Items() {
     }
   }
 
+  // 一键关联卡券
+  const handleAutoLinkCards = async () => {
+    setAutoLinking(true)
+    try {
+      const result = await autoLinkCardsByCode()
+      if (result.success && result.data) {
+        addToast({
+          type: 'success',
+          message: `关联完成：匹配 ${result.data.total_matched} 对，新增 ${result.data.new_relations} 对`,
+        })
+        loadItems()
+      } else {
+        addToast({ type: 'warning', message: result.message || '关联失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '一键关联卡券失败' })
+    } finally {
+      setAutoLinking(false)
+    }
+  }
+
   // ==================== 批量新增AI提示词 ====================
 
   // 打开批量新增AI提示词弹窗
@@ -1286,6 +1308,19 @@ export function Items() {
             </div>
             {/* 查询/重置按钮统一放在筛选行最右侧 */}
             <div className="flex items-end gap-2 ml-auto">
+              <button
+                onClick={handleAutoLinkCards}
+                disabled={autoLinking}
+                className="btn-ios-secondary btn-sm whitespace-nowrap"
+                title="按商品标题前面的编号（如A014）自动匹配卡券名称前面的编号"
+              >
+                {autoLinking ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Link2 className="w-3.5 h-3.5" />
+                )}
+                一键关联卡券
+              </button>
               <button
                 onClick={() => loadItems(1, pagination.pageSize, filters, searchKeyword)}
                 className="btn-ios-primary whitespace-nowrap"

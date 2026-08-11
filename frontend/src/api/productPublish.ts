@@ -325,6 +325,13 @@ export const batchImportMaterialsUpload = (
 
 // ==================== 定时发布 ====================
 
+/** 发布配置 */
+export interface PublishConfig {
+  publish_mode: 'specified' | 'random'
+  random_count: number
+  deduplicate: boolean
+}
+
 /** 定时规则 */
 export interface PublishSchedule {
   id: number
@@ -334,6 +341,7 @@ export interface PublishSchedule {
   schedule_config: ScheduleConfig
   account_ids: string[]
   material_ids: number[]
+  publish_config: PublishConfig
   enabled: boolean
   last_triggered_at?: string | null
   next_trigger_at?: string | null
@@ -359,6 +367,7 @@ export interface CreateScheduleParams {
   schedule_config: ScheduleConfig
   account_ids: string[]
   material_ids: number[]
+  publish_config?: PublishConfig
 }
 
 /** 更新定时规则参数 */
@@ -368,6 +377,7 @@ export interface UpdateScheduleParams {
   schedule_config?: Record<string, unknown>
   account_ids?: string[]
   material_ids?: number[]
+  publish_config?: PublishConfig
   enabled?: boolean
 }
 

@@ -70,6 +70,14 @@ function formatConfig(sc: PublishSchedule): string {
   return '-'
 }
 
+function formatPublishConfig(sc: PublishSchedule): { label: string; cls: string } {
+  const pc = sc.publish_config
+  if (!pc || pc.publish_mode === 'specified' || !pc.publish_mode) {
+    return { label: '指定发布', cls: 'badge-info' }
+  }
+  return { label: `随机 ${pc.random_count || 1} 条`, cls: 'badge-warning' }
+}
+
 export function ScheduledPublish() {
   const { addToast } = useUIStore()
   const [tab, setTab] = useState<Tab>('rules')
@@ -378,6 +386,7 @@ export function ScheduledPublish() {
                   </th>
                   <th>规则名称</th>
                   <th>模式</th>
+                  <th>发布方式</th>
                   <th>时间配置</th>
                   <th>账号/素材</th>
                   <th>下次触发</th>
@@ -387,7 +396,7 @@ export function ScheduledPublish() {
               </thead>
               <tbody>
                 {schedules.length === 0 ? (
-                  <tr><td colSpan={8} className="text-center py-12 text-slate-400">
+                  <tr><td colSpan={9} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2"><Clock className="w-12 h-12 text-slate-300" />
                       <p>暂无定时规则，点击「新建规则」开始</p></div>
                   </td></tr>
@@ -402,6 +411,12 @@ export function ScheduledPublish() {
                       <span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[180px]" title={s.name}>{s.name}</span>
                     </td>
                     <td><span className="badge-gray">{MODE_LABELS[s.schedule_mode] || s.schedule_mode}</span></td>
+                    <td>
+                      {(() => {
+                        const pc = formatPublishConfig(s)
+                        return <span className={pc.cls}>{pc.label}</span>
+                      })()}
+                    </td>
                     <td className="text-sm text-slate-500">{formatConfig(s)}</td>
                     <td className="text-sm text-slate-500">
                       {(s.account_count ?? s.account_ids.length)} 账号 / {(s.material_count ?? s.material_ids.length)} 素材
