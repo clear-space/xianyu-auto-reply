@@ -427,6 +427,9 @@ class AccountImportService:
     async def _import_card_item_relations(self, wb) -> None:
         """导入卡券商品关联"""
         rows = _read_sheet_rows(wb, "卡券商品关联")
+        # 本次导入已处理的 (card_id, item_id) 集合，防止 Excel 内重复行触发唯一键冲突
+        seen_relation_keys: set[tuple[int, str]] = set()
+
         for row in rows:
             card_name = _parse_str(row.get("卡券名称"))
             item_id = _parse_str(row.get("商品ID"))
@@ -442,15 +445,23 @@ class AccountImportService:
             if not card_id:
                 continue
 
-            # 检查是否已存在
+            relation_key = (card_id, item_id)
+            if relation_key in seen_relation_keys:
+                continue  # 本次已处理，跳过
+
+            # 检查是否已存在。
+            # 注意：唯一键 uk_card_item_dock 是 (card_id, item_id, dock_record_id)，
+            # 不包含 user_id —— 去重检查必须与唯一键对齐（不限定 user_id），
+            # 否则跨用户同卡同商品的既有关联会导致 INSERT 撞唯一键（历史 bug）。
             stmt = select(CardItemRelation).where(
                 CardItemRelation.card_id == card_id,
                 CardItemRelation.item_id == item_id,
-                CardItemRelation.user_id == self.owner_id,
             )
             result = await self.session.execute(stmt)
             if result.scalars().first():
+                seen_relation_keys.add(relation_key)
                 continue  # 已存在，跳过
+            seen_relation_keys.add(relation_key)
 
             source = _parse_str(row.get("来源")) or "own"
             rel = CardItemRelation(

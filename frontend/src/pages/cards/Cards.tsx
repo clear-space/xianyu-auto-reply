@@ -11,7 +11,8 @@
 import { useState, useEffect } from 'react'
 import {
   Ticket, RefreshCw, Trash2, Search, Power, PowerOff, Image,
-  ChevronLeft, ChevronRight, CheckSquare, Square, Edit2, Copy, Eye, Plus, Link
+  ChevronLeft, ChevronRight, CheckSquare, Square, Edit2, Copy, Eye, Plus, Link,
+  Download, Upload
 } from 'lucide-react'
 import { getCards, updateCard, deleteCard, batchDeleteCards, type CardData, type CardPaginatedResult } from '@/api/cards'
 import { useUIStore } from '@/store/uiStore'
@@ -21,6 +22,7 @@ import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { CardDetailModal } from './CardDetailModal'
 import { CardFormModal, cardToFormData, cardToCopyFormData, emptyCardFormData } from './CardFormModal'
 import { CardItemRelationModal } from './CardItemRelationModal'
+import { CardExportModal, CardImportModal } from './CardTransferModal'
 
 // 卡券类型标签（与发货配置一致）
 const cardTypeLabels: Record<string, string> = {
@@ -66,6 +68,10 @@ export function Cards() {
   // 关联商品弹窗
   const [relationCard, setRelationCard] = useState<CardData | null>(null)
   const [relationReadonly, setRelationReadonly] = useState(false)
+
+  // 导入导出弹窗
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
 
   // 分页状态
   const [page, setPage] = useState(1)
@@ -239,6 +245,14 @@ export function Cards() {
               关联商品
             </button>
           )}
+          <button onClick={() => setShowExportModal(true)} className="btn-ios-secondary">
+            <Download className="w-4 h-4" />
+            导出
+          </button>
+          <button onClick={() => setShowImportModal(true)} className="btn-ios-secondary">
+            <Upload className="w-4 h-4" />
+            导入
+          </button>
           <button onClick={openCreateModal} className="btn-ios-primary">
             <Plus className="w-4 h-4" />
             新建卡券
@@ -632,6 +646,15 @@ export function Cards() {
         onConfirm={handleBatchDelete}
         onCancel={() => setBatchDeleteConfirm(false)}
       />
+
+      {/* 导入导出弹窗 */}
+      {showExportModal && <CardExportModal onClose={() => setShowExportModal(false)} />}
+      {showImportModal && (
+        <CardImportModal
+          onClose={() => setShowImportModal(false)}
+          onImported={loadCards}
+        />
+      )}
     </div>
   )
 }

@@ -533,15 +533,19 @@ class CardService:
     async def update_card(
         self,
         card_id: int,
-        user_id: int,
+        user_id: int | None,
         **kwargs
     ) -> bool:
         """更新卡券
-        
+
+        user_id 为 None 时不限制归属（管理员语义，可更新任意卡券）。
+
         Raises:
             ValueError: 卡券重复时抛出
         """
-        stmt = select(Card).where(Card.id == card_id, Card.user_id == user_id)
+        stmt = select(Card).where(Card.id == card_id)
+        if user_id is not None:
+            stmt = stmt.where(Card.user_id == user_id)
         result = await self.session.execute(stmt)
         card = result.scalars().first()
         if not card:
@@ -554,9 +558,9 @@ class CardService:
         new_spec_name = kwargs.get("spec_name", card.spec_name)
         new_spec_value = kwargs.get("spec_value", card.spec_value)
 
-        # 检查重复（排除自身）
+        # 检查重复（排除自身）；重复检查始终按卡券实际归属用户范围进行
         duplicate_msg = await self.check_card_duplicate(
-            user_id=user_id,
+            user_id=card.user_id,
             item_id=new_item_id,
             name=new_name,
             is_multi_spec=new_is_multi_spec,
@@ -578,29 +582,39 @@ class CardService:
         await self.session.commit()
         return True
 
-    async def delete_card(self, card_id: int, user_id: int) -> bool:
-        """删除卡券（同时删除关联表记录）"""
+    async def delete_card(self, card_id: int, user_id: int | None) -> bool:
+        """删除卡券（同时删除关联表记录）
+
+        user_id 为 None 时不限制归属（管理员语义，可删除任意卡券）。
+        """
         # 先删除关联表记录
         matcher = CardMatcher(self.session)
         rel_count = await matcher.delete_relations_by_card_id(card_id)
         if rel_count > 0:
             logger.info(f"删除卡券 {card_id} 的 {rel_count} 条关联记录")
-        
-        stmt = delete(Card).where(Card.id == card_id, Card.user_id == user_id)
+
+        stmt = delete(Card).where(Card.id == card_id)
+        if user_id is not None:
+            stmt = stmt.where(Card.user_id == user_id)
         result = await self.session.execute(stmt)
         await self.session.commit()
         return result.rowcount > 0
 
-    async def batch_delete_cards(self, card_ids: List[int], user_id: int) -> int:
-        """批量删除卡券（同时删除关联表记录）"""
+    async def batch_delete_cards(self, card_ids: List[int], user_id: int | None) -> int:
+        """批量删除卡券（同时删除关联表记录）
+
+        user_id 为 None 时不限制归属（管理员语义，可删除任意卡券）。
+        """
         # 先批量删除关联表记录
         matcher = CardMatcher(self.session)
         for card_id in card_ids:
             rel_count = await matcher.delete_relations_by_card_id(card_id)
             if rel_count > 0:
                 logger.info(f"删除卡券 {card_id} 的 {rel_count} 条关联记录")
-        
-        stmt = delete(Card).where(Card.id.in_(card_ids), Card.user_id == user_id)
+
+        stmt = delete(Card).where(Card.id.in_(card_ids))
+        if user_id is not None:
+            stmt = stmt.where(Card.user_id == user_id)
         result = await self.session.execute(stmt)
         await self.session.commit()
         return result.rowcount

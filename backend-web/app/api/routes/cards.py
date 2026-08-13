@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +16,8 @@ from common.utils.auth_scope import resolve_owner_scope
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
 from app.services.card_service import CardService
 from app.services.selectable_card_service import SelectableCardService
+from app.services.card_export_service import CardExportService
+from app.services.card_import_service import CardImportService
 
 router = APIRouter(tags=["cards"])
 
@@ -273,6 +277,145 @@ async def create_card(
     return {"id": card_id, "message": "卡券创建成功"}
 
 
+# ==================== 卡券导入导出 ====================
+# 注意：/export 必须定义在 /{card_id} 之前，否则 "export" 会被当作 card_id 解析
+
+
+@router.get("/export")
+async def export_cards(
+    include_relations: bool = Query(default=False, description="是否包含卡券商品关联信息"),
+    account_ids: str = Query(default="", description="关联信息按账号过滤的账号ID列表（逗号分隔，空=全部账号）"),
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+):
+    """导出卡券为 Excel。
+
+    - include_relations=false：只导出卡券
+    - include_relations=true：同时导出「卡券商品关联」Sheet，
+      可按闲鱼账号过滤（account_ids），只导出所选账号商品的关联信息
+    """
+    user_id, _ = resolve_owner_scope(current_user)
+    ids = [a.strip() for a in account_ids.split(",") if a.strip()]
+    try:
+        service = CardExportService(session)
+        content = await service.export_cards(
+            owner_id=user_id,
+            include_relations=include_relations,
+            account_ids=ids or None,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)[:300]}")
+
+    filename = CardExportService.build_filename()
+    disposition = f"attachment; filename*=UTF-8''{quote(filename)}"
+    return StreamingResponse(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": disposition},
+    )
+
+
+@router.post("/import-preview")
+async def preview_cards_import(
+    file: UploadFile = File(..., description="Excel 文件（.xlsx）"),
+    include_relations: bool = Form(default=False, description="是否解析卡券商品关联信息"),
+    account_ids: str = Form(default="", description="关联信息按账号过滤的账号ID列表（逗号分隔，空=全部账号）"),
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+):
+    """解析导入的 Excel 文件，返回预览数据（卡券列表 + 关联列表）供勾选导入。
+
+    - 卡券项：{index, name, type, spec_name, spec_value, description, exists}
+      exists=true 表示目标库已存在同名同规格卡券（导入时为更新）
+    - 关联项：{index, card_name, item_id, source, account_ids, in_scope}
+      account_ids 为该商品归属的闲鱼账号；in_scope=false 表示不在所选账号过滤范围内
+    """
+    filename = file.filename or "cards.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        return {"success": False, "message": "仅支持 .xlsx 格式的 Excel 文件", "data": None}
+
+    content = await file.read()
+    if not content:
+        return {"success": False, "message": "上传的文件为空", "data": None}
+
+    # 注意：导入的新卡券归属当前登录用户，必须用 current_user.id 而非
+    # resolve_owner_scope（管理员返回 None，会导致 xy_cards.user_id 为 NULL）。
+    # 重复检测范围：管理员全库按名称匹配（不限归属），普通用户仅限本人。
+    _, is_admin = resolve_owner_scope(current_user)
+    ids = [a.strip() for a in account_ids.split(",") if a.strip()]
+    service = CardImportService(
+        session,
+        owner_id=current_user.id,
+        match_owner_id=None if is_admin else current_user.id,
+    )
+    return await service.preview_cards(
+        file_content=content,
+        include_relations=include_relations,
+        account_ids=ids or None,
+    )
+
+
+@router.post("/import")
+async def import_cards(
+    file: UploadFile = File(..., description="Excel 文件（.xlsx）"),
+    include_relations: bool = Form(default=False, description="是否导入卡券商品关联信息"),
+    account_ids: str = Form(default="", description="关联信息按账号过滤的账号ID列表（逗号分隔，空=全部账号）"),
+    card_indexes: str = Form(default="", description="只导入指定行号的卡券（逗号分隔，空=全部，行号来自预览结果）"),
+    relation_indexes: str = Form(default="", description="只导入指定行号的关联（逗号分隔，空=全部，行号来自预览结果）"),
+    duplicate_mode: str = Form(default="overwrite", description="重复卡券处理方式：overwrite=覆盖更新，skip=跳过不更新"),
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+):
+    """导入卡券 Excel 文件（支持按预览行号选择性导入）。
+
+    - include_relations=false：只导入卡券
+    - include_relations=true：同时导入「卡券商品关联」Sheet，
+      可按闲鱼账号过滤（account_ids），只导入所选账号商品的关联信息
+    - card_indexes / relation_indexes：来自 /import-preview 的行号列表，
+      只导入勾选的行；为空则导入全部
+    - duplicate_mode：对已存在的卡券（同名同规格），overwrite=覆盖更新（默认），
+      skip=跳过不更新
+    """
+    filename = file.filename or "cards.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        return {"success": False, "message": "仅支持 .xlsx 格式的 Excel 文件", "data": None}
+
+    content = await file.read()
+    if not content:
+        return {"success": False, "message": "上传的文件为空", "data": None}
+
+    def _parse_indexes(raw: str) -> list[int] | None:
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if not parts:
+            return None
+        result = []
+        for p in parts:
+            try:
+                result.append(int(p))
+            except ValueError:
+                continue
+        return result or None
+
+    # 注意：导入的新卡券归属当前登录用户，必须用 current_user.id 而非
+    # resolve_owner_scope（管理员返回 None，会导致 xy_cards.user_id 为 NULL）。
+    # 重复检测范围：管理员全库按名称匹配（不限归属），普通用户仅限本人。
+    _, is_admin = resolve_owner_scope(current_user)
+    ids = [a.strip() for a in account_ids.split(",") if a.strip()]
+    service = CardImportService(
+        session,
+        owner_id=current_user.id,
+        match_owner_id=None if is_admin else current_user.id,
+    )
+    return await service.import_cards(
+        file_content=content,
+        include_relations=include_relations,
+        account_ids=ids or None,
+        card_indexes=_parse_indexes(card_indexes),
+        relation_indexes=_parse_indexes(relation_indexes),
+        duplicate_mode=duplicate_mode,
+    )
+
+
 @router.get("/{card_id}")
 async def get_card(
     card_id: int,
@@ -302,12 +445,14 @@ async def update_card(
 
     update_data = card_data.model_dump(exclude_unset=True)
     # type字段保持不变，模型字段就是type
-    
+
+    # 管理员可更新任意卡券（user_id=None 不限归属），普通用户仅限本人
+    user_id, _ = resolve_owner_scope(current_user)
     try:
-        success = await card_service.update_card(card_id, current_user.id, **update_data)
+        success = await card_service.update_card(card_id, user_id, **update_data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
+
     if success:
         return {"message": "卡券更新成功"}
     raise HTTPException(status_code=404, detail="卡券不存在")
@@ -319,8 +464,9 @@ async def delete_card(
     current_user: User = Depends(deps.get_current_active_user),
     card_service: CardService = Depends(get_card_service),
 ):
-    """删除卡券"""
-    success = await card_service.delete_card(card_id, current_user.id)
+    """删除卡券（管理员可删除任意卡券，普通用户仅限本人）"""
+    user_id, _ = resolve_owner_scope(current_user)
+    success = await card_service.delete_card(card_id, user_id)
     if success:
         return {"message": "卡券删除成功"}
     raise HTTPException(status_code=404, detail="卡券不存在")
@@ -355,8 +501,9 @@ async def batch_delete_cards(
     current_user: User = Depends(deps.get_current_active_user),
     card_service: CardService = Depends(get_card_service),
 ):
-    """批量删除卡券"""
-    success_count = await card_service.batch_delete_cards(request.ids, current_user.id)
+    """批量删除卡券（管理员可删除任意卡券，普通用户仅限本人）"""
+    user_id, _ = resolve_owner_scope(current_user)
+    success_count = await card_service.batch_delete_cards(request.ids, user_id)
     
     return ApiResponse(
         success=True,

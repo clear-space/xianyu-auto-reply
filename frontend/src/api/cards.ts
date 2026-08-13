@@ -199,3 +199,134 @@ export const updateItemCards = (
 export const batchClearItemRelations = (itemIds: string[]): Promise<ApiResponse> => {
   return post(`${CARD_PREFIX}/batch-clear-item-relations`, { item_ids: itemIds })
 }
+
+// ========== 卡券导入导出 ==========
+
+/** 导出卡券 Excel 文件（返回 blob）
+ * @param includeRelations 是否包含「卡券商品关联」Sheet
+ * @param accountIds 关联信息按账号过滤（空数组 = 全部账号）
+ */
+export const exportCards = async (
+  includeRelations: boolean,
+  accountIds: string[] = [],
+): Promise<{ success: boolean; blob?: Blob; filename?: string; message?: string }> => {
+  const token = localStorage.getItem('auth_token')
+  const params = new URLSearchParams()
+  params.set('include_relations', String(includeRelations))
+  if (includeRelations && accountIds.length > 0) {
+    params.set('account_ids', accountIds.join(','))
+  }
+  const response = await fetch(`${CARD_PREFIX}/export?${params.toString()}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+
+  const contentType = response.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) {
+    const data = await response.json()
+    return { success: false, message: data?.detail || data?.message || '导出失败' }
+  }
+
+  const blob = await response.blob()
+  const disposition = response.headers.get('content-disposition') || ''
+  const match = disposition.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i)
+  const filename = match ? decodeURIComponent(match[1]) : 'cards_export.xlsx'
+  return { success: true, blob, filename }
+}
+
+/** 卡券导入结果统计 */
+export interface CardImportStats {
+  card_inserted: number
+  card_updated: number
+  card_skipped_duplicate: number
+  relation_inserted: number
+  relation_skipped_exists: number
+  relation_skipped_account: number
+  errors: string[]
+}
+
+/** 重复卡券处理方式 */
+export type CardDuplicateMode = 'overwrite' | 'skip'
+
+/** 导入预览：卡券项 */
+export interface CardPreviewItem {
+  index: number
+  name: string
+  type: string
+  spec_name: string
+  spec_value: string
+  description: string
+  exists: boolean  // 目标库已存在同名同规格卡券（导入时为更新）
+}
+
+/** 导入预览：关联项 */
+export interface RelationPreviewItem {
+  index: number
+  card_name: string
+  item_id: string
+  source: string
+  account_ids: string[]  // 该商品归属的闲鱼账号
+  in_scope: boolean      // 是否在所选账号过滤范围内
+}
+
+/** 导入预览结果 */
+export interface CardImportPreview {
+  cards: CardPreviewItem[]
+  relations: RelationPreviewItem[]
+}
+
+/** 解析导入 Excel 文件，返回预览数据（供勾选导入） */
+export const previewCardsImport = async (
+  file: File,
+  includeRelations: boolean,
+  accountIds: string[] = [],
+): Promise<{ success: boolean; data?: CardImportPreview; message?: string }> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('include_relations', String(includeRelations))
+  if (includeRelations && accountIds.length > 0) {
+    formData.append('account_ids', accountIds.join(','))
+  }
+  const result = await post<{ success: boolean; data?: CardImportPreview; message?: string }>(
+    `${CARD_PREFIX}/import-preview`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 },  // 2 分钟超时
+  )
+  return { success: Boolean(result.success), data: result.data, message: result.message }
+}
+
+/** 导入卡券 Excel 文件
+ * @param file Excel 文件
+ * @param includeRelations 是否导入「卡券商品关联」Sheet
+ * @param accountIds 关联信息按账号过滤（空数组 = 全部账号）
+ * @param cardIndexes 只导入指定行号的卡券（来自预览，空数组 = 全部）
+ * @param relationIndexes 只导入指定行号的关联（来自预览，空数组 = 全部）
+ * @param duplicateMode 重复卡券处理：overwrite=覆盖更新，skip=跳过
+ */
+export const importCards = async (
+  file: File,
+  includeRelations: boolean,
+  accountIds: string[] = [],
+  cardIndexes: number[] = [],
+  relationIndexes: number[] = [],
+  duplicateMode: CardDuplicateMode = 'overwrite',
+): Promise<{ success: boolean; data?: CardImportStats; message?: string }> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('include_relations', String(includeRelations))
+  if (includeRelations && accountIds.length > 0) {
+    formData.append('account_ids', accountIds.join(','))
+  }
+  if (cardIndexes.length > 0) {
+    formData.append('card_indexes', cardIndexes.join(','))
+  }
+  if (relationIndexes.length > 0) {
+    formData.append('relation_indexes', relationIndexes.join(','))
+  }
+  formData.append('duplicate_mode', duplicateMode)
+  const result = await post<{ success: boolean; data?: CardImportStats; message?: string }>(
+    `${CARD_PREFIX}/import`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 300000 },  // 5 分钟超时
+  )
+  return { success: Boolean(result.success), data: result.data, message: result.message }
+}
