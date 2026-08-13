@@ -41,6 +41,7 @@ import {
   type PreviewResult,
   type RestoreCategoryInfo,
   type RestoreExecuteResult,
+  type RestoreMode,
   type RestoreParseResult,
 } from '@/api/admin'
 import { PageLoading } from '@/components/common/Loading'
@@ -87,8 +88,9 @@ export function DbRestore() {
   const [parseResult, setParseResult] = useState<RestoreParseResult | null>(null)
   const [parseError, setParseError] = useState('')
 
-  // ---- Step 2: category selection ----
-  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set())
+  // ---- Step 2: restore mode selection ----
+  const [restoreMode, setRestoreMode] = useState<RestoreMode>('all')
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set())
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set())
   const [confirmed, setConfirmed] = useState(false)
 
@@ -126,7 +128,8 @@ export function DbRestore() {
     setSelectedExistingFile('')
     setParseResult(null)
     setParseError('')
-    setSelectedCategories(new Set())
+    setRestoreMode('all')
+    setSelectedAccountIds(new Set())
     setExpandedCategories(new Set())
     setConfirmed(false)
     setExecuteResult(null)
@@ -237,26 +240,26 @@ export function DbRestore() {
     }
   }
 
-  // ---- Toggle category selection ----
-  const toggleCategory = (key: string) => {
-    setSelectedCategories((prev) => {
+  // ---- Toggle account selection（按账号恢复模式） ----
+  const toggleAccount = (accountId: string) => {
+    setSelectedAccountIds((prev) => {
       const next = new Set(prev)
-      if (next.has(key)) {
-        next.delete(key)
+      if (next.has(accountId)) {
+        next.delete(accountId)
       } else {
-        next.add(key)
+        next.add(accountId)
       }
       return next
     })
   }
 
-  const toggleAllCategories = () => {
+  const toggleAllAccounts = () => {
     if (!parseResult) return
-    const allKeys = parseResult.categories.map((c) => c.key)
-    if (selectedCategories.size === allKeys.length) {
-      setSelectedCategories(new Set())
+    const allIds = parseResult.accounts.map((a) => a.account_id)
+    if (selectedAccountIds.size === allIds.length) {
+      setSelectedAccountIds(new Set())
     } else {
-      setSelectedCategories(new Set(allKeys))
+      setSelectedAccountIds(new Set(allIds))
     }
   }
 
@@ -271,11 +274,17 @@ export function DbRestore() {
 
   // ---- Execute restore ----
   const handleExecute = async () => {
-    if (!parseResult || selectedCategories.size === 0) return
+    if (!parseResult) return
+    if (restoreMode === 'selected_accounts' && selectedAccountIds.size === 0) return
     setStep('executing')
     setExecuteError('')
     try {
-      const res = await executeRestore(parseResult.reference_id, Array.from(selectedCategories))
+      const res = await executeRestore(
+        parseResult.reference_id,
+        [],
+        restoreMode,
+        restoreMode === 'selected_accounts' ? Array.from(selectedAccountIds) : [],
+      )
       if (res.success && res.data) {
         setExecuteResult(res.data)
       } else {
@@ -289,9 +298,14 @@ export function DbRestore() {
   }
 
   // ---- Derived ----
-  const allSelected = parseResult
-    ? selectedCategories.size === parseResult.categories.length && parseResult.categories.length > 0
+  const allAccountsSelected = parseResult
+    ? parseResult.accounts.length > 0 && selectedAccountIds.size === parseResult.accounts.length
     : false
+
+  // 执行按钮可用性
+  const canExecute = restoreMode === 'selected_accounts'
+    ? confirmed && selectedAccountIds.size > 0
+    : confirmed
 
   // ---- Initial load guard ----
   if (!_hasHydrated || !isAuthenticated || !token) {
@@ -584,49 +598,155 @@ export function DbRestore() {
     if (!parseResult) return null
     return (
       <>
-        {/* Category checklist */}
+        {/* Restore mode selection */}
         <div className="vben-card mb-4">
           <div className="vben-card-header">
-            <h2 className="vben-card-title">选择要恢复的数据分类</h2>
-            <span className="badge-primary">{selectedCategories.size} / {parseResult.categories.length} 已选</span>
+            <h2 className="vben-card-title">选择恢复模式</h2>
           </div>
-          <div className="vben-card-body">
-            {/* Select all */}
-            <label className="flex items-center gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors mb-3">
+          <div className="vben-card-body space-y-3">
+            <label
+              className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                restoreMode === 'all'
+                  ? 'border-blue-300 bg-blue-50/60 dark:border-blue-700 dark:bg-blue-900/20'
+                  : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50'
+              }`}
+            >
               <input
-                type="checkbox"
-                checked={allSelected}
-                onChange={toggleAllCategories}
-                className="w-4 h-4 rounded accent-blue-500"
+                type="radio"
+                name="restore-mode"
+                checked={restoreMode === 'all'}
+                onChange={() => setRestoreMode('all')}
+                className="mt-0.5 w-4 h-4 accent-blue-500"
               />
-              <div>
-                <p className="font-semibold text-blue-700 dark:text-blue-400">全部数据</p>
-                <p className="text-xs text-blue-500/70">{parseResult.total_tables} 张表</p>
+              <div className="flex-1">
+                <p className="font-medium text-sm text-slate-900 dark:text-slate-100">全部恢复</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  恢复备份中的全部数据（系统账号密码除外）。适用于整库迁移。
+                </p>
               </div>
             </label>
 
-            <div className="space-y-2">
-              {parseResult.categories.map((cat) => (
-                <CategoryCheckRow
-                  key={cat.key}
-                  category={cat}
-                  selected={selectedCategories.has(cat.key)}
-                  expanded={expandedCategories.has(cat.key)}
-                  onToggle={() => toggleCategory(cat.key)}
-                  onToggleExpand={() => toggleExpandCategory(cat.key)}
-                  disabled={allSelected}
-                />
-              ))}
-            </div>
+            <label
+              className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                restoreMode === 'shared'
+                  ? 'border-blue-300 bg-blue-50/60 dark:border-blue-700 dark:bg-blue-900/20'
+                  : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50'
+              }`}
+            >
+              <input
+                type="radio"
+                name="restore-mode"
+                checked={restoreMode === 'shared'}
+                onChange={() => setRestoreMode('shared')}
+                className="mt-0.5 w-4 h-4 accent-blue-500"
+              />
+              <div className="flex-1">
+                <p className="font-medium text-sm text-slate-900 dark:text-slate-100">恢复公用数据</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  只恢复系统配置、卡券、商品素材、广告、分销财务等公用数据，
+                  不包含闲鱼账号独有内容（关键词规则、默认回复、订单等）。
+                </p>
+              </div>
+            </label>
+
+            <label
+              className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                restoreMode === 'selected_accounts'
+                  ? 'border-blue-300 bg-blue-50/60 dark:border-blue-700 dark:bg-blue-900/20'
+                  : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50'
+              }`}
+            >
+              <input
+                type="radio"
+                name="restore-mode"
+                checked={restoreMode === 'selected_accounts'}
+                onChange={() => setRestoreMode('selected_accounts')}
+                className="mt-0.5 w-4 h-4 accent-blue-500"
+              />
+              <div className="flex-1">
+                <p className="font-medium text-sm text-slate-900 dark:text-slate-100">按账号恢复</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  恢复公用数据 + 所选闲鱼账号的数据（账号配置、关键词规则、默认回复等）。
+                  不影响目标环境中的其他账号。
+                </p>
+              </div>
+            </label>
           </div>
         </div>
+
+        {/* Account selection (按账号恢复模式) */}
+        {restoreMode === 'selected_accounts' && (
+          <div className="vben-card mb-4">
+            <div className="vben-card-header">
+              <h2 className="vben-card-title">选择要恢复的闲鱼账号</h2>
+              <span className="badge-primary">
+                {selectedAccountIds.size} / {parseResult.accounts.length} 已选
+              </span>
+            </div>
+            <div className="vben-card-body">
+              {parseResult.accounts.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-sm">
+                  备份文件中没有找到闲鱼账号数据
+                </div>
+              ) : (
+                <>
+                  {/* Select all */}
+                  <label className="flex items-center gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors mb-3">
+                    <input
+                      type="checkbox"
+                      checked={allAccountsSelected}
+                      onChange={toggleAllAccounts}
+                      className="w-4 h-4 rounded accent-blue-500"
+                    />
+                    <div>
+                      <p className="font-semibold text-sm text-blue-700 dark:text-blue-400">全选</p>
+                      <p className="text-xs text-blue-500/70">选择备份中的全部闲鱼账号</p>
+                    </div>
+                  </label>
+
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                    {parseResult.accounts.map((acc) => (
+                      <label
+                        key={acc.account_id}
+                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                          selectedAccountIds.has(acc.account_id)
+                            ? 'border-blue-200 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-900/10'
+                            : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedAccountIds.has(acc.account_id)}
+                          onChange={() => toggleAccount(acc.account_id)}
+                          className="w-4 h-4 rounded accent-blue-500"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm text-slate-900 dark:text-slate-100 truncate">
+                            {acc.display_name || acc.account_id}
+                          </p>
+                          <p className="text-xs text-slate-500 truncate">
+                            账号ID: {acc.account_id}
+                            {acc.unb ? ` · UNB: ${acc.unb}` : ''}
+                          </p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Warning */}
         <div className="p-4 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 flex items-start gap-3 mb-4">
           <ShieldAlert className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
           <div className="text-sm text-amber-700 dark:text-amber-400">
-            <p className="font-medium">警告：恢复操作将覆盖当前数据库中的对应表数据，此操作不可撤销。</p>
-            <p className="mt-1">请确认已做好必要的数据备份。建议先在测试环境验证备份文件的完整性。</p>
+            <p className="font-medium">警告：恢复操作将覆盖当前数据库中的对应数据，此操作不可撤销。</p>
+            <p className="mt-1">
+              系统账号密码不会被恢复，当前登录态不受影响。闲鱼账号的 Cookie 可能已过期，
+              恢复后账号需要重新登录刷新。
+            </p>
           </div>
         </div>
 
@@ -650,7 +770,7 @@ export function DbRestore() {
           </button>
           <button
             onClick={handleExecute}
-            disabled={!confirmed || selectedCategories.size === 0}
+            disabled={!canExecute}
             className="btn-ios-primary bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RotateCcw className="w-4 h-4" />
@@ -728,6 +848,31 @@ export function DbRestore() {
               </div>
             </div>
 
+            {/* Account results (按账号恢复模式) */}
+            {executeResult.account_results && (
+              <div className="mb-4 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+                <p className="font-medium text-blue-700 dark:text-blue-400 mb-2">账号恢复结果</p>
+                <div className="space-y-1 text-sm">
+                  <p className="text-slate-600 dark:text-slate-300">
+                    已恢复账号：
+                    <span className="font-medium">
+                      {executeResult.account_results.restored_accounts.length > 0
+                        ? executeResult.account_results.restored_accounts.join(', ')
+                        : '无'}
+                    </span>
+                  </p>
+                  {executeResult.account_results.missing_accounts.length > 0 && (
+                    <p className="text-amber-600 dark:text-amber-400">
+                      备份中未找到的账号：
+                      <span className="font-medium">
+                        {executeResult.account_results.missing_accounts.join(', ')}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Failed tables */}
             {hasFailures && (
               <div className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
@@ -796,7 +941,7 @@ export function DbRestore() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="page-title">数据库恢复</h1>
-          <p className="page-description">从备份文件恢复数据库，支持按数据分类选择性恢复</p>
+          <p className="page-description">从备份文件恢复数据库，支持全部恢复、恢复公用数据、按账号恢复三种模式</p>
         </div>
         {step !== 'executing' && (
           <button onClick={resetAll} className="btn-ios-secondary">
@@ -851,65 +996,6 @@ function CategoryCard({
       </div>
       {expanded && (
         <div className="mt-2 space-y-1 max-h-[160px] overflow-y-auto">
-          {category.tables.map((t) => (
-            <div key={t.name} className="flex items-center gap-1.5 text-xs">
-              <span className="font-mono text-slate-600 dark:text-slate-300">{t.name}</span>
-              {t.has_data ? (
-                <span className="px-1 py-0.5 text-[10px] rounded bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">含数据</span>
-              ) : (
-                <span className="px-1 py-0.5 text-[10px] rounded bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">仅结构</span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** Category checkbox row for configure step */
-function CategoryCheckRow({
-  category,
-  selected,
-  expanded,
-  onToggle,
-  onToggleExpand,
-  disabled,
-}: {
-  category: RestoreCategoryInfo
-  selected: boolean
-  expanded: boolean
-  onToggle: () => void
-  onToggleExpand: () => void
-  disabled: boolean
-}) {
-  return (
-    <div className={`rounded-lg border transition-colors ${
-      selected
-        ? 'border-blue-200 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-900/10'
-        : 'border-slate-200 dark:border-slate-700'
-    }`}>
-      <div className="flex items-center gap-3 p-3">
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggle}
-          disabled={disabled}
-          className="w-4 h-4 rounded accent-blue-500"
-        />
-        <div className="flex-1 cursor-pointer" onClick={onToggle}>
-          <p className="font-medium text-sm text-slate-900 dark:text-slate-100">{category.label}</p>
-          <p className="text-xs text-slate-500">{category.table_count} 张表</p>
-        </div>
-        <button
-          onClick={onToggleExpand}
-          className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-        >
-          {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-        </button>
-      </div>
-      {expanded && (
-        <div className="px-8 pb-3 space-y-1 max-h-[200px] overflow-y-auto">
           {category.tables.map((t) => (
             <div key={t.name} className="flex items-center gap-1.5 text-xs">
               <span className="font-mono text-slate-600 dark:text-slate-300">{t.name}</span>

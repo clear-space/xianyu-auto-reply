@@ -31,7 +31,9 @@ class ParseExistingRequest(BaseModel):
 
 class ExecuteRequest(BaseModel):
     reference_id: str = Field(..., description="解析阶段返回的 reference_id")
-    categories: list[str] = Field(..., min_length=1, description="要恢复的分类 key 列表")
+    categories: list[str] = Field(default_factory=list, description="旧版：要恢复的分类 key 列表（与 mode 二选一）")
+    mode: str | None = Field(None, description="恢复模式: all(全部恢复) / shared(恢复公用数据) / selected_accounts(按账号恢复)")
+    account_ids: list[str] = Field(default_factory=list, description="按账号恢复模式时选择的闲鱼账号 account_id 列表")
 
 
 class PreviewRequest(BaseModel):
@@ -72,6 +74,7 @@ async def upload_and_parse(
     try:
         result = RestoreService.parse_backup_file(file_path)
         result["reference_id"] = file_path.name
+        result["accounts"] = RestoreService.parse_accounts(file_path)
         return {"success": True, "data": result}
     except ValueError as exc:
         # 解析失败时清理文件
@@ -102,6 +105,7 @@ async def parse_existing(
     try:
         result = RestoreService.parse_backup_file(file_path)
         result["reference_id"] = body.file_name
+        result["accounts"] = RestoreService.parse_accounts(file_path)
         return {"success": True, "data": result}
     except ValueError as exc:
         return {"success": False, "message": str(exc), "data": None}
@@ -199,10 +203,15 @@ async def execute_restore(
     _: User = Depends(deps.get_current_admin_user),
     service: RestoreService = Depends(deps.get_restore_service),
 ) -> dict:
-    """按选定的分类执行数据库恢复。
+    """按选定的模式或分类执行数据库恢复。
 
-    恢复将覆盖当前数据库中的对应表数据。
-    单表失败不影响其他表，失败详情在 failed_tables 中返回。
+    新版模式（mode）:
+    - all: 全部恢复（备份中所有表，系统账号表除外）
+    - shared: 恢复公用数据（跳过闲鱼账号独有内容）
+    - selected_accounts: 按账号恢复（公用数据 + 所选闲鱼账号的数据）
+
+    旧版分类（categories）继续兼容：不传 mode 时按分类恢复。
+    恢复将覆盖当前数据库中的对应表数据；单表失败不影响其他表。
     """
     # 解析文件路径
     try:
@@ -210,19 +219,45 @@ async def execute_restore(
     except (ValueError, FileNotFoundError) as exc:
         return {"success": False, "message": str(exc), "data": None}
 
-    # 验证分类
-    valid_categories = set(RESTORE_CATEGORY_MAP.keys())
-    invalid = [c for c in body.categories if c not in valid_categories]
-    if invalid:
-        return {
-            "success": False,
-            "message": f"无效的恢复类别: {', '.join(invalid)}",
-            "data": None,
-        }
-
     try:
-        result = await service.execute_restore(file_path, body.categories)
-        result["categories_restored"] = body.categories
+        if body.mode:
+            # 新版模式恢复
+            valid_modes = ("all", "shared", "selected_accounts")
+            if body.mode not in valid_modes:
+                return {
+                    "success": False,
+                    "message": f"无效的恢复模式: {body.mode}（可选值: {', '.join(valid_modes)}）",
+                    "data": None,
+                }
+            if body.mode == "selected_accounts" and not body.account_ids:
+                return {
+                    "success": False,
+                    "message": "按账号恢复模式需要至少选择一个闲鱼账号",
+                    "data": None,
+                }
+            result = await service.execute_restore(
+                file_path,
+                mode=body.mode,
+                account_ids=body.account_ids,
+            )
+        else:
+            # 旧版分类恢复
+            if not body.categories:
+                return {
+                    "success": False,
+                    "message": "未指定恢复模式或恢复分类",
+                    "data": None,
+                }
+            valid_categories = set(RESTORE_CATEGORY_MAP.keys())
+            invalid = [c for c in body.categories if c not in valid_categories]
+            if invalid:
+                return {
+                    "success": False,
+                    "message": f"无效的恢复类别: {', '.join(invalid)}",
+                    "data": None,
+                }
+            result = await service.execute_restore(file_path, body.categories)
+            result["categories_restored"] = body.categories
 
         # 如果是上传的暂存文件，恢复后清理
         if body.reference_id.startswith("upload_"):

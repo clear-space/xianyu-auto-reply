@@ -9,6 +9,7 @@
 
 设计要点：
 - 逐表导出：先 SHOW CREATE TABLE 写建表语句，再分批 SELECT 写 INSERT 语句
+- 系统账号表（xy_users）按策略排除，不备份系统账号密码；恢复后目标环境保留自己的登录体系
 - 日志类表（_log / _logs 结尾）数据量大且恢复价值低，仅备份结构、跳过数据
 - 分批读取（每批 1000 行），避免大表一次性载入内存
 - 单表失败不中断整体备份，记录到错误信息中
@@ -38,6 +39,11 @@ _BATCH_SIZE = 1000
 
 # 备份保留天数默认值（当 xy_system_settings 中未配置 db_backup.retention_days 时使用）
 _DEFAULT_RETENTION_DAYS = 10
+
+# 备份时排除的表（系统账号密码不外泄，也不参与恢复；迁移后目标环境保留自己的登录体系）
+_EXCLUDED_TABLES: frozenset[str] = frozenset({
+    "xy_users",
+})
 
 
 def _is_log_table(table: str) -> bool:
@@ -91,6 +97,14 @@ class DbBackupTaskService:
                 if not tables:
                     logger.warning(f"【{self.task_name}】未查询到任何数据表，跳过备份")
                 else:
+                    # 排除系统账号表（不备份系统账号密码；恢复后目标环境保留自己的登录体系）
+                    excluded = [t for t in tables if t in _EXCLUDED_TABLES]
+                    tables = [t for t in tables if t not in _EXCLUDED_TABLES]
+                    if excluded:
+                        logger.info(
+                            f"【{self.task_name}】按策略跳过 {len(excluded)} 张排除表: "
+                            f"{', '.join(sorted(excluded))}"
+                        )
                     logger.info(f"【{self.task_name}】共 {len(tables)} 张表待备份")
 
                 # 以 gzip 文本模式写入，边导出边落盘，降低内存占用
@@ -178,7 +192,8 @@ class DbBackupTaskService:
         fp.write(f"-- 数据库备份文件\n")
         fp.write(f"-- 数据库: {database}\n")
         fp.write(f"-- 备份时间(北京时间): {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        fp.write("-- 说明: 本文件由定时任务自动生成。普通表备份结构与数据，日志表仅备份结构\n\n")
+        fp.write("-- 说明: 本文件由定时任务自动生成。普通表备份结构与数据，日志表仅备份结构\n")
+        fp.write(f"-- 排除表: {', '.join(sorted(_EXCLUDED_TABLES))}（系统账号密码不备份）\n\n")
         fp.write("SET NAMES utf8mb4;\n")
         fp.write("SET FOREIGN_KEY_CHECKS=0;\n\n")
 

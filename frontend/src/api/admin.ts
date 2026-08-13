@@ -527,16 +527,30 @@ export interface RestoreCategoryInfo {
   tables: RestoreTableInfo[]
 }
 
+/** 备份文件中的闲鱼账号信息（按账号恢复模式用） */
+export interface RestoreAccountInfo {
+  account_id: string
+  display_name: string
+  unb: string
+  id: number | null
+}
+
 export interface RestoreParseResult {
   reference_id: string
   source_file: string
   total_tables: number
   categories: RestoreCategoryInfo[]
+  accounts: RestoreAccountInfo[]
 }
 
 export interface RestoreFailedTable {
   table: string
   error: string
+}
+
+export interface RestoreAccountResults {
+  restored_accounts: string[]
+  missing_accounts: string[]
 }
 
 export interface RestoreExecuteResult {
@@ -545,8 +559,12 @@ export interface RestoreExecuteResult {
   failed_tables: RestoreFailedTable[]
   total_duration_ms: number
   total_rows_inserted: number
-  categories_restored: string[]
+  categories_restored?: string[]
+  account_results?: RestoreAccountResults
 }
+
+/** 恢复模式 */
+export type RestoreMode = 'all' | 'shared' | 'selected_accounts'
 
 export interface BackupFileItem {
   name: string
@@ -648,14 +666,21 @@ export const downloadBackupFile = async (
   return { success: true, blob, filename }
 }
 
-/** 执行数据库恢复 */
+/** 执行数据库恢复（新版模式：all/shared/selected_accounts） */
 export const executeRestore = async (
   referenceId: string,
-  categories: string[],
+  categories?: string[],
+  mode?: RestoreMode,
+  accountIds?: string[],
 ): Promise<{ success: boolean; data?: RestoreExecuteResult; message?: string }> => {
   const result = await post<{ success: boolean; data?: RestoreExecuteResult; message?: string }>(
     `${RESTORE_PREFIX}/execute`,
-    { reference_id: referenceId, categories },
+    {
+      reference_id: referenceId,
+      categories: categories || [],
+      mode: mode || null,
+      account_ids: accountIds || [],
+    },
     { timeout: 600000 },  // 10 分钟超时
   )
   return { success: Boolean(result.success), data: result.data, message: result.message }
