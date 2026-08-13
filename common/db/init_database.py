@@ -1759,10 +1759,48 @@ class DatabaseInitializer:
                 INDEX idx_psl_batch (batch_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时发布执行记录表';
         """,
+        "xy_offline_schedules": """
+            CREATE TABLE IF NOT EXISTS xy_offline_schedules (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                user_id BIGINT NOT NULL COMMENT '所属用户ID',
+                name VARCHAR(100) NOT NULL COMMENT '规则名称',
+                age_days INT NOT NULL DEFAULT 7 COMMENT '已上架天数阈值 X',
+                no_order_days INT NOT NULL DEFAULT 7 COMMENT '最近N天无订单 Y',
+                offline_count INT NOT NULL DEFAULT 5 COMMENT '下架数量上限 Z',
+                schedule_mode VARCHAR(20) NOT NULL DEFAULT 'daily' COMMENT '重复模式：daily-每天, weekly-每周',
+                schedule_config JSON NOT NULL COMMENT '时间配置JSON',
+                account_ids JSON NOT NULL COMMENT '闲鱼账号ID列表',
+                enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+                last_triggered_at DATETIME NULL COMMENT '上次触发时间',
+                next_trigger_at DATETIME NULL COMMENT '下次触发时间',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_os_user (user_id),
+                INDEX idx_os_next_trigger (enabled, next_trigger_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自动下架规则表';
+        """,
+        "xy_offline_schedule_logs": """
+            CREATE TABLE IF NOT EXISTS xy_offline_schedule_logs (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                schedule_id BIGINT NOT NULL COMMENT '关联的下架规则ID',
+                executed_at DATETIME NULL COMMENT '实际执行时间',
+                status VARCHAR(20) NOT NULL DEFAULT 'completed' COMMENT '状态',
+                total_count INT DEFAULT 0 COMMENT '筛选出的商品总数',
+                offlined_count INT DEFAULT 0 COMMENT '成功下架数量',
+                offlined_items JSON NULL COMMENT '成功下架的商品编号列表',
+                error_message VARCHAR(1000) NULL COMMENT '失败原因',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_osl_schedule (schedule_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自动下架执行记录表';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_publish_schedule_logs": [
+            ("detail_json", "JSON DEFAULT NULL COMMENT '执行详情'", "error_message"),
+        ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
         ],

@@ -64,6 +64,8 @@ from common.models.xy_personal_blacklist import XYPersonalBlacklist
 from common.models.xy_platform_blacklist import XYPlatformBlacklist
 from common.models.publish_schedule import PublishSchedule
 from common.models.publish_schedule_log import PublishScheduleLog
+from common.models.offline_schedule import OfflineSchedule
+from common.models.offline_schedule_log import OfflineScheduleLog
 from common.models.chat_quick_phrase import ChatQuickPhrase
 
 __all__ = [
@@ -135,4 +137,6 @@ __all__ = [
     "ChatQuickPhrase",
     "PublishSchedule",
     "PublishScheduleLog",
+    "OfflineSchedule",
+    "OfflineScheduleLog",
 ]
