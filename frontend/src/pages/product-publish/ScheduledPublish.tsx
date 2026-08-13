@@ -10,11 +10,13 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Layers, CheckCircle, XCircle } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, getAllScheduleLogs, clearScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type PublishScheduleLog, type ActiveScheduleProgress } from '@/api/productPublish'
+import { getOfflineSchedules, deleteOfflineSchedule, toggleOfflineSchedule, triggerOfflineSchedule, getOfflineScheduleLogs, type OfflineSchedule, type OfflineScheduleLog } from '@/api/productPublish'
+import { OfflineScheduleFormModal } from './OfflineScheduleFormModal'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { ScheduleFormModal } from './ScheduleFormModal'
 
-type Tab = 'rules' | 'history'
+type Tab = 'publish_rules' | 'offline_rules' | 'history'
 
 const MODE_LABELS: Record<string, string> = { once: '单次', daily: '每天', weekly: '每周' }
 const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
@@ -80,7 +82,7 @@ function formatPublishConfig(sc: PublishSchedule): { label: string; cls: string 
 
 export function ScheduledPublish() {
   const { addToast } = useUIStore()
-  const [tab, setTab] = useState<Tab>('rules')
+  const [tab, setTab] = useState<Tab>('publish_rules')
   const [loading, setLoading] = useState(true)
 
   // 规则列表
@@ -95,7 +97,22 @@ export function ScheduledPublish() {
   const [deleteConfirm, setDeleteConfirm] = useState<PublishSchedule | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
+
+  // 下架规则状态
+  const [offlineSchedules, setOfflineSchedules] = useState<OfflineSchedule[]>([])
+  const [offlineTotal, setOfflineTotal] = useState(0)
+  const [offlinePage, setOfflinePage] = useState(1)
+  const [offlineTotalPages, setOfflineTotalPages] = useState(0)
+  const [showOfflineForm, setShowOfflineForm] = useState(false)
+  const [editOfflineTarget, setEditOfflineTarget] = useState<OfflineSchedule | null>(null)
   const [batchDeleting, setBatchDeleting] = useState(false)
+
+  // 执行历史子 tab：发布记录 / 下架记录
+  const [historySubTab, setHistorySubTab] = useState<'publish' | 'offline'>('publish')
+  const [offlineLogs, setOfflineLogs] = useState<OfflineScheduleLog[]>([])
+  const [offlineLogTotal, setOfflineLogTotal] = useState(0)
+  const [offlineLogPage, setOfflineLogPage] = useState(1)
+  const [offlineLogTotalPages, setOfflineLogTotalPages] = useState(0)
 
   // 活跃进度（定时任务执行时的实时进度面板）
   const [activeProgressList, setActiveProgressList] = useState<ActiveScheduleProgress[]>([])
@@ -123,6 +140,17 @@ export function ScheduledPublish() {
     } catch { /* ignore */ }
   }, [page, pageSize])
 
+  const loadOfflineSchedules = useCallback(async (p = offlinePage) => {
+    try {
+      const res = await getOfflineSchedules(p, 20)
+      if (res.success) {
+        setOfflineSchedules(res.data.list)
+        setOfflineTotal(res.data.total)
+        setOfflineTotalPages(res.data.total_pages)
+      }
+    } catch { /* ignore */ }
+  }, [offlinePage])
+
   const loadLogs = useCallback(async (p = logPage) => {
     try {
       const res = await getAllScheduleLogs(p, 20)
@@ -134,14 +162,29 @@ export function ScheduledPublish() {
     } catch { /* ignore */ }
   }, [logPage])
 
+  const loadOfflineLogs = useCallback(async (p = offlineLogPage) => {
+    try {
+      const res = await getOfflineScheduleLogs(p, 20)
+      if (res.success) {
+        setOfflineLogs(res.data.list)
+        setOfflineLogTotal(res.data.total)
+        setOfflineLogTotalPages(res.data.total_pages)
+      }
+    } catch { /* ignore */ }
+  }, [offlineLogPage])
+
   useEffect(() => {
     setLoading(true)
     loadSchedules().finally(() => setLoading(false))
   }, [loadSchedules])
 
   useEffect(() => {
-    if (tab === 'history') loadLogs()
-  }, [tab, loadLogs])
+    if (tab === 'history') {
+      if (historySubTab === 'publish') loadLogs()
+      else loadOfflineLogs()
+    }
+    if (tab === 'offline_rules') loadOfflineSchedules()
+  }, [tab, historySubTab, loadLogs, loadOfflineSchedules, loadOfflineLogs])
 
   // 轮询活跃的定时发布任务进度
   useEffect(() => {
@@ -178,6 +221,7 @@ export function ScheduledPublish() {
   const handleRefresh = () => {
     loadSchedules(page, pageSize)
     if (tab === 'history') loadLogs(logPage)
+    if (tab === 'offline_rules') loadOfflineSchedules(offlinePage)
   }
 
   /** 全选/取消全选当前页 */
@@ -278,6 +322,44 @@ export function ScheduledPublish() {
     finally { setDeleting(false) }
   }
 
+  const handleOfflineToggle = async (s: OfflineSchedule) => {
+    try {
+      const res = await toggleOfflineSchedule(s.id)
+      if (res.success) {
+        addToast({ type: 'success', message: res.message || '操作成功' })
+        loadOfflineSchedules(offlinePage)
+      } else {
+        addToast({ type: 'error', message: res.message || '操作失败' })
+      }
+    } catch { addToast({ type: 'error', message: '操作失败' }) }
+  }
+
+  const handleOfflineTrigger = async (s: OfflineSchedule) => {
+    try {
+      const res = await triggerOfflineSchedule(s.id)
+      if (res.success) {
+        addToast({ type: 'success', message: res.message || '下架完成' })
+        loadOfflineSchedules(offlinePage)
+      } else {
+        addToast({ type: 'error', message: res.message || '触发失败' })
+      }
+    } catch { addToast({ type: 'error', message: '触发失败' }) }
+  }
+
+  const handleOfflineDelete = async (s: OfflineSchedule) => {
+    setDeleting(true)
+    try {
+      const res = await deleteOfflineSchedule(s.id)
+      if (res.success) {
+        addToast({ type: 'success', message: '已删除' })
+        loadOfflineSchedules(offlinePage)
+      } else {
+        addToast({ type: 'error', message: res.message || '删除失败' })
+      }
+    } catch { addToast({ type: 'error', message: '删除失败' }) }
+    finally { setDeleting(false) }
+  }
+
   /** 批量删除 */
   const handleBatchDelete = async () => {
     if (selectedIds.length === 0) return
@@ -341,7 +423,10 @@ export function ScheduledPublish() {
             <RefreshCw className="w-4 h-4" />刷新
           </button>
           <button className="btn-ios-primary" onClick={() => { setEditTarget(null); setShowForm(true) }}>
-            <Plus className="w-4 h-4" />新建规则
+            <Plus className="w-4 h-4" />新建发布规则
+          </button>
+          <button className="btn-ios-primary" onClick={() => { setEditOfflineTarget(null); setShowOfflineForm(true) }}>
+            <Trash2 className="w-4 h-4" />新建下架规则
           </button>
         </div>
       </div>
@@ -349,7 +434,8 @@ export function ScheduledPublish() {
       {/* Tab 切换 */}
       <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg w-fit">
         {([
-          { key: 'rules', label: '定时规则', icon: Clock },
+          { key: 'publish_rules', label: '发布规则', icon: Clock },
+          { key: 'offline_rules', label: '下架规则', icon: Trash2 },
           { key: 'history', label: '执行历史', icon: History },
         ] as { key: Tab; label: string; icon: any }[]).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
@@ -360,15 +446,18 @@ export function ScheduledPublish() {
             }`}>
             <t.icon className="w-4 h-4" />
             {t.label}
-            {t.key === 'rules' && total > 0 && (
+            {t.key === 'publish_rules' && total > 0 && (
               <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded-full">{total}</span>
+            )}
+            {t.key === 'offline_rules' && offlineTotal > 0 && (
+              <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded-full">{offlineTotal}</span>
             )}
           </button>
         ))}
       </div>
 
       {/* Tab 1: 定时规则列表 */}
-      {tab === 'rules' && (
+      {tab === 'publish_rules' && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
           className="vben-card flex flex-col" style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
           <div className="vben-card-header">
@@ -480,13 +569,105 @@ export function ScheduledPublish() {
         </motion.div>
       )}
 
-      {/* Tab 2: 执行历史 */}
+      {/* Tab 2: 下架规则列表 */}
+      {tab === 'offline_rules' && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+          className="vben-card flex flex-col" style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
+          <div className="vben-card-header">
+            <h2 className="vben-card-title"><Trash2 className="w-4 h-4" />下架规则</h2>
+            <span className="badge-primary">共 {offlineTotal} 条</span>
+          </div>
+          <div className="flex-1 overflow-x-auto overflow-y-auto">
+            <table className="table-ios">
+              <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
+                <tr>
+                  <th>规则名称</th>
+                  <th>天数阈值</th>
+                  <th>无订单天数</th>
+                  <th>下架数量</th>
+                  <th>模式</th>
+                  <th>下次触发</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {offlineSchedules.length === 0 ? (
+                  <tr><td colSpan={8} className="text-center py-12 text-slate-400">
+                    <div className="flex flex-col items-center gap-2"><Trash2 className="w-12 h-12 text-slate-300" />
+                      <p>暂无下架规则</p></div>
+                  </td></tr>
+                ) : offlineSchedules.map(s => (
+                  <tr key={s.id}>
+                    <td><span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[150px]" title={s.name}>{s.name}</span></td>
+                    <td><span className="badge-info">&gt; {s.age_days} 天</span></td>
+                    <td className="text-sm text-slate-500">{s.no_order_days} 天无订单</td>
+                    <td><span className="badge-warning">前 {s.offline_count} 个</span></td>
+                    <td><span className="badge-gray">{s.schedule_mode === 'daily' ? '每天' : '每周'}</span></td>
+                    <td>
+                      <span className={`text-sm ${!s.enabled ? 'text-slate-400' : s.next_trigger_at && new Date(s.next_trigger_at).getTime() < Date.now() ? 'text-amber-600 font-medium' : 'text-slate-500'}`}>
+                        {s.enabled ? formatNextTrigger(s.next_trigger_at) : '-'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={s.enabled ? 'badge-success' : 'badge-gray'}>
+                        {s.enabled ? '启用' : '禁用'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="table-actions">
+                        <button className="table-action-btn" title="立即执行" onClick={() => handleOfflineTrigger(s)}>
+                          <Play className="w-4 h-4 text-green-500" />
+                        </button>
+                        <button className="table-action-btn" title="编辑" onClick={() => { setEditOfflineTarget(s); setShowOfflineForm(true) }}>
+                          <Pencil className="w-4 h-4 text-blue-500" />
+                        </button>
+                        <button className="table-action-btn" title={s.enabled ? '禁用' : '启用'} onClick={() => handleOfflineToggle(s)}>
+                          {s.enabled ? <PowerOff className="w-4 h-4 text-amber-500" /> : <Power className="w-4 h-4 text-green-500" />}
+                        </button>
+                        <button className="table-action-btn" title="删除" onClick={() => handleOfflineDelete(s)}>
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {offlineTotalPages > 1 && (
+            <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700">
+              <span className="text-sm text-slate-500">{offlineTotal} 条，第 {offlinePage}/{offlineTotalPages} 页</span>
+              <div className="flex gap-1">
+                <button onClick={() => setOfflinePage(p => Math.max(1, p - 1))} disabled={offlinePage <= 1}
+                  className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50">
+                  <ChevronLeft className="w-4 h-4" /></button>
+                <button onClick={() => setOfflinePage(p => Math.min(offlineTotalPages, p + 1))} disabled={offlinePage >= offlineTotalPages}
+                  className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50">
+                  <ChevronRight className="w-4 h-4" /></button>
+              </div>
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* Tab 3: 执行历史 */}
       {tab === 'history' && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
           className="vben-card flex flex-col" style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
           <div className="vben-card-header">
             <h2 className="vben-card-title"><History className="w-4 h-4" />执行历史</h2>
             <div className="flex items-center gap-2">
+              <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg">
+                <button
+                  onClick={() => setHistorySubTab('publish')}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${historySubTab === 'publish' ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 shadow-sm' : 'text-slate-500'}`}
+                >发布记录</button>
+                <button
+                  onClick={() => setHistorySubTab('offline')}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${historySubTab === 'offline' ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 shadow-sm' : 'text-slate-500'}`}
+                >下架记录</button>
+              </div>
               <button
                 onClick={() => setShowClearLogsConfirm(true)}
                 className="btn-ios-danger btn-sm"
@@ -494,12 +675,14 @@ export function ScheduledPublish() {
               >
                 <Trash2 className="w-3.5 h-3.5" />清空日志
               </button>
-              <button className="btn-ios-secondary btn-sm" onClick={() => loadLogs(logPage)}>
+              <button className="btn-ios-secondary btn-sm" onClick={() => historySubTab === 'publish' ? loadLogs(logPage) : loadOfflineLogs(offlineLogPage)}>
                 <RefreshCw className="w-3.5 h-3.5" />刷新
               </button>
-              <span className="badge-primary">共 {logTotal} 条</span>
+              <span className="badge-primary">共 {historySubTab === 'publish' ? logTotal : offlineLogTotal} 条</span>
             </div>
           </div>
+          {historySubTab === 'publish' ? (
+          <>
           <div className="flex-1 overflow-x-auto overflow-y-auto">
             <table className="table-ios">
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
@@ -532,6 +715,16 @@ export function ScheduledPublish() {
                       <span className="text-green-600">{l.success_count} 成功</span>
                       {l.failed_count > 0 && <span className="text-red-500 ml-1">/ {l.failed_count} 失败</span>}
                       <span className="text-slate-400 ml-1">/ {l.total_count} 总</span>
+                      {l.detail_json && (l.detail_json.success_items?.length || l.detail_json.failed_items?.length) && (
+                        <div className="mt-1 text-xs space-y-0.5 max-w-[260px]">
+                          {l.detail_json.success_items?.map((t, i) => (
+                            <div key={`s${i}`} className="text-green-600 truncate" title={t}>✅ {t}</div>
+                          ))}
+                          {l.detail_json.failed_items?.map((f, i) => (
+                            <div key={`f${i}`} className="text-red-500 truncate" title={f.reason}>❌ {f.title}</div>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <span className={STATUS_CONFIG[l.status]?.cls || 'badge-gray'}>
@@ -555,6 +748,68 @@ export function ScheduledPublish() {
                   <ChevronRight className="w-4 h-4" /></button>
               </div>
             </div>
+          )}
+          </>
+          ) : (
+          <>
+          <div className="flex-1 overflow-x-auto overflow-y-auto">
+            <table className="table-ios">
+              <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
+                <tr>
+                  <th>规则名称</th>
+                  <th>执行时间</th>
+                  <th>下架数量</th>
+                  <th>下架商品编号</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                {offlineLogs.length === 0 ? (
+                  <tr><td colSpan={5} className="text-center py-12 text-slate-400">
+                    <div className="flex flex-col items-center gap-2"><Trash2 className="w-12 h-12 text-slate-300" />
+                      <p>暂无下架记录</p></div>
+                  </td></tr>
+                ) : offlineLogs.map(l => (
+                  <tr key={l.id}>
+                    <td><span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[150px]" title={l.schedule_name}>{l.schedule_name}</span></td>
+                    <td className="text-sm whitespace-nowrap text-slate-500">
+                      {l.executed_at ? new Date(l.executed_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'}
+                    </td>
+                    <td className="text-sm">
+                      <span className="text-green-600">{l.offlined_count} 下架</span>
+                      <span className="text-slate-400 ml-1">/ {l.total_count} 筛选</span>
+                    </td>
+                    <td className="text-sm">
+                      <div className="flex flex-wrap gap-1 max-w-[320px]">
+                        {(l.offlined_items || []).map((code, i) => (
+                          <span key={i} className="badge-gray text-xs">{code}</span>
+                        ))}
+                      </div>
+                    </td>
+                    <td>
+                      <span className={l.status === 'completed' ? 'badge-success' : 'badge-danger'}>
+                        {l.status === 'completed' ? '已完成' : '失败'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {offlineLogTotalPages > 1 && (
+            <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700">
+              <span className="text-sm text-slate-500">{offlineLogTotal} 条，第 {offlineLogPage}/{offlineLogTotalPages} 页</span>
+              <div className="flex gap-1">
+                <button onClick={() => setOfflineLogPage(p => Math.max(1, p - 1))} disabled={offlineLogPage <= 1}
+                  className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50">
+                  <ChevronLeft className="w-4 h-4" /></button>
+                <button onClick={() => setOfflineLogPage(p => Math.min(offlineLogTotalPages, p + 1))} disabled={offlineLogPage >= offlineLogTotalPages}
+                  className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50">
+                  <ChevronRight className="w-4 h-4" /></button>
+              </div>
+            </div>
+          )}
+          </>
           )}
         </motion.div>
       )}
@@ -688,6 +943,17 @@ export function ScheduledPublish() {
             initial={editTarget}
             onClose={() => { setShowForm(false); setEditTarget(null) }}
             onSaved={() => { setShowForm(false); setEditTarget(null); loadSchedules(page, pageSize) }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* 下架规则弹窗 */}
+      <AnimatePresence>
+        {showOfflineForm && (
+          <OfflineScheduleFormModal
+            initial={editOfflineTarget}
+            onClose={() => { setShowOfflineForm(false); setEditOfflineTarget(null) }}
+            onSaved={() => { setShowOfflineForm(false); setEditOfflineTarget(null); loadOfflineSchedules(offlinePage) }}
           />
         )}
       </AnimatePresence>

@@ -236,6 +236,14 @@ class PublishExecutorService:
         log_svc = PublishLogService(self.session)
         address_svc = PublishAddressService(self.session)
 
+        success_items: List[str] = []
+        failed_items: List[dict] = []
+
+        def _extract_code(title: str) -> str:
+            import re
+            m = re.search(r'(A\d+)', title or "")
+            return m.group(1) if m else (title or "未知")[:30]
+
         total = len(account_ids) * len(materials)
         success_count = 0
         failed_count = 0
@@ -269,6 +277,8 @@ class PublishExecutorService:
                     )
                     log_ids.append(log.id)
                 failed_count += len(materials)
+                for material in materials:
+                    failed_items.append({"title": _extract_code(material.get("title", "")), "reason": "账号不存在或无权使用"})
                 continue
 
             account_success_count = 0
@@ -292,6 +302,7 @@ class PublishExecutorService:
                             error_message=str(address_error),
                         )
                         log_ids.append(log.id)
+                        failed_items.append({"title": _extract_code(material.get("title", "")), "reason": str(address_error)})
                         continue
 
                     publish_material = resolved_address.apply_to_item_data(material)
@@ -354,6 +365,7 @@ class PublishExecutorService:
                         if result.get("success"):
                             success_count += 1
                             account_success_count += 1
+                            success_items.append(_extract_code(material.get("title", "")))
                             await log_svc.update_log(
                                 log_id=log.id,
                                 status="success",
@@ -362,6 +374,7 @@ class PublishExecutorService:
                             )
                         else:
                             failed_count += 1
+                            failed_items.append({"title": _extract_code(material.get("title", "")), "reason": result.get("message", "发布失败")})
                             await log_svc.update_log(
                                 log_id=log.id,
                                 status="failed",
@@ -373,6 +386,7 @@ class PublishExecutorService:
 
                     except Exception as exc:
                         failed_count += 1
+                        failed_items.append({"title": _extract_code(material.get("title", "")), "reason": str(exc)})
                         logger.error(f"批量发布单品异常: account={account_id}, title={material.get('title')}: {exc}")
                         await log_svc.update_log(log_id=log.id, status="failed", error_message=str(exc))
 
@@ -417,6 +431,8 @@ class PublishExecutorService:
             "success_count": success_count,
             "failed_count": failed_count,
             "log_ids": log_ids,
+            "success_items": success_items,
+            "failed_items": failed_items,
         }
 
 

@@ -921,6 +921,8 @@ async def _run_batch_publish_background(
 
     total_success = 0
     total_failed = 0
+    all_success_items: list[str] = []
+    all_failed_items: list[dict] = []
     tried_material_ids: set[int] = set()
     target_count: int | None = None
 
@@ -955,6 +957,8 @@ async def _run_batch_publish_background(
             )
             total_success += result.get("success_count", 0)
             total_failed += result.get("failed_count", 0)
+            all_success_items.extend(result.get("success_items", []))
+            all_failed_items.extend(result.get("failed_items", []))
         except Exception as e:
             logger.error(f"批量发布后台任务异常: {e}\n{traceback.format_exc()}")
             await PublishBatchStatusService.clear_batch(batch_id)
@@ -1045,6 +1049,8 @@ async def _run_batch_publish_background(
                 )
                 total_success += retry_result.get("success_count", 0)
                 total_failed += retry_result.get("failed_count", 0)
+                all_success_items.extend(retry_result.get("success_items", []))
+                all_failed_items.extend(retry_result.get("failed_items", []))
         except Exception as e:
             logger.error(f"[定时发布补发] 补发异常: {e}")
             break
@@ -1056,6 +1062,8 @@ async def _run_batch_publish_background(
             success_count=total_success,
             failed_count=total_failed,
             is_error=False,
+            success_items=all_success_items,
+            failed_items=all_failed_items,
         )
 
     # 发布成功后：刷新账号商品 + 一键关联卡券
@@ -1137,6 +1145,8 @@ async def _update_schedule_log_on_complete(
     failed_count: int = 0,
     is_error: bool = False,
     error_message: str = None,
+    success_items: list = None,
+    failed_items: list = None,
 ) -> None:
     """更新定时发布执行记录为完成/失败状态"""
     from common.db.session import async_session_maker
@@ -1154,6 +1164,11 @@ async def _update_schedule_log_on_complete(
                 log_entry.failed_count = failed_count
                 if error_message:
                     log_entry.error_message = error_message
+                if success_items is not None or failed_items is not None:
+                    log_entry.detail_json = {
+                        "success_items": success_items or [],
+                        "failed_items": failed_items or [],
+                    }
                 await session.commit()
                 logger.info(
                     f"[定时发布] 执行记录 #{schedule_log_id} 已更新: "

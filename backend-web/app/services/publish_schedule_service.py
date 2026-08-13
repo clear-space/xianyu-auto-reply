@@ -218,6 +218,7 @@ def _log_to_dict(l: PublishScheduleLog) -> dict:
         "success_count": l.success_count,
         "failed_count": l.failed_count,
         "error_message": l.error_message,
+        "detail_json": l.detail_json,
         "created_at": safe_isoformat(l.created_at),
         "updated_at": safe_isoformat(l.updated_at),
     }

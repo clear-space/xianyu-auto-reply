@@ -393,6 +393,7 @@ export interface PublishScheduleLog {
   success_count: number
   failed_count: number
   error_message?: string | null
+  detail_json?: { success_items: string[]; failed_items: { title: string; reason: string }[] } | null
   created_at: string
 }
 
@@ -503,3 +504,97 @@ export interface ActiveProgressResponse {
 /** 查询当前用户所有正在执行的定时发布任务实时进度 */
 export const getActiveScheduleProgress = (): Promise<ActiveProgressResponse> =>
   get(`${SCHEDULE_PREFIX}/active-progress`)
+
+// ==================== 自动下架 ====================
+
+const OFFLINE_PREFIX = '/api/v1/product-publish/offline-schedules'
+
+export interface OfflineSchedule {
+  id: number
+  user_id: number
+  name: string
+  age_days: number
+  no_order_days: number
+  offline_count: number
+  schedule_mode: 'daily' | 'weekly'
+  schedule_config: ScheduleConfig
+  account_ids: string[]
+  enabled: boolean
+  last_triggered_at?: string | null
+  next_trigger_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateOfflineScheduleParams {
+  name: string
+  age_days: number
+  no_order_days: number
+  offline_count: number
+  schedule_mode: 'daily' | 'weekly'
+  schedule_config: ScheduleConfig
+  account_ids: string[]
+}
+
+export interface UpdateOfflineScheduleParams {
+  name?: string
+  age_days?: number
+  no_order_days?: number
+  offline_count?: number
+  schedule_mode?: string
+  schedule_config?: Record<string, unknown>
+  account_ids?: string[]
+  enabled?: boolean
+}
+
+export interface OfflineScheduleListResponse {
+  success: boolean
+  message: string
+  data: { list: OfflineSchedule[]; total: number; page: number; page_size: number; total_pages: number }
+}
+
+export const createOfflineSchedule = (params: CreateOfflineScheduleParams): Promise<ApiResponse> =>
+  post(OFFLINE_PREFIX, params)
+
+export const getOfflineSchedules = (page = 1, pageSize = 20): Promise<OfflineScheduleListResponse> => {
+  const p = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return get(`${OFFLINE_PREFIX}?${p}`)
+}
+
+export const getOfflineSchedule = (id: number): Promise<ApiResponse> =>
+  get(`${OFFLINE_PREFIX}/${id}`)
+
+export const updateOfflineSchedule = (id: number, params: UpdateOfflineScheduleParams): Promise<ApiResponse> =>
+  put(`${OFFLINE_PREFIX}/${id}`, params)
+
+export const deleteOfflineSchedule = (id: number): Promise<ApiResponse> =>
+  del(`${OFFLINE_PREFIX}/${id}`)
+
+export const toggleOfflineSchedule = (id: number): Promise<ApiResponse> =>
+  patch(`${OFFLINE_PREFIX}/${id}/toggle`)
+
+export const triggerOfflineSchedule = (id: number): Promise<ApiResponse> =>
+  post(`${OFFLINE_PREFIX}/${id}/trigger`)
+
+export interface OfflineScheduleLog {
+  id: number
+  schedule_id: number
+  schedule_name: string
+  executed_at?: string | null
+  status: string
+  total_count: number
+  offlined_count: number
+  offlined_items: string[]
+  error_message?: string | null
+}
+
+export interface OfflineScheduleLogListResponse {
+  success: boolean
+  message: string
+  data: { list: OfflineScheduleLog[]; total: number; page: number; page_size: number; total_pages: number }
+}
+
+export const getOfflineScheduleLogs = (page = 1, pageSize = 20): Promise<OfflineScheduleLogListResponse> => {
+  const p = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return get(`${OFFLINE_PREFIX}/logs/global?${p}`)
+}

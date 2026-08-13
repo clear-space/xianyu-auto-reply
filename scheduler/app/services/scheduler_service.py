@@ -39,6 +39,7 @@ from app.services.scheduler.seller_fill_task import seller_fill_task_service
 from app.services.scheduler.dm_send_task import dm_send_task_service
 from app.services.scheduler.auto_order_task import auto_order_task_service
 from app.services.scheduler.scheduled_publish_task import scheduled_publish_task_service
+from app.services.scheduler.offline_schedule_task import offline_schedule_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -96,6 +97,7 @@ class SchedulerService:
         self._dm_send_task_handle: Optional[asyncio.Task] = None
         self._auto_order_task_handle: Optional[asyncio.Task] = None
         self._scheduled_publish_task_handle: Optional[asyncio.Task] = None
+        self._offline_schedule_task_handle: Optional[asyncio.Task] = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -118,6 +120,7 @@ class SchedulerService:
         self._dm_send_task = dm_send_task_service
         self._auto_order_task = auto_order_task_service
         self._scheduled_publish_task = scheduled_publish_task_service
+        self._offline_schedule_task = offline_schedule_task_service
 
     @classmethod
     def get_instance(cls) -> "SchedulerService":
@@ -202,6 +205,7 @@ class SchedulerService:
         self._dm_send_task_handle = asyncio.create_task(self._run_dm_send_loop())
         self._auto_order_task_handle = asyncio.create_task(self._run_auto_order_loop())
         self._scheduled_publish_task_handle = asyncio.create_task(self._run_scheduled_publish_loop())
+        self._offline_schedule_task_handle = asyncio.create_task(self._run_offline_schedule_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -277,6 +281,9 @@ class SchedulerService:
         if self._scheduled_publish_task_handle:
             self._scheduled_publish_task_handle.cancel()
             self._scheduled_publish_task_handle = None
+        if self._offline_schedule_task_handle:
+            self._offline_schedule_task_handle.cancel()
+            self._offline_schedule_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
@@ -1260,6 +1267,27 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 定时发布任务循环结束")
+
+    async def _run_offline_schedule_loop(self) -> None:
+        """自动下架任务执行循环"""
+        logger.info("[定时任务调度] 自动下架任务循环开始")
+
+        while self._running:
+            try:
+                await self._offline_schedule_task.execute()
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 自动下架任务被取消")
+                break
+            except Exception as e:
+                logger.error(f"[定时任务调度] 自动下架任务执行异常: {e}")
+
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 自动下架任务等待被取消")
+                break
+
+        logger.info("[定时任务调度] 自动下架任务循环结束")
 
 
 # 全局实例获取函数
