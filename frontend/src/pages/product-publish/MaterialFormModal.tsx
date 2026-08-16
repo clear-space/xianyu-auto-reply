@@ -26,6 +26,8 @@ interface Props {
   initial: ProductMaterial | null
   onClose: () => void
   onSaved: () => void
+  /** 草稿模式：保存时不落库，把完整表单载荷交给调用方（批量导入的完整修改） */
+  draftSubmit?: (payload: MaterialCreateParams) => Promise<void> | void
 }
 
 const createInternalSpecifications = (specifications: PublishSpecification[] = []): ProductSpecification[] => specifications.map((spec, specIndex) => ({
@@ -135,7 +137,7 @@ function toMaterialPayload(form: MaterialFormState): MaterialCreateParams {
   }
 }
 
-export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
+export function MaterialFormModal({ initial, onClose, onSaved, draftSubmit }: Props) {
   const { addToast } = useUIStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [form, setForm] = useState<MaterialFormState>(() => initialForm(initial))
@@ -225,6 +227,12 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     if (!payload.price || payload.price <= 0) return addToast({ type: 'warning', message: '请填写有效价格' })
     setSaving(true)
     try {
+      if (draftSubmit) {
+        await draftSubmit(payload)
+        addToast({ type: 'success', message: '内容已更新' })
+        onSaved()
+        return
+      }
       const response = initial ? await updateMaterial(initial.id, payload) : await createMaterial(payload)
       if (!response.success) {
         addToast({ type: 'error', message: response.message || (initial ? '更新失败' : '创建失败') })

@@ -1023,10 +1023,15 @@ async def batch_import_materials_upload(
 
     for i, mat in enumerate(materials_list):
         try:
-            # 收集该素材的图片文件
-            saved_urls: List[str] = []
-            j = 0
-            max_images = int(mat.get("image_count", 20))
+            # 收集该素材的图片文件；完整修改过的条目图片已在服务器，直接用元数据中的 URL
+            preprovided_images = [str(u) for u in (mat.get("images") or []) if str(u).strip()]
+            saved_urls: List[str] = list(preprovided_images)
+            if not saved_urls:
+                j = 0
+                max_images = int(mat.get("image_count", 20))
+            else:
+                j = 0
+                max_images = 0
             while j < max_images:
                 field_name = f"img_{i}_{j}"
                 upload_file = form.get(field_name)
@@ -1067,18 +1072,23 @@ async def batch_import_materials_upload(
                 "original_price": float(mat.get("original_price", 0)) if mat.get("original_price") else None,
                 "category": str(mat.get("category", "虚拟商品")),
                 "images": [u for u in saved_urls if u],
+                "videos": mat.get("videos") or [],
+                "specifications": mat.get("specifications") or [],
+                "sku_rows": mat.get("sku_rows") or [],
                 "delivery_method": str(mat.get("delivery_method", "express")),
                 "shipping_method": str(mat.get("shipping_method", "free")),
                 "support_pickup": bool(mat.get("support_pickup", False)),
                 "postage": float(mat.get("postage", 0)),
-                "address": None,
+                "address": mat.get("address") or None,
+                "address_expected_text": mat.get("address_expected_text") or None,
                 "brand": str(mat.get("brand", "")).strip() or None,
                 "condition": str(mat.get("condition", "全新")),
                 "stock": int(mat.get("stock", 9999)),
                 "quantity": int(mat.get("quantity", 1)),
-                "remark": f"批量导入自: {folder_name}" if folder_name else None,
+                "remark": mat.get("remark") or (f"批量导入自: {folder_name}" if folder_name else None),
             }
             create_data.update(_platform_category_fields(mat))
+            create_data["platform_attributes"] = mat.get("platform_attributes") or []
 
             await svc.create(current_user.id, create_data)
             imported += 1

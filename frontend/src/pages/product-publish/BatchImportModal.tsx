@@ -14,8 +14,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { X, Loader2, FolderOpen, Image, ChevronDown, ChevronUp, Pencil, FolderUp, Sparkles } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { batchImportMaterialsUpload, recommendPlatformCategory, type PlatformCategoryCandidate } from '@/api/productPublish'
-import { preferredCandidate, SHIPPING_OPTIONS, type ShippingMethod } from './publishTypes'
+import { batchImportMaterialsUpload, recommendPlatformCategory, uploadProductImages, type MaterialCreateParams, type PlatformCategoryCandidate, type ProductMaterial } from '@/api/productPublish'
+import { DEFAULT_PLATFORM_CATEGORIES, preferredCandidate, SHIPPING_OPTIONS, type ShippingMethod } from './publishTypes'
+import { MaterialFormModal } from './MaterialFormModal'
 
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '电子资料', '其他闲置']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
@@ -207,8 +208,15 @@ export function BatchImportModal({ onClose, onImported }: Props) {
   const [recognizeProgress, setRecognizeProgress] = useState({ done: 0, total: 0 })
   const [recognizedCategories, setRecognizedCategories] = useState<Record<string, PlatformCategoryCandidate>>({})
 
+  // 完整修改状态：打开编辑素材弹窗（草稿模式），保存后写回该条素材
+  const [fullEditCode, setFullEditCode] = useState<string | null>(null)
+  const [fullEditLoadingCode, setFullEditLoadingCode] = useState<string | null>(null)
+  const [draftInitial, setDraftInitial] = useState<ProductMaterial | null>(null)
+  const [editedDrafts, setEditedDrafts] = useState<Record<string, MaterialCreateParams>>({})
+
   // 导入校验问题弹窗：不符合规则时先列出问题，由用户选择返回修改或继续导入
   const [pendingImportIssues, setPendingImportIssues] = useState<{ code: string; title: string; issues: string[] }[] | null>(null)
+
   // 导入状态
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<{
@@ -451,13 +459,75 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     return { title, description }
   }
 
+  /** 打开完整修改弹窗：懒上传该条图片后进入编辑素材弹窗（草稿模式，不落库） */
+  const handleFullEdit = async (m: LocalMaterial) => {
+    const draft = editedDrafts[m.code]
+    setFullEditLoadingCode(m.code)
+    try {
+      let images: string[] = draft?.images ?? []
+      if (!draft) {
+        const imgFiles = materialFilesRef.current.get(m.code) || []
+        if (imgFiles.length > 0) {
+          const up = await uploadProductImages(imgFiles)
+          if (!up.success || !up.data) {
+            addToast({ type: 'error', message: up.message || '图片上传失败' })
+            return
+          }
+          images = up.data.urls
+        }
+      }
+      const s = getSettings(m.code)
+      const recognized = recognizedCategories[m.code]
+      const pseudo = {
+        id: 0,
+        user_id: 0,
+        title: draft?.title ?? m.title,
+        description: draft?.description ?? m.description,
+        price: draft?.price ?? (parseFloat(s.price) || 0),
+        original_price: draft?.original_price ?? null,
+        category: draft?.category ?? s.category,
+        platform_category_id: draft?.platform_category_id ?? recognized?.cat_id ?? DEFAULT_PLATFORM_CATEGORIES[0].cat_id ?? '',
+        platform_category_name: draft?.platform_category_name ?? recognized?.cat_name ?? DEFAULT_PLATFORM_CATEGORIES[0].cat_name ?? '',
+        platform_channel_category_id: draft?.platform_channel_category_id ?? recognized?.channel_cat_id ?? DEFAULT_PLATFORM_CATEGORIES[0].channel_cat_id ?? '',
+        platform_channel_category_name: draft?.platform_channel_category_name ?? recognized?.channel_cat_name ?? DEFAULT_PLATFORM_CATEGORIES[0].channel_cat_name ?? '',
+        platform_leaf_id: draft?.platform_leaf_id ?? recognized?.leaf_id ?? '',
+        platform_tb_category_id: draft?.platform_tb_category_id ?? recognized?.tb_cat_id ?? '',
+        platform_category_path: draft?.platform_category_path ?? recognized?.path ?? DEFAULT_PLATFORM_CATEGORIES[0].path,
+        platform_attributes: draft?.platform_attributes ?? [],
+        category_source: 'manual',
+        category_confidence: undefined,
+        images,
+        videos: draft?.videos ?? [],
+        specifications: draft?.specifications ?? [],
+        sku_rows: draft?.sku_rows ?? [],
+        quantity: draft?.quantity ?? (parseInt(s.quantity) || 1),
+        delivery_method: draft?.delivery_method ?? (s.shipping_method === 'none' ? 'pickup' : 'express'),
+        shipping_method: draft?.shipping_method ?? s.shipping_method,
+        support_pickup: draft?.support_pickup ?? s.support_pickup,
+        postage: draft?.postage ?? (parseFloat(s.postage) || 0),
+        address: draft?.address ?? null,
+        address_expected_text: draft?.address_expected_text ?? null,
+        brand: draft?.brand ?? s.brand.trim(),
+        condition: draft?.condition ?? s.condition,
+        stock: draft?.stock ?? 9999,
+        remark: draft?.remark ?? '',
+      } as unknown as ProductMaterial
+      setDraftInitial(pseudo)
+      setFullEditCode(m.code)
+    } catch {
+      addToast({ type: 'error', message: '准备完整修改失败，请重试' })
+    } finally {
+      setFullEditLoadingCode(null)
+    }
+  }
+
   /** 实际执行导入（校验已通过或用户选择继续导入） */
   const doImport = async () => {
     const selected = materials.filter(m => selectedCodes.has(m.code))
     // 继续导入时：标题截取前30字、描述截取前1500字；无图条目失败；图片取前9张
     const localFailed: { code: string; reason: string }[] = []
     const validItems = selected.filter((m) => {
-      const { title, description } = buildFinalContent(m)
+      if (editedDrafts[m.code]) return true // 完整修改已在编辑弹窗中校验
       if (m.image_count === 0) {
         localFailed.push({ code: m.code, reason: '缺少图片（至少1张）' })
         return false
@@ -480,6 +550,42 @@ export function BatchImportModal({ onClose, onImported }: Props) {
       const metadataList = validItems.map((m) => {
         const s = getSettings(m.code)
         const recognized = recognizedCategories[m.code]
+        const draft = editedDrafts[m.code]
+        if (draft) {
+          // 完整修改过的条目：图片已在服务器（URL 直传），元数据以弹窗编辑结果为准
+          return {
+            code: m.code,
+            folder_name: m.folder_name,
+            title: draft.title,
+            description: draft.description,
+            image_count: 0,
+            images: draft.images || [],
+            price: draft.price,
+            original_price: draft.original_price ?? null,
+            category: draft.category ?? '',
+            condition: draft.condition ?? '全新',
+            brand: draft.brand ?? '',
+            delivery_method: draft.delivery_method ?? 'express',
+            shipping_method: draft.shipping_method ?? 'free',
+            support_pickup: draft.support_pickup ?? false,
+            postage: draft.postage ?? 0,
+            quantity: draft.quantity ?? 1,
+            videos: draft.videos ?? [],
+            specifications: draft.specifications ?? [],
+            sku_rows: draft.sku_rows ?? [],
+            platform_category_id: draft.platform_category_id ?? '',
+            platform_category_name: draft.platform_category_name ?? '',
+            platform_channel_category_id: draft.platform_channel_category_id ?? '',
+            platform_channel_category_name: draft.platform_channel_category_name ?? '',
+            platform_leaf_id: draft.platform_leaf_id ?? '',
+            platform_tb_category_id: draft.platform_tb_category_id ?? '',
+            platform_category_path: draft.platform_category_path ?? [],
+            platform_attributes: draft.platform_attributes ?? [],
+            address: draft.address ?? null,
+            address_expected_text: draft.address_expected_text ?? null,
+            remark: draft.remark ?? null,
+          }
+        }
         const { title, description } = buildFinalContent(m)
         return {
           code: m.code,
@@ -511,8 +617,9 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
       formData.append('materials', JSON.stringify(metadataList))
 
-      // 添加图片文件：img_{materialIndex}_{imageIndex}
+      // 添加图片文件：img_{materialIndex}_{imageIndex}（完整修改过的条目图片已在服务器，跳过；最多9张在导入时截取）
       validItems.forEach((m, i) => {
+        if (editedDrafts[m.code]) return
         const imgFiles = materialFilesRef.current.get(m.code)
         if (imgFiles) {
           imgFiles.slice(0, 9).forEach((file, j) => {
@@ -561,6 +668,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
     const issueList: { code: string; title: string; issues: string[] }[] = []
     selected.forEach((m) => {
+      if (editedDrafts[m.code]) return // 完整修改已在编辑弹窗中校验
       const { title, description } = buildFinalContent(m)
       const issues: string[] = []
       if (title.length > 30) issues.push(`标题超过30字（当前${title.length}字，继续导入将截取前30字）`)
@@ -858,7 +966,12 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                       const isSelected = selectedCodes.has(m.code)
                       const hasOverride = !!overrides[m.code]
                       const s = getSettings(m.code)
-                      const thumbnail = getThumbnail(m.code)
+                      const draft = editedDrafts[m.code]
+                      const displayTitle = draft?.title || m.title
+                      const displayDescription = draft?.description || m.description
+                      const displayImageCount = draft ? (draft.images?.length ?? 0) : m.image_count
+                      const thumbnail = draft ? (draft.images?.[0] || null) : getThumbnail(m.code)
+                      const fullEditBusy = fullEditLoadingCode === m.code
 
                       return (
                         <div key={m.code}>
@@ -899,20 +1012,20 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                               onClick={() => toggleSelect(m.code)}
                             >
                               <p className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
-                                {m.title}
+                                {displayTitle}
                               </p>
                               <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">
-                                {m.description}
+                                {displayDescription}
                               </p>
                               <div className="flex items-center gap-2 mt-1 flex-wrap">
                                 <span className="text-xs text-blue-500 font-mono">{m.code}</span>
                                 <span className="text-xs text-slate-400">
                                   <Image className="w-3 h-3 inline mr-0.5" />
-                                  {m.image_count} 张图
+                                  {displayImageCount} 张图
                                 </span>
                                 <span className="text-xs text-amber-600 font-medium">¥{s.price}</span>
                                 <span className="text-xs text-slate-400">{s.category}</span>
-                                {recognizedCategories[m.code] && (
+                                {recognizedCategories[m.code] && !draft && (
                                   <span className="text-xs text-blue-500">
                                     <Sparkles className="w-2.5 h-2.5 inline mr-0.5" />
                                     平台分类：{recognizedCategories[m.code].cat_name || recognizedCategories[m.code].channel_cat_name || '已识别'}
@@ -924,8 +1037,25 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                     已单设
                                   </span>
                                 )}
+                                {draft && (
+                                  <span className="text-xs text-green-600 bg-green-50 dark:bg-green-900/20 px-1 rounded">
+                                    <Pencil className="w-2.5 h-2.5 inline mr-0.5" />
+                                    已完整修改
+                                  </span>
+                                )}
                               </div>
                             </div>
+                            {/* 完整修改按钮 */}
+                            <button
+                              className="flex-shrink-0 text-xs text-blue-500 hover:text-blue-600 transition-colors font-medium disabled:opacity-50 whitespace-nowrap"
+                              onClick={e => {
+                                e.stopPropagation()
+                                void handleFullEdit(m)
+                              }}
+                              disabled={importing || fullEditBusy || !!recognizing}
+                            >
+                              {fullEditBusy ? '准备中...' : '完整修改'}
+                            </button>
                             {/* 展开按钮 */}
                             <button
                               className="flex-shrink-0 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
@@ -1116,6 +1246,20 @@ export function BatchImportModal({ onClose, onImported }: Props) {
           </div>
         </div>
 
+        {/* 完整修改弹窗（草稿模式：保存不落库，写回该条素材） */}
+        {fullEditCode && draftInitial && (
+          <MaterialFormModal
+            initial={draftInitial}
+            onClose={() => { setFullEditCode(null); setDraftInitial(null) }}
+            onSaved={() => { setFullEditCode(null); setDraftInitial(null) }}
+            draftSubmit={async (payload) => {
+              if (fullEditCode) {
+                setEditedDrafts(prev => ({ ...prev, [fullEditCode]: payload }))
+              }
+            }}
+          />
+        )}
+
         {/* 导入校验问题弹窗 */}
         {pendingImportIssues && (
           <div className="modal-overlay z-50">
@@ -1154,6 +1298,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
             </div>
           </div>
         )}
+
         {/* 底部按钮 */}
         <div className="modal-footer flex-shrink-0">
           <button
