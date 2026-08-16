@@ -39,7 +39,13 @@ def _load_backend_web_module(module_name: str, relative_path: str) -> ModuleType
     if module is None:
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            # 执行失败时移除半加载模块，避免后续调用拿到残缺缓存
+            sys.modules.pop(module_name, None)
+            _load_backend_web_module.cache_clear()
+            raise
     return module
 
 
