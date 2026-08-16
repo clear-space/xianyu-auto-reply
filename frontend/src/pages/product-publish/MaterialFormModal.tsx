@@ -262,14 +262,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
             onCategoryEdit={() => setCategoryLocked(false)}
           />
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="input-group">
-              <label className="input-label">库存（鱼小铺可用）</label>
-              <input type="number" className="input-ios" placeholder="9999" min="1" step="1"
-                value={form.stock || ''} onChange={(event) => setForm((current) => ({ ...current, stock: parseInt(event.target.value) || 9999 }))} />
-            </div>
-            <div className="input-group"><label className="input-label">备注（内部使用，不公开）</label><input className="input-ios" maxLength={500} placeholder="选填" value={form.remark} onChange={(event) => setForm((current) => ({ ...current, remark: event.target.value }))} /></div>
-          </div>
+          <div className="input-group"><label className="input-label">备注（内部使用，不公开）</label><input className="input-ios" maxLength={500} placeholder="选填" value={form.remark} onChange={(event) => setForm((current) => ({ ...current, remark: event.target.value }))} /></div>
         </div>
         <div className="modal-footer flex-shrink-0"><button type="button" className="btn-ios-secondary" onClick={onClose} disabled={saving}>取消</button><button type="button" className="btn-ios-primary" onClick={handleSave} disabled={saving || uploading}>{saving && <Loader2 className="w-4 h-4 animate-spin" />}{initial ? '保存修改' : '创建素材'}</button></div>
       </div>

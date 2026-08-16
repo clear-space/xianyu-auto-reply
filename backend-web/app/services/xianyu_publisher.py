@@ -1808,7 +1808,7 @@ class XianyuPublisher:
             logger.info("ℹ️ 未设置原价，跳过")
 
     async def _set_stock(self, item_data: dict):
-        """设置库存数量（鱼小铺账号可用，非鱼小铺账号静默跳过）"""
+        """设置库存数量（页面无库存输入框时静默跳过）"""
         stock = item_data.get("stock", 9999)
         if not stock:
             stock = 9999
@@ -1839,7 +1839,7 @@ class XianyuPublisher:
             await stock_input.fill(str(stock))
             logger.info(f"✅ 库存已设置为: {stock}")
         else:
-            logger.info("ℹ️ 未找到库存输入框（非鱼小铺账号），跳过")
+            logger.info("ℹ️ 未找到库存输入框，跳过")
 
     async def _set_free_shipping(self):
         """设置发货方式为包邮（按原项目流程）"""

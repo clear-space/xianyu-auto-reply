@@ -77,7 +77,6 @@ export function ProductPublishForm({ form, setForm, accounts, onUploadSpecImage,
                 <div className="input-group"><label className="input-label">原价</label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">¥</span><input type="number" className="input-ios pl-8" min="0" step="0.01" placeholder="0.00" value={form.original_price} onChange={(event) => update({ original_price: event.target.value })} /></div></div>
                 <div className="input-group"><label className="input-label">库存</label><input type="number" className="input-ios" min="1" step="1" value={form.quantity} onChange={(event) => update({ quantity: Math.max(1, Number(event.target.value) || 1) })} /></div>
               </div>
-              <p className="text-xs text-slate-400">鱼小铺软件服务费按成交额（含运费）的1.6%计收</p>
             </section>
           )}
 

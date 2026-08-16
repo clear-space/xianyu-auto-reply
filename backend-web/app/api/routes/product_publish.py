@@ -141,7 +141,7 @@ class MaterialCreateRequest(BaseModel):
     address_expected_text: Optional[str] = Field(None, max_length=200)
     brand: Optional[str] = Field(None, max_length=100, description="品牌")
     condition: str = Field("全新", description="成色")
-    stock: int = Field(9999, ge=0, description="库存数量（鱼小铺账号可用）")
+    stock: int = Field(9999, ge=0, description="库存数量")
     remark: Optional[str] = Field(None, max_length=500, description="备注（内部使用）")
 
 
@@ -186,7 +186,7 @@ class PublishSingleRequest(BaseModel):
     description: str = Field(..., min_length=1, max_length=1500)
     price: float = Field(..., gt=0)
     original_price: Optional[float] = None
-    stock: int = Field(9999, ge=0, description="库存数量（鱼小铺账号可用）")
+    stock: int = Field(9999, ge=0, description="库存数量")
     category: Optional[str] = Field(None, description="商品分类")
     images: List[str] = Field(..., min_length=1, description="图片本地路径列表（至少1张）")
     platform_category_id: Optional[str] = Field(None, max_length=64)
