@@ -1,9 +1,16 @@
 /**
- * 商品描述联动的平台分类组件。
- * 分类和属性卡完全由闲鱼推荐接口返回，切换分类时按抓包携带完整卡片状态。
+ * 商品平台分类组件。
+ *
+ * 两种识别模式：
+ * 1. 自动检测（默认）：输入标题/描述后自动请求推荐接口，但只用于判断是否支持
+ *    「电子资料」——候选里有则选用电子资料，没有则自动用「其他闲置」；
+ * 2. 手动智能识别：点击按钮后按原版逻辑让智能识别自由匹配（优先接口自带选中
+ *    的候选，其次带淘宝分类ID的候选），选中后保持不再被自动检测覆盖。
+ *
+ * 「其他闲置」理论上一定有，始终保留在候选列表中可点选。
  */
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { Loader2, RefreshCw, Sparkles } from 'lucide-react'
 import {
   recommendPlatformCategory,
   type PlatformCategoryCandidate,
@@ -12,7 +19,7 @@ import {
   type PlatformCategoryProperty,
   type PlatformMaterialAttribute,
 } from '@/api/productPublish'
-import type { PublishForm } from './publishTypes'
+import { DEFAULT_PLATFORM_CATEGORIES, type PublishForm } from './publishTypes'
 import PlatformAttributesEditor, { PlatformOptionField } from './PlatformAttributesEditor'
 
 interface PlatformCategoryRecommenderProps {
@@ -28,20 +35,6 @@ interface CategorySelectionRequest {
   cat_id: string
   cat_name: string
   channel_cat_id: string
-}
-
-const emptyCategory = {
-  category: '',
-  platform_category_id: '',
-  platform_category_name: '',
-  platform_channel_category_id: '',
-  platform_channel_category_name: '',
-  platform_leaf_id: '',
-  platform_tb_category_id: '',
-  platform_category_path: [],
-  platform_attributes: [],
-  category_source: 'manual' as const,
-  category_confidence: undefined,
 }
 
 function asText(value: unknown) {
@@ -217,53 +210,55 @@ function selectedProperty(attributes: PlatformMaterialAttribute[], propertyId: s
   return attributes.find((attribute) => attribute.property_id === propertyId)
 }
 
+/** 自动检测模式的选择：候选里有电子资料选电子资料，没有则用其他闲置。 */
+function restrictedCandidate(returnedCandidates: PlatformCategoryCandidate[]): PlatformCategoryCandidate {
+  const electronicCandidate = returnedCandidates.find((candidate) => (
+    candidate.cat_name === '电子资料' || candidate.channel_cat_name === '电子资料'
+  ) && candidate.channel_cat_id)
+  return electronicCandidate || DEFAULT_PLATFORM_CATEGORIES[1]
+}
+
+/** 手动智能识别模式的选择：让识别结果自己选（原版逻辑，优先ID齐全的候选）。 */
+function preferredCandidate(returnedCandidates: PlatformCategoryCandidate[]): PlatformCategoryCandidate | null {
+  return returnedCandidates.find((candidate) => candidate.is_selected && candidate.channel_cat_id && candidate.tb_cat_id)
+    || returnedCandidates.find((candidate) => candidate.channel_cat_id && candidate.tb_cat_id && candidate.cat_id)
+    || returnedCandidates.find((candidate) => candidate.channel_cat_id && candidate.tb_cat_id)
+    || returnedCandidates.find((candidate) => candidate.channel_cat_id && candidate.cat_id)
+    || returnedCandidates.find((candidate) => candidate.channel_cat_id)
+    || null
+}
+
 export function PlatformCategoryRecommender({ form, onChange, categoryLocked = false, onReselectCategory }: PlatformCategoryRecommenderProps) {
-  const [candidates, setCandidates] = useState<PlatformCategoryCandidate[]>([])
+  const [recognized, setRecognized] = useState<PlatformCategoryCandidate[]>([])
   const [properties, setProperties] = useState<PlatformCategoryProperty[]>([])
   const [cardList, setCardList] = useState<PlatformCategoryCardData[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [retryNonce, setRetryNonce] = useState(0)
-  const inputKeyRef = useRef('')
+  const [manualSelected, setManualSelected] = useState(false)
   const requestVersion = useRef(0)
+  const inputKeyRef = useRef('')
 
+  // 自动检测：标题/描述变化后防抖请求推荐接口，仅在电子资料/其他闲置中取值；
+  // 用户点过智能识别后不再自动覆盖，直到表单清空或重新选择分类。
   useEffect(() => {
     const title = form.title.trim()
     const description = form.description.trim()
-    const key = `${title}\u0000${description}\u0000${form.account_id}\u0000${categoryLocked ? 'locked' : 'recommend'}\u0000${retryNonce}`
+    if (!title && !description) {
+      setManualSelected(false)
+      return
+    }
+    if (categoryLocked || manualSelected) return
+    const key = `${title}\u0000${description}\u0000${form.account_id}`
     if (inputKeyRef.current === key) return
     inputKeyRef.current = key
     const version = ++requestVersion.current
 
-    if (categoryLocked) {
-      const importedCandidate = candidateFromForm(form)
-      setCandidates(importedCandidate ? [importedCandidate] : [])
-      setProperties(propertiesFromAttributes(form.platform_attributes))
-      setCardList([])
-      setError('')
-      setLoading(false)
-      return
-    }
-
-    if (!title && !description) {
-      setCandidates([])
-      setProperties([])
-      setCardList([])
-      setError('')
-      setLoading(false)
-      onChange(emptyCategory)
-      return
-    }
-
     setLoading(true)
     setError('')
-    let requestStarted = false
+    setRecognized([])
+    setProperties([])
+    setCardList([])
     const timer = window.setTimeout(async () => {
-      requestStarted = true
-      setCandidates([])
-      setProperties([])
-      setCardList([])
-      onChange(emptyCategory)
       try {
         const response = await recommendPlatformCategory({
           title: title || description.slice(0, 200),
@@ -275,28 +270,22 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
           setError(response.message || '接口未返回可用的商品分类')
           return
         }
-
         const returnedCandidates = response.data.candidates
-        const preferredCandidate = returnedCandidates.find((candidate) => candidate.is_selected && candidate.channel_cat_id && candidate.tb_cat_id)
-          || returnedCandidates.find((candidate) => sameCandidate({
-            cat_id: form.platform_category_id,
-            channel_cat_id: form.platform_channel_category_id,
-            tb_cat_id: form.platform_tb_category_id,
-            path: form.platform_category_path,
-          }, candidate) && candidate.channel_cat_id && candidate.tb_cat_id)
-          || returnedCandidates.find((candidate) => candidate.channel_cat_id && candidate.tb_cat_id)
-
-        setCandidates(returnedCandidates)
+        setRecognized(returnedCandidates)
         setProperties(response.data.properties || [])
         setCardList(response.data.card_list || [])
-        if (!preferredCandidate) {
-          setError('接口返回的分类缺少发布所需的分类 ID，请点击重试')
-          return
-        }
-        onChange({ ...candidatePatch(preferredCandidate), platform_attributes: [], brand: '', condition: '全新' })
+        const chosen = restrictedCandidate(returnedCandidates)
+        const isDefault = DEFAULT_PLATFORM_CATEGORIES.includes(chosen)
+        onChange({
+          ...candidatePatch(chosen),
+          platform_attributes: [],
+          brand: '',
+          condition: '全新',
+          ...(isDefault ? { category_source: 'manual' as const, category_confidence: undefined } : {}),
+        })
       } catch {
         if (version !== requestVersion.current) return
-        setError('分类推荐请求失败，请稍后重试')
+        setError('分类检测请求失败，请稍后重试')
       } finally {
         if (version === requestVersion.current) setLoading(false)
       }
@@ -304,12 +293,61 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
 
     return () => {
       window.clearTimeout(timer)
-      // React 严格模式会立即清理首次副作用；若此时请求尚未发出，允许下一次副作用重新调度。
-      if (!requestStarted && inputKeyRef.current === key) inputKeyRef.current = ''
+      if (inputKeyRef.current === key) inputKeyRef.current = ''
     }
-  }, [form.title, form.description, form.account_id, categoryLocked, retryNonce])
+  }, [form.title, form.description, form.account_id, categoryLocked, manualSelected])
+
+  const runRecommendation = async () => {
+    const title = form.title.trim()
+    const description = form.description.trim()
+    if (!title && !description) {
+      setError('请先填写商品标题或商品描述，再点击智能识别')
+      return
+    }
+    const version = ++requestVersion.current
+    setLoading(true)
+    setError('')
+    setRecognized([])
+    setProperties([])
+    setCardList([])
+    try {
+      const response = await recommendPlatformCategory({
+        title: title || description.slice(0, 200),
+        description: description || title,
+        account_id: form.account_id || undefined,
+      })
+      if (version !== requestVersion.current) return
+      if (!response.success || !response.data?.candidates?.length) {
+        setError(response.message || '接口未返回可用的商品分类')
+        return
+      }
+
+      const returnedCandidates = response.data.candidates
+      const chosen = preferredCandidate(returnedCandidates)
+      setRecognized(returnedCandidates)
+      setProperties(response.data.properties || [])
+      setCardList(response.data.card_list || [])
+      if (!chosen) {
+        setError('接口返回的分类缺少频道分类ID，请使用默认分类或点击重试')
+        return
+      }
+      onChange({ ...candidatePatch(chosen), platform_attributes: [], brand: '', condition: '全新' })
+      setManualSelected(true)
+    } catch {
+      if (version !== requestVersion.current) return
+      setError('分类识别请求失败，请稍后重试')
+    } finally {
+      if (version === requestVersion.current) setLoading(false)
+    }
+  }
 
   const selectCandidate = async (candidate: PlatformCategoryCandidate) => {
+    // 内置兜底分类直接采用，不请求接口；推荐接口返回的候选携带卡片状态切换。
+    if (DEFAULT_PLATFORM_CATEGORIES.includes(candidate)) {
+      onChange({ ...candidatePatch(candidate), platform_attributes: [], brand: '', condition: '全新', category_source: 'manual', category_confidence: undefined })
+      return
+    }
+
     const title = form.title.trim()
     const description = form.description.trim()
     const selection = buildCategorySelection(cardList, candidate)
@@ -334,7 +372,7 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
 
       const refreshedCandidates = response.data.candidates
       const refreshedCandidate = refreshedCandidates.find((item) => sameCandidate(item, candidate)) || candidate
-      setCandidates(refreshedCandidates)
+      setRecognized(refreshedCandidates)
       setProperties(response.data.properties || [])
       setCardList(response.data.card_list || selection.current_card_list)
       onChange({ ...candidatePatch(refreshedCandidate), platform_attributes: [], brand: '', condition: '全新' })
@@ -345,14 +383,24 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
     }
   }
 
-  const retryRecommendation = () => {
-    inputKeyRef.current = ''
-    setError('')
-    setCandidates([])
-    setProperties([])
-    setCardList([])
-    setRetryNonce((value) => value + 1)
-  }
+  // 锁定（编辑已存分类的素材）时只展示表单里的分类；未识别时展示内置兜底分类，
+  // 表单里已有的分类若不在候选列表中则一并展示，避免下拉显示为空。
+  // 识别后候选列表中始终补上其他闲置（理论上一定有，保证可点选）。
+  const lockedCandidate = candidateFromForm(form)
+  const formCandidate = !categoryLocked && recognized.length === 0 ? lockedCandidate : null
+  const recognizedOptions = recognized.length
+    ? (recognized.some((item) => sameCandidate(item, DEFAULT_PLATFORM_CATEGORIES[1]))
+      ? recognized
+      : [...recognized, DEFAULT_PLATFORM_CATEGORIES[1]])
+    : []
+  const candidates = categoryLocked
+    ? (lockedCandidate ? [lockedCandidate] : [])
+    : (recognized.length
+      ? recognizedOptions
+      : (formCandidate && !DEFAULT_PLATFORM_CATEGORIES.some((item) => sameCandidate(item, formCandidate))
+        ? [formCandidate, ...DEFAULT_PLATFORM_CATEGORIES]
+        : DEFAULT_PLATFORM_CATEGORIES))
+  const lockedProperties = categoryLocked ? propertiesFromAttributes(form.platform_attributes) : properties
 
   const selectedCandidate = candidates.find((candidate) => sameCandidate({
     cat_id: form.platform_category_id,
@@ -375,17 +423,34 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
 
   return (
     <section className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-slate-400">{manualSelected ? '智能识别已按描述匹配分类，可点击重新识别或手动换选' : '自动检测中：有「电子资料」选电子资料，没有则用「其他闲置」；点按钮改为让智能识别自由匹配'}</span>
+        {!categoryLocked && (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-50 dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-blue-300 dark:hover:bg-blue-950/40"
+            disabled={loading}
+            onClick={() => void runRecommendation()}
+          >
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            智能识别
+          </button>
+        )}
+      </div>
+
       {error && (
         <div className="flex items-center justify-between gap-2 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
           <span className="break-words">{error}</span>
-          <button
-            type="button"
-            title="重新推荐分类"
-            className="inline-flex flex-shrink-0 items-center justify-center rounded border border-red-200 p-1.5 text-red-600 hover:bg-red-100 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/40"
-            onClick={retryRecommendation}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
+          {!categoryLocked && (
+            <button
+              type="button"
+              title="重新识别分类"
+              className="inline-flex flex-shrink-0 items-center justify-center rounded border border-red-200 p-1.5 text-red-600 hover:bg-red-100 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/40"
+              onClick={() => void runRecommendation()}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       )}
 
@@ -417,15 +482,15 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
               options={candidates.map((candidate, index) => ({
                 value: String(index),
                 label: candidateLabel(candidate),
-                disabled: !candidate.channel_cat_id || !candidate.tb_cat_id,
+                disabled: !candidate.channel_cat_id,
               }))}
               onSelect={(value) => {
                 const candidate = candidates[Number(value)]
-                if (!categoryLocked && candidate?.channel_cat_id && candidate.tb_cat_id) void selectCandidate(candidate)
+                if (!categoryLocked && candidate?.channel_cat_id) void selectCandidate(candidate)
               }}
             />
             <PlatformAttributesEditor
-              properties={properties}
+              properties={lockedProperties}
               attributes={form.platform_attributes}
               candidate={selectedCandidate}
               onChange={updateAttributes}

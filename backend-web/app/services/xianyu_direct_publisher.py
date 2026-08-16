@@ -34,6 +34,35 @@ PUBLISH_API = "mtop.idle.pc.backend.idleitem.publish"
 SELLER_ORIGIN = "https://seller.goofish.com"
 SELLER_REFERER = "https://seller.goofish.com/?site=COMMONPRO"
 
+# 内置兜底分类（ID 来自闲鱼分类推荐接口实测返回）。
+# 商品未选择平台分类时优先使用「电子资料」，发布被平台拒绝时依次回退后续分类。
+DEFAULT_PLATFORM_CATEGORIES = [
+    {"name": "电子资料", "cat_id": "50023914", "channel_cat_id": "202036301"},
+    {"name": "其他闲置", "cat_id": None, "channel_cat_id": "201459411"},
+]
+
+
+def _category_missing(item_data: dict[str, Any]) -> bool:
+    """平台分类信息是否缺失。
+
+    只以频道分类ID为判据：推荐接口对大量类目不返回 catId（学习资料定制、
+    手办等），用户已选的分类即使没有 catId 也不应被默认分类覆盖。
+    """
+    return not _text(item_data.get("platform_channel_category_id"))
+
+
+def _apply_default_category(item_data: dict[str, Any], default: dict[str, Any]) -> None:
+    """将内置默认分类写入商品数据。"""
+    item_data["platform_category_id"] = default.get("cat_id") or ""
+    item_data["platform_category_name"] = default["name"]
+    item_data["platform_channel_category_id"] = default["channel_cat_id"]
+    item_data["platform_channel_category_name"] = default["name"]
+    item_data["platform_leaf_id"] = ""
+    item_data["platform_tb_category_id"] = ""
+    item_data["platform_category_path"] = [
+        {"id": default.get("cat_id") or default["channel_cat_id"], "name": default["name"]}
+    ]
+
 
 def _location_to_gps(location: str) -> str:
     """将高德经纬度转为闲鱼接口所需的纬度,经度。"""
@@ -96,19 +125,22 @@ async def _resolve_item_address(item_data: dict[str, Any]) -> dict[str, str]:
 
 
 def _build_category_label(item_data: dict[str, Any]) -> dict[str, Any]:
-    """构造抓包中的分类属性标签，确保平台分类和分类ID一同提交。"""
+    """构造抓包中的分类属性标签，确保平台分类和分类ID一同提交。
+
+    虚拟类目（电子资料等）分类推荐接口不返回 tbCatId，因此 tbCatId 允许为空。
+    """
     channel_id = _text(item_data.get("platform_channel_category_id"))
     channel_name = _text(item_data.get("platform_channel_category_name"))
     category_name = _text(item_data.get("platform_category_name"))
     tb_cat_id = _text(item_data.get("platform_tb_category_id"))
-    if not channel_id or not channel_name or not tb_cat_id:
+    if not channel_id or not channel_name:
         raise DirectPublishError("请先根据商品描述重新选择完整的平台商品分类")
     return {
         "channelCateName": channel_name,
         "valueId": None,
         "channelCateId": channel_id,
         "valueName": None,
-        "tbCatId": tb_cat_id,
+        "tbCatId": tb_cat_id or None,
         "subPropertyId": None,
         "labelType": "common",
         "subValueId": None,
@@ -122,6 +154,24 @@ def _build_category_label(item_data: dict[str, Any]) -> dict[str, Any]:
         "text": category_name or channel_name,
         "properties": f"-10000##分类:{channel_id}##{category_name or channel_name}",
     }
+
+
+def _build_category_info(item_data: dict[str, Any]) -> dict[str, Any]:
+    """组装 itemCatDTO 并校验分类完整性。
+
+    仅频道分类ID为必填：虚拟类目没有 tbCatId，「其他闲置」类目没有 catId，
+    这两类都不应被当作分类不完整拒绝。
+    """
+    category_info = {
+        "catId": _text(item_data.get("platform_category_id")),
+        "catName": _text(item_data.get("platform_category_name")),
+        "channelCatId": _text(item_data.get("platform_channel_category_id")),
+        "leafId": _text(item_data.get("platform_leaf_id")),
+        "tbCatId": _text(item_data.get("platform_tb_category_id")),
+    }
+    if not category_info["channelCatId"]:
+        raise DirectPublishError("平台商品分类信息不完整，缺少 频道分类ID，请重新选择分类")
+    return category_info
 
 
 def _build_attribute_labels(item_data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -189,31 +239,20 @@ class XianyuDirectPublisher:
         description = _text(item_data.get("description"))
         if not title or not description:
             raise DirectPublishError("商品标题和商品描述不能为空")
+        # 未选择平台分类时，按内置兜底分类补全（优先电子资料）。
+        applied_default: dict[str, Any] | None = None
+        if _category_missing(item_data):
+            applied_default = DEFAULT_PLATFORM_CATEGORIES[0]
+            _apply_default_category(item_data, applied_default)
+            logger.info(
+                f"商品未选择平台分类，默认使用[{applied_default['name']}]发布: account_id={account_id}"
+            )
         item_properties, item_sku_list, property_image_sources, is_multi_spec = _build_sku_payload(item_data)
         images = [value for value in item_data.get("images") or [] if _text(value)]
         if not images:
             raise DirectPublishError("请至少上传一张商品图片")
         labels = _build_attribute_labels(item_data)
-        category_info = {
-            "catId": _text(item_data.get("platform_category_id")),
-            "catName": _text(item_data.get("platform_category_name")),
-            "channelCatId": _text(item_data.get("platform_channel_category_id")),
-            "leafId": _text(item_data.get("platform_leaf_id")),
-            "tbCatId": _text(item_data.get("platform_tb_category_id")),
-        }
-        missing_category_fields = [
-            field for field in ("catId", "channelCatId", "tbCatId") if not category_info[field]
-        ]
-        if missing_category_fields:
-            field_names = {
-                "catId": "末级分类ID",
-                "channelCatId": "频道分类ID",
-                "tbCatId": "淘宝分类ID",
-            }
-            raise DirectPublishError(
-                "平台商品分类信息不完整，缺少 "
-                f"{', '.join(field_names[field] for field in missing_category_fields)}，请重新选择分类"
-            )
+        category_info = _build_category_info(item_data)
         resolved_address = await _resolve_item_address(item_data)
 
         video_items: list[dict[str, Any]] = []
@@ -329,21 +368,39 @@ class XianyuDirectPublisher:
             payload.pop("itemProperties", None)
             payload.pop("itemSkuList", None)
         payload["itemCatDTO"] = category_info
-        response = await mtop_call(
-            account_id=account_id,
-            cookies_str=cookie,
-            api=PUBLISH_API,
-            version="1.0",
-            data={"inputJson": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
-            owner_id=owner_id,
-            extra_params={
-                "idle_site_biz_code": "COMMONPRO",
-                "spm_cnt": "a21107h.42826273.0.0",
-            },
-            origin=SELLER_ORIGIN,
-            referer=SELLER_REFERER,
-            extra_headers={"idle_site_biz_code": "COMMONPRO"},
-        )
+
+        async def _call(payload_to_send: dict[str, Any]) -> dict[str, Any]:
+            return await mtop_call(
+                account_id=account_id,
+                cookies_str=cookie,
+                api=PUBLISH_API,
+                version="1.0",
+                data={"inputJson": json.dumps(payload_to_send, ensure_ascii=False, separators=(",", ":"))},
+                owner_id=owner_id,
+                extra_params={
+                    "idle_site_biz_code": "COMMONPRO",
+                    "spm_cnt": "a21107h.42826273.0.0",
+                },
+                origin=SELLER_ORIGIN,
+                referer=SELLER_REFERER,
+                extra_headers={"idle_site_biz_code": "COMMONPRO"},
+            )
+
+        response = await _call(payload)
+        if not response.get("success") and applied_default is not None:
+            # 自动补全的默认分类被平台拒绝时，依次回退到下一个兜底分类重试一次；
+            # 用户显式选择的分类不参与回退，避免覆盖用户意图。
+            default_index = DEFAULT_PLATFORM_CATEGORIES.index(applied_default)
+            if default_index + 1 < len(DEFAULT_PLATFORM_CATEGORIES):
+                fallback = DEFAULT_PLATFORM_CATEGORIES[default_index + 1]
+                logger.warning(
+                    f"默认分类[{applied_default['name']}]发布失败，回退[{fallback['name']}]重试: "
+                    f"account_id={account_id}, error={response.get('error')}"
+                )
+                _apply_default_category(item_data, fallback)
+                payload["itemLabelExtList"] = _build_attribute_labels(item_data)
+                payload["itemCatDTO"] = _build_category_info(item_data)
+                response = await _call(payload)
         if not response.get("success"):
             logger.error(
                 f"闲鱼商品发布接口失败完整返回: account_id={account_id}, "

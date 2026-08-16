@@ -18,7 +18,7 @@ import {
 } from '@/api/productPublish'
 import ProductPublishForm from './ProductPublishForm'
 import ProductVideoUploader from './ProductVideoUploader'
-import { buildSkuKey, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
+import { buildSkuKey, DEFAULT_PLATFORM_CATEGORIES, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
 
 type MaterialFormState = PublishForm & { images: string[]; remark: string; stock: number }
 
@@ -59,20 +59,21 @@ function hasSavedPlatformCategory(material: ProductMaterial | null): boolean {
 
 const initialForm = (material: ProductMaterial | null): MaterialFormState => {
   const specifications = createInternalSpecifications(material?.specifications)
+  const fallbackCategory = DEFAULT_PLATFORM_CATEGORIES[0]
   return {
   account_id: '',
   title: material?.title ?? '',
   description: material?.description ?? '',
   price: String(material?.price ?? ''),
   original_price: material?.original_price == null ? '' : String(material.original_price),
-  category: material?.category ?? '',
-  platform_category_id: material?.platform_category_id ?? '',
-  platform_category_name: material?.platform_category_name ?? '',
-  platform_channel_category_id: material?.platform_channel_category_id ?? '',
-  platform_channel_category_name: material?.platform_channel_category_name ?? '',
+  category: material?.category ?? fallbackCategory.cat_name ?? '',
+  platform_category_id: material?.platform_category_id ?? fallbackCategory.cat_id ?? '',
+  platform_category_name: material?.platform_category_name ?? fallbackCategory.cat_name ?? '',
+  platform_channel_category_id: material?.platform_channel_category_id ?? fallbackCategory.channel_cat_id ?? '',
+  platform_channel_category_name: material?.platform_channel_category_name ?? fallbackCategory.channel_cat_name ?? '',
   platform_leaf_id: material?.platform_leaf_id ?? '',
   platform_tb_category_id: material?.platform_tb_category_id ?? '',
-  platform_category_path: material?.platform_category_path ?? [],
+  platform_category_path: material?.platform_category_path?.length ? material.platform_category_path : fallbackCategory.path,
   platform_attributes: material?.platform_attributes ?? [],
   category_source: material?.category_source ?? 'manual',
   category_confidence: material?.category_confidence ?? undefined,

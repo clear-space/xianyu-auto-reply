@@ -11,7 +11,7 @@ import { PageLoading } from '@/components/common/Loading'
 import { useUIStore } from '@/store/uiStore'
 import ProductPublishForm from './ProductPublishForm'
 import ProductVideoUploader from './ProductVideoUploader'
-import { buildSkuKey, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
+import { buildSkuKey, DEFAULT_PLATFORM_CATEGORIES, defaultCategoryFormPatch, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
 
 function materialSpecifications(material: ProductMaterial): { specifications: ProductSpecification[]; skuRows: SkuRow[] } {
   const specifications = (material.specifications || []).map((spec, specIndex) => ({
@@ -66,8 +66,9 @@ export function ProductPublish() {
   const [imagePreviews, setImagePreviews] = useState<string[]>([])
   const [result, setResult] = useState<{ success: boolean; message: string; item_url?: string; sync_status?: 'success' | 'failed' | 'skipped'; sync_message?: string; sync_total_count?: number; sync_saved_count?: number } | null>(null)
   const [form, setForm] = useState<PublishForm>({
-    account_id: '', title: '', description: '', price: '', original_price: '', category: '',
-    platform_category_id: '', platform_category_name: '', platform_channel_category_id: '', platform_channel_category_name: '', platform_leaf_id: '', platform_tb_category_id: '', platform_category_path: [], platform_attributes: [], category_source: 'manual', videos: [], quantity: 1,
+    account_id: '', title: '', description: '', price: '', original_price: '',
+    ...defaultCategoryFormPatch(),
+    videos: [], quantity: 1,
     address: '', delivery_method: 'express', shipping_method: 'free', support_pickup: false, postage: '0', brand: '', condition: '全新', specifications: [], sku_rows: [],
   })
 
@@ -132,7 +133,8 @@ export function ProductPublish() {
         || material.platform_category_path?.length,
     )
     setCategoryLocked(hasImportedCategory)
-    setForm((current) => ({ ...current, title: material.title, description: material.description, price: String(material.price), original_price: material.original_price ? String(material.original_price) : '', category: material.category || '', address: material.address || '', address_expected_text: material.address_expected_text || undefined, platform_category_id: material.platform_category_id || '', platform_category_name: material.platform_category_name || '', platform_channel_category_id: material.platform_channel_category_id || '', platform_channel_category_name: material.platform_channel_category_name || '', platform_leaf_id: material.platform_leaf_id || '', platform_tb_category_id: material.platform_tb_category_id || '', platform_category_path: material.platform_category_path || [], platform_attributes: material.platform_attributes || [], category_source: material.category_source || 'manual', category_confidence: material.category_confidence ?? undefined, videos: material.videos || [], quantity: material.quantity || material.stock || 1, delivery_method: material.delivery_method || 'express', shipping_method: material.shipping_method || (material.postage > 0 ? 'fixed' : 'free'), support_pickup: Boolean(material.support_pickup), postage: String(material.postage ?? 0), brand: material.brand || '', condition: material.condition || '全新', specifications: imported.specifications, sku_rows: imported.skuRows }))
+    const fallbackCategory = DEFAULT_PLATFORM_CATEGORIES[0]
+    setForm((current) => ({ ...current, title: material.title, description: material.description, price: String(material.price), original_price: material.original_price ? String(material.original_price) : '', category: material.category || fallbackCategory.cat_name || '', address: material.address || '', address_expected_text: material.address_expected_text || undefined, platform_category_id: material.platform_category_id || fallbackCategory.cat_id || '', platform_category_name: material.platform_category_name || fallbackCategory.cat_name || '', platform_channel_category_id: material.platform_channel_category_id || fallbackCategory.channel_cat_id || '', platform_channel_category_name: material.platform_channel_category_name || fallbackCategory.channel_cat_name || '', platform_leaf_id: material.platform_leaf_id || '', platform_tb_category_id: material.platform_tb_category_id || '', platform_category_path: material.platform_category_path?.length ? material.platform_category_path : fallbackCategory.path, platform_attributes: material.platform_attributes || [], category_source: material.category_source || 'manual', category_confidence: material.category_confidence ?? undefined, videos: material.videos || [], quantity: material.quantity || material.stock || 1, delivery_method: material.delivery_method || 'express', shipping_method: material.shipping_method || (material.postage > 0 ? 'fixed' : 'free'), support_pickup: Boolean(material.support_pickup), postage: String(material.postage ?? 0), brand: material.brand || '', condition: material.condition || '全新', specifications: imported.specifications, sku_rows: imported.skuRows }))
     setImagePaths(material.images || []); setImagePreviews(material.images || []); setShowPicker(false); addToast({ type: 'success', message: '已从素材库导入' })
   }
 
