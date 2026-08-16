@@ -15,8 +15,9 @@ import { useState, useEffect, useRef } from 'react'
 import { X, Loader2, FolderOpen, Image, ChevronDown, ChevronUp, Pencil, FolderUp } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { batchImportMaterialsUpload } from '@/api/productPublish'
+import { SHIPPING_OPTIONS, type ShippingMethod } from './publishTypes'
 
-const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其它闲置', '其他']
+const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '电子资料', '其他闲置']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
 const TXT_EXT = '.txt'
@@ -39,9 +40,10 @@ interface ItemSettings {
   category: string
   condition: string
   brand: string
-  delivery_method: 'express' | 'pickup'
+  shipping_method: ShippingMethod
+  support_pickup: boolean
   postage: string
-  stock: string
+  quantity: string
 }
 
 interface Props {
@@ -181,24 +183,27 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     materialFilesRef.current.clear()
   }
 
-  // 统一字段默认值
+  // 统一字段默认值（本地分类、发货设置与库存默认和新建素材一致）
   const [defaults, setDefaults] = useState<ItemSettings>({
-    price: '9.9',
+    price: '1.0',
     original_price: '',
-    category: '虚拟商品',
+    category: '电子资料',
     condition: '全新',
     brand: '',
-    delivery_method: 'express',
+    shipping_method: 'free',
+    support_pickup: false,
     postage: '0',
-    stock: '9999',
+    quantity: '9999',
   })
 
   // 逐条覆盖值：{ code: Partial<ItemSettings> }
   const [overrides, setOverrides] = useState<Record<string, Partial<ItemSettings>>>({})
 
   // 编号插入位置：none | title | description | both
-  const [codeInsertMode, setCodeInsertMode] = useState<'none' | 'title' | 'description' | 'both'>('none')
+  const [codeInsertMode, setCodeInsertMode] = useState<'none' | 'title' | 'description' | 'both'>('both')
 
+  // 导入校验问题弹窗：不符合规则时先列出问题，由用户选择返回修改或继续导入
+  const [pendingImportIssues, setPendingImportIssues] = useState<{ code: string; title: string; issues: string[] }[] | null>(null)
   // 导入状态
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<{
@@ -215,9 +220,10 @@ export function BatchImportModal({ onClose, onImported }: Props) {
       category: overrides.category ?? defaults.category,
       condition: overrides.condition ?? defaults.condition,
       brand: overrides.brand ?? defaults.brand,
-      delivery_method: overrides.delivery_method ?? defaults.delivery_method,
+      shipping_method: overrides.shipping_method ?? defaults.shipping_method,
+      support_pickup: overrides.support_pickup ?? defaults.support_pickup,
       postage: overrides.postage ?? defaults.postage,
-      stock: overrides.stock ?? defaults.stock,
+      quantity: overrides.quantity ?? defaults.quantity,
     }
   }
 
@@ -226,7 +232,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     buildItemSettings(defaults, overrides[code] || {})
 
   /** 更新某条素材的单个字段 */
-  const updateOverride = (code: string, field: keyof ItemSettings, value: string) => {
+  const updateOverride = (code: string, field: keyof ItemSettings, value: string | boolean) => {
     setOverrides(prev => {
       const current = prev[code] || {}
       const updated = { ...current, [field]: value }
@@ -315,7 +321,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
             continue
           }
 
-          // 排序图片
+          // 排序图片（超出9张在导入校验时统一截取）
           const sorted = sortByNumericFilename(imgFiles)
 
           // 推断分类
@@ -392,57 +398,143 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     })
   }
 
+  /** 计算最终标题/描述（含编号插入） */
+  const buildFinalContent = (m: LocalMaterial) => {
+    const title = (codeInsertMode === 'title' || codeInsertMode === 'both') ? `${m.code} ${m.title}` : m.title
+    const description = (codeInsertMode === 'description' || codeInsertMode === 'both') ? `${m.description}\n\n${m.code}` : m.description
+    return { title, description }
+  }
+
+<<<<<<< HEAD
   /** 执行导入 */
   const handleImport = async () => {
+=======
+  /** 打开完整修改弹窗：懒上传该条图片后进入编辑素材弹窗（草稿模式，不落库） */
+  const handleFullEdit = async (m: LocalMaterial) => {
+    const draft = editedDrafts[m.code]
+    setFullEditLoadingCode(m.code)
+    try {
+      let images: string[] = draft?.images ?? []
+      if (!draft) {
+        const imgFiles = materialFilesRef.current.get(m.code) || []
+        if (imgFiles.length > 0) {
+          const up = await uploadProductImages(imgFiles)
+          if (!up.success || !up.data) {
+            addToast({ type: 'error', message: up.message || '图片上传失败' })
+            return
+          }
+          images = up.data.urls
+        }
+      }
+      const s = getSettings(m.code)
+      const recognized = recognizedCategories[m.code]
+      const pseudo = {
+        id: 0,
+        user_id: 0,
+        title: draft?.title ?? m.title,
+        description: draft?.description ?? m.description,
+        price: draft?.price ?? (parseFloat(s.price) || 0),
+        original_price: draft?.original_price ?? null,
+        category: draft?.category ?? s.category,
+        platform_category_id: draft?.platform_category_id ?? recognized?.cat_id ?? DEFAULT_PLATFORM_CATEGORIES[0].cat_id ?? '',
+        platform_category_name: draft?.platform_category_name ?? recognized?.cat_name ?? DEFAULT_PLATFORM_CATEGORIES[0].cat_name ?? '',
+        platform_channel_category_id: draft?.platform_channel_category_id ?? recognized?.channel_cat_id ?? DEFAULT_PLATFORM_CATEGORIES[0].channel_cat_id ?? '',
+        platform_channel_category_name: draft?.platform_channel_category_name ?? recognized?.channel_cat_name ?? DEFAULT_PLATFORM_CATEGORIES[0].channel_cat_name ?? '',
+        platform_leaf_id: draft?.platform_leaf_id ?? recognized?.leaf_id ?? '',
+        platform_tb_category_id: draft?.platform_tb_category_id ?? recognized?.tb_cat_id ?? '',
+        platform_category_path: draft?.platform_category_path ?? recognized?.path ?? DEFAULT_PLATFORM_CATEGORIES[0].path,
+        platform_attributes: draft?.platform_attributes ?? [],
+        category_source: 'manual',
+        category_confidence: undefined,
+        images,
+        videos: draft?.videos ?? [],
+        specifications: draft?.specifications ?? [],
+        sku_rows: draft?.sku_rows ?? [],
+        quantity: draft?.quantity ?? (parseInt(s.quantity) || 1),
+        delivery_method: draft?.delivery_method ?? (s.shipping_method === 'none' ? 'pickup' : 'express'),
+        shipping_method: draft?.shipping_method ?? s.shipping_method,
+        support_pickup: draft?.support_pickup ?? s.support_pickup,
+        postage: draft?.postage ?? (parseFloat(s.postage) || 0),
+        address: draft?.address ?? null,
+        address_expected_text: draft?.address_expected_text ?? null,
+        brand: draft?.brand ?? s.brand.trim(),
+        condition: draft?.condition ?? s.condition,
+        stock: draft?.stock ?? 9999,
+        remark: draft?.remark ?? '',
+      } as unknown as ProductMaterial
+      setDraftInitial(pseudo)
+      setFullEditCode(m.code)
+    } catch {
+      addToast({ type: 'error', message: '准备完整修改失败，请重试' })
+    } finally {
+      setFullEditLoadingCode(null)
+    }
+  }
+
+  /** 实际执行导入（校验已通过或用户选择继续导入） */
+  const doImport = async () => {
+>>>>>>> 7c39ea0 (批量导入校验改为先提示问题再由用户选择处理方式)
     const selected = materials.filter(m => selectedCodes.has(m.code))
-    if (selected.length === 0) {
-      addToast({ type: 'warning', message: '请至少选择一条素材' })
+    // 继续导入时：标题截取前30字、描述截取前1500字；无图条目失败；图片取前9张
+    const localFailed: { code: string; reason: string }[] = []
+    const validItems = selected.filter((m) => {
+<<<<<<< HEAD
+      const { title, description } = buildFinalContent(m)
+=======
+      if (editedDrafts[m.code]) return true // 完整修改已在编辑弹窗中校验
+>>>>>>> 7c39ea0 (批量导入校验改为先提示问题再由用户选择处理方式)
+      if (m.image_count === 0) {
+        localFailed.push({ code: m.code, reason: '缺少图片（至少1张）' })
+        return false
+      }
+      return true
+    })
+
+    if (validItems.length === 0) {
+      setImportResult({ imported: 0, failed: localFailed.length, failed_items: localFailed })
+      addToast({ type: 'error', message: '选中的素材全部缺少图片，无法导入' })
       return
     }
+
     setImporting(true)
     setImportResult(null)
     try {
       const formData = new FormData()
 
       // 构建元数据数组（不含图片文件本身）
-      const metadataList = selected.map((m) => {
+      const metadataList = validItems.map((m) => {
         const s = getSettings(m.code)
+        const { title, description } = buildFinalContent(m)
         return {
           code: m.code,
           folder_name: m.folder_name,
-          title: (() => {
-            const t = m.title
-            if (codeInsertMode === 'title' || codeInsertMode === 'both') {
-              return `${m.code} ${t}`
-            }
-            return t
-          })(),
-          description: (() => {
-            const d = m.description
-            if (codeInsertMode === 'description' || codeInsertMode === 'both') {
-              return `${d}\n\n${m.code}`
-            }
-            return d
-          })(),
-          image_count: m.image_count,
+          title: title.slice(0, 30),
+          description: description.slice(0, 1500),
+          image_count: Math.min(m.image_count, 9),
           price: parseFloat(s.price) || 0,
           original_price: s.original_price ? parseFloat(s.original_price) : null,
           category: s.category,
           condition: s.condition,
           brand: s.brand.trim(),
-          delivery_method: s.delivery_method,
-          postage: parseFloat(s.postage) || 0,
-          stock: parseInt(s.stock) || 9999,
+          delivery_method: s.shipping_method === 'none' ? 'pickup' : 'express',
+          shipping_method: s.shipping_method,
+          support_pickup: s.support_pickup,
+          postage: s.shipping_method === 'free' || s.shipping_method === 'none' ? 0 : (parseFloat(s.postage) || 0),
+          quantity: parseInt(s.quantity) || 1,
         }
       })
 
       formData.append('materials', JSON.stringify(metadataList))
 
+<<<<<<< HEAD
       // 添加图片文件：img_{materialIndex}_{imageIndex}
-      selected.forEach((m, i) => {
+=======
+      // 添加图片文件：img_{materialIndex}_{imageIndex}（完整修改过的条目图片已在服务器，跳过；最多9张在导入时截取）
+>>>>>>> 7c39ea0 (批量导入校验改为先提示问题再由用户选择处理方式)
+      validItems.forEach((m, i) => {
         const imgFiles = materialFilesRef.current.get(m.code)
         if (imgFiles) {
-          imgFiles.forEach((file, j) => {
+          imgFiles.slice(0, 9).forEach((file, j) => {
             formData.append(`img_${i}_${j}`, file, file.name)
           })
         }
@@ -450,9 +542,14 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
       const res = await batchImportMaterialsUpload(formData)
       if (res.success && res.data) {
-        setImportResult(res.data)
-        if (res.data.failed === 0) {
-          addToast({ type: 'success', message: `成功导入 ${res.data.imported} 条素材！` })
+        const mergedResult = {
+          ...res.data,
+          failed: res.data.failed + localFailed.length,
+          failed_items: [...res.data.failed_items, ...localFailed],
+        }
+        setImportResult(mergedResult)
+        if (mergedResult.failed === 0) {
+          addToast({ type: 'success', message: `成功导入 ${mergedResult.imported} 条素材！` })
           timerRef.current = setTimeout(() => {
             revokeAllBlobs()
             onImported()
@@ -460,7 +557,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
         } else {
           addToast({
             type: 'warning',
-            message: `导入完成：成功 ${res.data.imported} 条，失败 ${res.data.failed} 条`,
+            message: `导入完成：成功 ${mergedResult.imported} 条，失败 ${mergedResult.failed} 条`,
           })
         }
       } else {
@@ -471,6 +568,41 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     } finally {
       setImporting(false)
     }
+  }
+
+  /** 执行导入：先校验，有问题先弹窗提示（返回修改 / 继续导入） */
+  const handleImport = () => {
+    const selected = materials.filter(m => selectedCodes.has(m.code))
+    if (selected.length === 0) {
+      addToast({ type: 'warning', message: '请至少选择一条素材' })
+      return
+    }
+
+    const issueList: { code: string; title: string; issues: string[] }[] = []
+    selected.forEach((m) => {
+      if (editedDrafts[m.code]) return // 完整修改已在编辑弹窗中校验
+      const { title, description } = buildFinalContent(m)
+      const issues: string[] = []
+      if (title.length > 30) issues.push(`标题超过30字（当前${title.length}字，继续导入将截取前30字）`)
+      if (description.length > 1500) issues.push(`描述超过1500字（当前${description.length}字，继续导入将截取前1500字）`)
+      if (m.image_count > 9) issues.push(`图片超过9张（当前${m.image_count}张，继续导入将取前9张）`)
+      if (m.image_count === 0) issues.push('缺少图片（至少1张，继续导入该条将失败）')
+      if (issues.length > 0) {
+        issueList.push({ code: m.code, title: m.title, issues })
+      }
+    })
+
+    if (issueList.length > 0) {
+      setPendingImportIssues(issueList)
+      return
+    }
+    void doImport()
+  }
+
+  /** 校验弹窗中点击继续导入 */
+  const continueImport = () => {
+    setPendingImportIssues(null)
+    void doImport()
   }
 
   const selectedCount = selectedCodes.size
@@ -589,17 +721,14 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                         />
                       </div>
                       <div className="input-group">
-                        <label className="input-label text-xs">分类</label>
-                        <select
+                        <label className="input-label text-xs">品牌（选填）</label>
+                        <input
                           className="input-ios text-sm"
-                          value={defaults.category}
-                          onChange={e => setDefaults(d => ({ ...d, category: e.target.value }))}
+                          placeholder="统一品牌"
+                          value={defaults.brand}
+                          onChange={e => setDefaults(d => ({ ...d, brand: e.target.value }))}
                           disabled={importing}
-                        >
-                          {CATEGORIES.map(c => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
+                        />
                       </div>
                       <div className="input-group">
                         <label className="input-label text-xs">成色</label>
@@ -614,47 +743,78 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                           ))}
                         </select>
                       </div>
-                      <div className="input-group">
-                        <label className="input-label text-xs">品牌（选填）</label>
-                        <input
-                          className="input-ios text-sm"
-                          placeholder="统一品牌"
-                          value={defaults.brand}
-                          onChange={e => setDefaults(d => ({ ...d, brand: e.target.value }))}
-                          disabled={importing}
-                        />
-                      </div>
-                      <div className="input-group">
-                        <label className="input-label text-xs">发货方式</label>
+                      <div className="input-group col-span-2 sm:col-span-3">
+                        <label className="input-label text-xs">分类</label>
                         <select
                           className="input-ios text-sm"
-                          value={defaults.delivery_method}
-                          onChange={e => setDefaults(d => ({ ...d, delivery_method: e.target.value as 'express' | 'pickup' }))}
+                          value={defaults.category}
+                          onChange={e => setDefaults(d => ({ ...d, category: e.target.value }))}
                           disabled={importing}
                         >
-                          <option value="express">快递发货</option>
-                          <option value="pickup">自提</option>
+                          {CATEGORIES.map(c => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
                         </select>
                       </div>
-                      <div className="input-group">
-                        <label className="input-label text-xs">邮费（元）</label>
-                        <input
-                          type="number"
-                          className="input-ios text-sm"
-                          min="0" step="0.01"
-                          value={defaults.postage}
-                          onChange={e => setDefaults(d => ({ ...d, postage: e.target.value }))}
-                          disabled={importing}
-                        />
+                      <div className="col-span-2 sm:col-span-1 flex items-end">
+                        <button
+                          type="button"
+                          className="btn-ios-secondary w-full text-sm"
+                          onClick={() => void handleRecognize()}
+                          disabled={importing || recognizing}
+                        >
+                          {recognizing
+                            ? <><Loader2 className="w-4 h-4 animate-spin" />识别中 {recognizeProgress.done}/{recognizeProgress.total}</>
+                            : <><Sparkles className="w-4 h-4" />智能识别分类</>}
+                        </button>
                       </div>
+                      <div className="input-group col-span-2 sm:col-span-4">
+                        <label className="input-label text-xs">发货方式</label>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
+                          {SHIPPING_OPTIONS.map(option => (
+                            <label key={option.value} className="inline-flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="batch_shipping"
+                                checked={defaults.shipping_method === option.value}
+                                onChange={() => setDefaults(d => ({ ...d, shipping_method: option.value }))}
+                                disabled={importing}
+                              />
+                              {option.label}
+                            </label>
+                          ))}
+                          <label className="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                            <span>支持自提</span>
+                            <input
+                              type="checkbox"
+                              checked={defaults.support_pickup}
+                              onChange={e => setDefaults(d => ({ ...d, support_pickup: e.target.checked }))}
+                              disabled={importing}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                      {defaults.shipping_method !== 'free' && defaults.shipping_method !== 'none' && (
+                        <div className="input-group">
+                          <label className="input-label text-xs">运费（元）</label>
+                          <input
+                            type="number"
+                            className="input-ios text-sm"
+                            min="0" step="0.01"
+                            value={defaults.postage}
+                            onChange={e => setDefaults(d => ({ ...d, postage: e.target.value }))}
+                            disabled={importing}
+                          />
+                        </div>
+                      )}
                       <div className="input-group">
                         <label className="input-label text-xs">库存</label>
                         <input
                           type="number"
                           className="input-ios text-sm"
-                          min="0" step="1"
-                          value={defaults.stock}
-                          onChange={e => setDefaults(d => ({ ...d, stock: e.target.value }))}
+                          min="1" step="1"
+                          value={defaults.quantity}
+                          onChange={e => setDefaults(d => ({ ...d, quantity: e.target.value }))}
                           disabled={importing}
                         />
                       </div>
@@ -878,39 +1038,55 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                     disabled={importing}
                                   />
                                 </div>
-                                <div className="input-group">
+                                <div className="input-group col-span-2 sm:col-span-4">
                                   <label className="input-label text-xs">发货方式</label>
-                                  <select
-                                    className="input-ios text-sm"
-                                    value={s.delivery_method}
-                                    onChange={e => updateOverride(m.code, 'delivery_method', e.target.value as 'express' | 'pickup')}
-                                    disabled={importing}
-                                  >
-                                    <option value="express">快递发货</option>
-                                    <option value="pickup">自提</option>
-                                  </select>
+                                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
+                                    {SHIPPING_OPTIONS.map(option => (
+                                      <label key={option.value} className="inline-flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                                        <input
+                                          type="radio"
+                                          name={`batch_shipping_${m.code}`}
+                                          checked={s.shipping_method === option.value}
+                                          onChange={() => updateOverride(m.code, 'shipping_method', option.value)}
+                                          disabled={importing}
+                                        />
+                                        {option.label}
+                                      </label>
+                                    ))}
+                                    <label className="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                                      <span>支持自提</span>
+                                      <input
+                                        type="checkbox"
+                                        checked={s.support_pickup}
+                                        onChange={e => updateOverride(m.code, 'support_pickup', e.target.checked)}
+                                        disabled={importing}
+                                      />
+                                    </label>
+                                  </div>
                                 </div>
-                                <div className="input-group">
-                                  <label className="input-label text-xs">邮费（元）</label>
-                                  <input
-                                    type="number"
-                                    className="input-ios text-sm"
-                                    min="0" step="0.01"
-                                    placeholder={defaults.postage}
-                                    value={s.postage !== defaults.postage ? s.postage : ''}
-                                    onChange={e => updateOverride(m.code, 'postage', e.target.value)}
-                                    disabled={importing}
-                                  />
-                                </div>
+                                {s.shipping_method !== 'free' && s.shipping_method !== 'none' && (
+                                  <div className="input-group">
+                                    <label className="input-label text-xs">运费（元）</label>
+                                    <input
+                                      type="number"
+                                      className="input-ios text-sm"
+                                      min="0" step="0.01"
+                                      placeholder={defaults.postage}
+                                      value={s.postage !== defaults.postage ? s.postage : ''}
+                                      onChange={e => updateOverride(m.code, 'postage', e.target.value)}
+                                      disabled={importing}
+                                    />
+                                  </div>
+                                )}
                                 <div className="input-group">
                                   <label className="input-label text-xs">库存</label>
                                   <input
                                     type="number"
                                     className="input-ios text-sm"
-                                    min="0" step="1"
-                                    placeholder={defaults.stock}
-                                    value={s.stock !== defaults.stock ? s.stock : ''}
-                                    onChange={e => updateOverride(m.code, 'stock', e.target.value)}
+                                    min="1" step="1"
+                                    placeholder={defaults.quantity}
+                                    value={s.quantity !== defaults.quantity ? s.quantity : ''}
+                                    onChange={e => updateOverride(m.code, 'quantity', e.target.value)}
                                     disabled={importing}
                                   />
                                 </div>
@@ -954,6 +1130,62 @@ export function BatchImportModal({ onClose, onImported }: Props) {
           </div>
         </div>
 
+<<<<<<< HEAD
+=======
+        {/* 完整修改弹窗（草稿模式：保存不落库，写回该条素材） */}
+        {fullEditCode && draftInitial && (
+          <MaterialFormModal
+            initial={draftInitial}
+            onClose={() => { setFullEditCode(null); setDraftInitial(null) }}
+            onSaved={() => { setFullEditCode(null); setDraftInitial(null) }}
+            draftSubmit={async (payload) => {
+              if (fullEditCode) {
+                setEditedDrafts(prev => ({ ...prev, [fullEditCode]: payload }))
+              }
+            }}
+          />
+        )}
+
+        {/* 导入校验问题弹窗 */}
+        {pendingImportIssues && (
+          <div className="modal-overlay z-50">
+            <div className="modal-content max-w-lg">
+              <div className="modal-header">
+                <h2 className="modal-title">导入校验提示</h2>
+              </div>
+              <div className="modal-body max-h-[60vh] overflow-y-auto">
+                <p className="text-xs text-slate-500 mb-3">
+                  以下 {pendingImportIssues.length} 条素材不符合规则。选择「继续导入」将自动截取标题前30字、描述前1500字、图片前9张；缺少图片的条目将导入失败。
+                </p>
+                <ul className="space-y-2">
+                  {pendingImportIssues.map(item => (
+                    <li key={item.code} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/20">
+                      <p className="text-xs">
+                        <span className="font-mono text-blue-600">{item.code}</span>
+                        <span className="text-slate-600 dark:text-slate-300"> {item.title}</span>
+                      </p>
+                      <ul className="mt-1 space-y-0.5 text-xs text-amber-700 dark:text-amber-400">
+                        {item.issues.map((issue, index) => (
+                          <li key={index}>· {issue}</li>
+                        ))}
+                      </ul>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="modal-footer">
+                <button className="btn-ios-secondary" onClick={() => setPendingImportIssues(null)}>
+                  返回修改
+                </button>
+                <button className="btn-ios-primary" onClick={continueImport}>
+                  继续导入
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+>>>>>>> 7c39ea0 (批量导入校验改为先提示问题再由用户选择处理方式)
         {/* 底部按钮 */}
         <div className="modal-footer flex-shrink-0">
           <button

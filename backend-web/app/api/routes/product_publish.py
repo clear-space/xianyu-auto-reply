@@ -22,6 +22,7 @@ from app.api.deps import get_current_active_user, get_db_session
 from app.services.product_publish_service import MaterialSpecificationError, ProductMaterialService
 from app.services.account_service import AccountService
 from app.services.platform_category_service import CategoryRecommendationError, PlatformCategoryService
+from app.services.platform_category_defaults import DEFAULT_PLATFORM_CATEGORIES
 from app.services.publish_batch_status_service import PublishBatchStatusService
 from app.services.publish_execution_service import PublishExecutorService, PublishLogService
 from common.models.user import User, UserRole
@@ -34,6 +35,20 @@ from common.utils.time_utils import get_beijing_now, get_beijing_now_naive
 def _is_admin(user: User) -> bool:
     """判断用户是否为管理员"""
     return user.role == UserRole.ADMIN
+
+
+def _default_platform_category_fields() -> Dict[str, Any]:
+    """内置默认平台分类字段，批量导入与新建素材共用同一默认值。"""
+    default = DEFAULT_PLATFORM_CATEGORIES[0]
+    return {
+        "platform_category_id": default.get("cat_id") or "",
+        "platform_category_name": default["name"],
+        "platform_channel_category_id": default["channel_cat_id"],
+        "platform_channel_category_name": default["name"],
+        "platform_category_path": [
+            {"id": default.get("cat_id") or default["channel_cat_id"], "name": default["name"]}
+        ],
+    }
 
 router = APIRouter(prefix="/product-publish", tags=["商品发布"])
 
@@ -935,6 +950,7 @@ async def batch_import_materials(
                 "stock": int(material_data.stock) if material_data.stock is not None else 9999,
                 "remark": f"批量导入自: {material_data.folder_name}",
             }
+            create_data.update(_default_platform_category_fields())
 
             await svc.create(current_user.id, create_data)
             imported += 1
@@ -1046,13 +1062,17 @@ async def batch_import_materials_upload(
                 "category": str(mat.get("category", "虚拟商品")),
                 "images": [u for u in saved_urls if u],
                 "delivery_method": str(mat.get("delivery_method", "express")),
+                "shipping_method": str(mat.get("shipping_method", "free")),
+                "support_pickup": bool(mat.get("support_pickup", False)),
                 "postage": float(mat.get("postage", 0)),
                 "address": None,
                 "brand": str(mat.get("brand", "")).strip() or None,
                 "condition": str(mat.get("condition", "全新")),
                 "stock": int(mat.get("stock", 9999)),
+                "quantity": int(mat.get("quantity", 1)),
                 "remark": f"批量导入自: {folder_name}" if folder_name else None,
             }
+            create_data.update(_default_platform_category_fields())
 
             await svc.create(current_user.id, create_data)
             imported += 1

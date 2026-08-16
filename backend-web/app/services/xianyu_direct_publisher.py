@@ -34,12 +34,8 @@ PUBLISH_API = "mtop.idle.pc.backend.idleitem.publish"
 SELLER_ORIGIN = "https://seller.goofish.com"
 SELLER_REFERER = "https://seller.goofish.com/?site=COMMONPRO"
 
-# 内置兜底分类（ID 来自闲鱼分类推荐接口实测返回）。
-# 商品未选择平台分类时优先使用「电子资料」，发布被平台拒绝时依次回退后续分类。
-DEFAULT_PLATFORM_CATEGORIES = [
-    {"name": "电子资料", "cat_id": "50023914", "channel_cat_id": "202036301"},
-    {"name": "其他闲置", "cat_id": None, "channel_cat_id": "201459411"},
-]
+# 内置兜底分类常量从共享模块导入，批量导入与新建素材共用同一默认值。
+from app.services.platform_category_defaults import DEFAULT_PLATFORM_CATEGORIES  # noqa: E402
 
 
 def _category_missing(item_data: dict[str, Any]) -> bool:

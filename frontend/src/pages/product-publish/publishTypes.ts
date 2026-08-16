@@ -6,6 +6,15 @@ import type { MaterialVideo, PlatformCategoryCandidate, PlatformCategoryPathItem
 
 export type ShippingMethod = 'free' | 'distance' | 'fixed' | 'template' | 'none'
 
+/** 发货方式选项，批量导入与新建素材共用。 */
+export const SHIPPING_OPTIONS: Array<{ value: ShippingMethod; label: string }> = [
+  { value: 'free', label: '包邮' },
+  { value: 'distance', label: '按距离计费' },
+  { value: 'fixed', label: '一口价' },
+  { value: 'template', label: '运费模板' },
+  { value: 'none', label: '无需邮寄' },
+]
+
 export interface SpecificationValue {
   id: string
   name: string

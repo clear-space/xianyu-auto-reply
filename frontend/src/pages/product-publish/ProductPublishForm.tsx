@@ -7,15 +7,7 @@ import { ChevronRight, MapPin } from 'lucide-react'
 import ProductSpecificationsEditor from './ProductSpecificationsEditor'
 import AddressPickerModal from './AddressPickerModal'
 import PlatformCategoryRecommender from './PlatformCategoryRecommender'
-import type { ProductSpecification, PublishForm, ShippingMethod, SkuRow } from './publishTypes'
-
-const SHIPPING_OPTIONS: Array<{ value: ShippingMethod; label: string }> = [
-  { value: 'free', label: '包邮' },
-  { value: 'distance', label: '按距离计费' },
-  { value: 'fixed', label: '一口价' },
-  { value: 'template', label: '运费模板' },
-  { value: 'none', label: '无需邮寄' },
-]
+import { SHIPPING_OPTIONS, type ProductSpecification, type PublishForm, type ShippingMethod, type SkuRow } from './publishTypes'
 
 interface ProductPublishFormProps {
   form: PublishForm
