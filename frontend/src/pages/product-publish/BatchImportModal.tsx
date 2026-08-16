@@ -12,10 +12,10 @@
  * - 若干 .jpg/.png 图片（按文件名中数字排序）
  */
 import { useState, useEffect, useRef } from 'react'
-import { X, Loader2, FolderOpen, Image, ChevronDown, ChevronUp, Pencil, FolderUp } from 'lucide-react'
+import { X, Loader2, FolderOpen, Image, ChevronDown, ChevronUp, Pencil, FolderUp, Sparkles } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { batchImportMaterialsUpload } from '@/api/productPublish'
-import { SHIPPING_OPTIONS, type ShippingMethod } from './publishTypes'
+import { batchImportMaterialsUpload, recommendPlatformCategory, type PlatformCategoryCandidate } from '@/api/productPublish'
+import { preferredCandidate, SHIPPING_OPTIONS, type ShippingMethod } from './publishTypes'
 
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '电子资料', '其他闲置']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
@@ -202,6 +202,11 @@ export function BatchImportModal({ onClose, onImported }: Props) {
   // 编号插入位置：none | title | description | both
   const [codeInsertMode, setCodeInsertMode] = useState<'none' | 'title' | 'description' | 'both'>('both')
 
+  // 智能识别状态：识别出的平台分类（code → 候选），随导入写入素材
+  const [recognizing, setRecognizing] = useState(false)
+  const [recognizeProgress, setRecognizeProgress] = useState({ done: 0, total: 0 })
+  const [recognizedCategories, setRecognizedCategories] = useState<Record<string, PlatformCategoryCandidate>>({})
+
   // 导入校验问题弹窗：不符合规则时先列出问题，由用户选择返回修改或继续导入
   const [pendingImportIssues, setPendingImportIssues] = useState<{ code: string; title: string; issues: string[] }[] | null>(null)
   // 导入状态
@@ -252,6 +257,46 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     addToast({ type: 'success', message: '统一设置已应用到全部素材' })
   }
 
+  /** 对选中素材逐条智能识别平台分类（让识别结果自己选，与素材弹窗按钮一致） */
+  const handleRecognize = async () => {
+    const selected = materials.filter(m => selectedCodes.has(m.code))
+    if (selected.length === 0) {
+      addToast({ type: 'warning', message: '请至少选择一条素材' })
+      return
+    }
+    setRecognizing(true)
+    setRecognizeProgress({ done: 0, total: selected.length })
+    let succeeded = 0
+    let failed = 0
+    for (const m of selected) {
+      try {
+        const response = await recommendPlatformCategory({
+          title: m.title || m.description.slice(0, 200),
+          description: m.description || m.title,
+        })
+        if (response.success && response.data?.candidates?.length) {
+          const chosen = preferredCandidate(response.data.candidates)
+          if (chosen) {
+            setRecognizedCategories(prev => ({ ...prev, [m.code]: chosen }))
+            succeeded += 1
+          } else {
+            failed += 1
+          }
+        } else {
+          failed += 1
+        }
+      } catch {
+        failed += 1
+      }
+      setRecognizeProgress(prev => ({ ...prev, done: prev.done + 1 }))
+    }
+    setRecognizing(false)
+    addToast({
+      type: succeeded > 0 && failed === 0 ? 'success' : failed > 0 ? 'warning' : 'error',
+      message: `智能识别完成：成功 ${succeeded} 条${failed > 0 ? `，失败 ${failed} 条（保留默认电子资料）` : ''}`,
+    })
+  }
+
   /** 处理文件夹选择（webkitdirectory） */
   const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
@@ -262,6 +307,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     setMaterials([])
     setSelectedCodes(new Set())
     setOverrides({})
+    setRecognizedCategories({})
     setExpandedCode(null)
     setImportResult(null)
     revokeAllBlobs()
@@ -405,84 +451,13 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     return { title, description }
   }
 
-<<<<<<< HEAD
-  /** 执行导入 */
-  const handleImport = async () => {
-=======
-  /** 打开完整修改弹窗：懒上传该条图片后进入编辑素材弹窗（草稿模式，不落库） */
-  const handleFullEdit = async (m: LocalMaterial) => {
-    const draft = editedDrafts[m.code]
-    setFullEditLoadingCode(m.code)
-    try {
-      let images: string[] = draft?.images ?? []
-      if (!draft) {
-        const imgFiles = materialFilesRef.current.get(m.code) || []
-        if (imgFiles.length > 0) {
-          const up = await uploadProductImages(imgFiles)
-          if (!up.success || !up.data) {
-            addToast({ type: 'error', message: up.message || '图片上传失败' })
-            return
-          }
-          images = up.data.urls
-        }
-      }
-      const s = getSettings(m.code)
-      const recognized = recognizedCategories[m.code]
-      const pseudo = {
-        id: 0,
-        user_id: 0,
-        title: draft?.title ?? m.title,
-        description: draft?.description ?? m.description,
-        price: draft?.price ?? (parseFloat(s.price) || 0),
-        original_price: draft?.original_price ?? null,
-        category: draft?.category ?? s.category,
-        platform_category_id: draft?.platform_category_id ?? recognized?.cat_id ?? DEFAULT_PLATFORM_CATEGORIES[0].cat_id ?? '',
-        platform_category_name: draft?.platform_category_name ?? recognized?.cat_name ?? DEFAULT_PLATFORM_CATEGORIES[0].cat_name ?? '',
-        platform_channel_category_id: draft?.platform_channel_category_id ?? recognized?.channel_cat_id ?? DEFAULT_PLATFORM_CATEGORIES[0].channel_cat_id ?? '',
-        platform_channel_category_name: draft?.platform_channel_category_name ?? recognized?.channel_cat_name ?? DEFAULT_PLATFORM_CATEGORIES[0].channel_cat_name ?? '',
-        platform_leaf_id: draft?.platform_leaf_id ?? recognized?.leaf_id ?? '',
-        platform_tb_category_id: draft?.platform_tb_category_id ?? recognized?.tb_cat_id ?? '',
-        platform_category_path: draft?.platform_category_path ?? recognized?.path ?? DEFAULT_PLATFORM_CATEGORIES[0].path,
-        platform_attributes: draft?.platform_attributes ?? [],
-        category_source: 'manual',
-        category_confidence: undefined,
-        images,
-        videos: draft?.videos ?? [],
-        specifications: draft?.specifications ?? [],
-        sku_rows: draft?.sku_rows ?? [],
-        quantity: draft?.quantity ?? (parseInt(s.quantity) || 1),
-        delivery_method: draft?.delivery_method ?? (s.shipping_method === 'none' ? 'pickup' : 'express'),
-        shipping_method: draft?.shipping_method ?? s.shipping_method,
-        support_pickup: draft?.support_pickup ?? s.support_pickup,
-        postage: draft?.postage ?? (parseFloat(s.postage) || 0),
-        address: draft?.address ?? null,
-        address_expected_text: draft?.address_expected_text ?? null,
-        brand: draft?.brand ?? s.brand.trim(),
-        condition: draft?.condition ?? s.condition,
-        stock: draft?.stock ?? 9999,
-        remark: draft?.remark ?? '',
-      } as unknown as ProductMaterial
-      setDraftInitial(pseudo)
-      setFullEditCode(m.code)
-    } catch {
-      addToast({ type: 'error', message: '准备完整修改失败，请重试' })
-    } finally {
-      setFullEditLoadingCode(null)
-    }
-  }
-
   /** 实际执行导入（校验已通过或用户选择继续导入） */
   const doImport = async () => {
->>>>>>> 7c39ea0 (批量导入校验改为先提示问题再由用户选择处理方式)
     const selected = materials.filter(m => selectedCodes.has(m.code))
     // 继续导入时：标题截取前30字、描述截取前1500字；无图条目失败；图片取前9张
     const localFailed: { code: string; reason: string }[] = []
     const validItems = selected.filter((m) => {
-<<<<<<< HEAD
       const { title, description } = buildFinalContent(m)
-=======
-      if (editedDrafts[m.code]) return true // 完整修改已在编辑弹窗中校验
->>>>>>> 7c39ea0 (批量导入校验改为先提示问题再由用户选择处理方式)
       if (m.image_count === 0) {
         localFailed.push({ code: m.code, reason: '缺少图片（至少1张）' })
         return false
@@ -504,6 +479,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
       // 构建元数据数组（不含图片文件本身）
       const metadataList = validItems.map((m) => {
         const s = getSettings(m.code)
+        const recognized = recognizedCategories[m.code]
         const { title, description } = buildFinalContent(m)
         return {
           code: m.code,
@@ -521,16 +497,21 @@ export function BatchImportModal({ onClose, onImported }: Props) {
           support_pickup: s.support_pickup,
           postage: s.shipping_method === 'free' || s.shipping_method === 'none' ? 0 : (parseFloat(s.postage) || 0),
           quantity: parseInt(s.quantity) || 1,
+          ...(recognized ? {
+            platform_category_id: recognized.cat_id ?? '',
+            platform_category_name: recognized.cat_name ?? '',
+            platform_channel_category_id: recognized.channel_cat_id ?? '',
+            platform_channel_category_name: recognized.channel_cat_name ?? '',
+            platform_leaf_id: recognized.leaf_id ?? '',
+            platform_tb_category_id: recognized.tb_cat_id ?? '',
+            platform_category_path: recognized.path ?? [],
+          } : {}),
         }
       })
 
       formData.append('materials', JSON.stringify(metadataList))
 
-<<<<<<< HEAD
       // 添加图片文件：img_{materialIndex}_{imageIndex}
-=======
-      // 添加图片文件：img_{materialIndex}_{imageIndex}（完整修改过的条目图片已在服务器，跳过；最多9张在导入时截取）
->>>>>>> 7c39ea0 (批量导入校验改为先提示问题再由用户选择处理方式)
       validItems.forEach((m, i) => {
         const imgFiles = materialFilesRef.current.get(m.code)
         if (imgFiles) {
@@ -580,7 +561,6 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
     const issueList: { code: string; title: string; issues: string[] }[] = []
     selected.forEach((m) => {
-      if (editedDrafts[m.code]) return // 完整修改已在编辑弹窗中校验
       const { title, description } = buildFinalContent(m)
       const issues: string[] = []
       if (title.length > 30) issues.push(`标题超过30字（当前${title.length}字，继续导入将截取前30字）`)
@@ -932,6 +912,12 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                 </span>
                                 <span className="text-xs text-amber-600 font-medium">¥{s.price}</span>
                                 <span className="text-xs text-slate-400">{s.category}</span>
+                                {recognizedCategories[m.code] && (
+                                  <span className="text-xs text-blue-500">
+                                    <Sparkles className="w-2.5 h-2.5 inline mr-0.5" />
+                                    平台分类：{recognizedCategories[m.code].cat_name || recognizedCategories[m.code].channel_cat_name || '已识别'}
+                                  </span>
+                                )}
                                 {hasOverride && (
                                   <span className="text-xs text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-1 rounded">
                                     <Pencil className="w-2.5 h-2.5 inline mr-0.5" />
@@ -1130,22 +1116,6 @@ export function BatchImportModal({ onClose, onImported }: Props) {
           </div>
         </div>
 
-<<<<<<< HEAD
-=======
-        {/* 完整修改弹窗（草稿模式：保存不落库，写回该条素材） */}
-        {fullEditCode && draftInitial && (
-          <MaterialFormModal
-            initial={draftInitial}
-            onClose={() => { setFullEditCode(null); setDraftInitial(null) }}
-            onSaved={() => { setFullEditCode(null); setDraftInitial(null) }}
-            draftSubmit={async (payload) => {
-              if (fullEditCode) {
-                setEditedDrafts(prev => ({ ...prev, [fullEditCode]: payload }))
-              }
-            }}
-          />
-        )}
-
         {/* 导入校验问题弹窗 */}
         {pendingImportIssues && (
           <div className="modal-overlay z-50">
@@ -1184,8 +1154,6 @@ export function BatchImportModal({ onClose, onImported }: Props) {
             </div>
           </div>
         )}
-
->>>>>>> 7c39ea0 (批量导入校验改为先提示问题再由用户选择处理方式)
         {/* 底部按钮 */}
         <div className="modal-footer flex-shrink-0">
           <button

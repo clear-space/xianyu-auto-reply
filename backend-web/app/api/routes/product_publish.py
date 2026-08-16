@@ -37,17 +37,23 @@ def _is_admin(user: User) -> bool:
     return user.role == UserRole.ADMIN
 
 
-def _default_platform_category_fields() -> Dict[str, Any]:
-    """内置默认平台分类字段，批量导入与新建素材共用同一默认值。"""
+def _platform_category_fields(source: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """平台分类字段，逐条传入的值（智能识别结果）优先，缺省用内置默认值。"""
+    source = source or {}
     default = DEFAULT_PLATFORM_CATEGORIES[0]
+
+    def pick(key: str, fallback: Any) -> Any:
+        value = source.get(key)
+        return value if value not in (None, "", []) else fallback
+
     return {
-        "platform_category_id": default.get("cat_id") or "",
-        "platform_category_name": default["name"],
-        "platform_channel_category_id": default["channel_cat_id"],
-        "platform_channel_category_name": default["name"],
-        "platform_category_path": [
+        "platform_category_id": pick("platform_category_id", default.get("cat_id") or ""),
+        "platform_category_name": pick("platform_category_name", default["name"]),
+        "platform_channel_category_id": pick("platform_channel_category_id", default["channel_cat_id"]),
+        "platform_channel_category_name": pick("platform_channel_category_name", default["name"]),
+        "platform_category_path": pick("platform_category_path", [
             {"id": default.get("cat_id") or default["channel_cat_id"], "name": default["name"]}
-        ],
+        ]),
     }
 
 router = APIRouter(prefix="/product-publish", tags=["商品发布"])
@@ -950,7 +956,7 @@ async def batch_import_materials(
                 "stock": int(material_data.stock) if material_data.stock is not None else 9999,
                 "remark": f"批量导入自: {material_data.folder_name}",
             }
-            create_data.update(_default_platform_category_fields())
+            create_data.update(_platform_category_fields())
 
             await svc.create(current_user.id, create_data)
             imported += 1
@@ -1072,7 +1078,7 @@ async def batch_import_materials_upload(
                 "quantity": int(mat.get("quantity", 1)),
                 "remark": f"批量导入自: {folder_name}" if folder_name else None,
             }
-            create_data.update(_default_platform_category_fields())
+            create_data.update(_platform_category_fields(mat))
 
             await svc.create(current_user.id, create_data)
             imported += 1

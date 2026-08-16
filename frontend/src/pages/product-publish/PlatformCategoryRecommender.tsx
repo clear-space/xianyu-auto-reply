@@ -19,7 +19,7 @@ import {
   type PlatformCategoryProperty,
   type PlatformMaterialAttribute,
 } from '@/api/productPublish'
-import { DEFAULT_PLATFORM_CATEGORIES, type PublishForm } from './publishTypes'
+import { DEFAULT_PLATFORM_CATEGORIES, preferredCandidate, restrictedCandidate, type PublishForm } from './publishTypes'
 import PlatformAttributesEditor, { PlatformOptionField } from './PlatformAttributesEditor'
 
 interface PlatformCategoryRecommenderProps {
@@ -208,24 +208,6 @@ function buildCategorySelection(cards: PlatformCategoryCardData[], candidate: Pl
 
 function selectedProperty(attributes: PlatformMaterialAttribute[], propertyId: string) {
   return attributes.find((attribute) => attribute.property_id === propertyId)
-}
-
-/** 自动检测模式的选择：候选里有电子资料选电子资料，没有则用其他闲置。 */
-function restrictedCandidate(returnedCandidates: PlatformCategoryCandidate[]): PlatformCategoryCandidate {
-  const electronicCandidate = returnedCandidates.find((candidate) => (
-    candidate.cat_name === '电子资料' || candidate.channel_cat_name === '电子资料'
-  ) && candidate.channel_cat_id)
-  return electronicCandidate || DEFAULT_PLATFORM_CATEGORIES[1]
-}
-
-/** 手动智能识别模式的选择：让识别结果自己选（原版逻辑，优先ID齐全的候选）。 */
-function preferredCandidate(returnedCandidates: PlatformCategoryCandidate[]): PlatformCategoryCandidate | null {
-  return returnedCandidates.find((candidate) => candidate.is_selected && candidate.channel_cat_id && candidate.tb_cat_id)
-    || returnedCandidates.find((candidate) => candidate.channel_cat_id && candidate.tb_cat_id && candidate.cat_id)
-    || returnedCandidates.find((candidate) => candidate.channel_cat_id && candidate.tb_cat_id)
-    || returnedCandidates.find((candidate) => candidate.channel_cat_id && candidate.cat_id)
-    || returnedCandidates.find((candidate) => candidate.channel_cat_id)
-    || null
 }
 
 export function PlatformCategoryRecommender({ form, onChange, categoryLocked = false, onReselectCategory }: PlatformCategoryRecommenderProps) {
