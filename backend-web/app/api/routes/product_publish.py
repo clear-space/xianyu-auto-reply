@@ -810,24 +810,18 @@ async def scan_directory(
             # 过滤掉完全空的行
             non_empty = [l for l in lines if l]
 
-            if len(non_empty) < 2:
-                logger.warning(f"txt文件内容不足: {txt_path}, 行数={len(non_empty)}")
-                continue
+            # 标题 = txt 文件名（去掉【xxx】前缀），不是从内容里提取
+            title = re.sub(r'^【[^】]*】\s*', '', txt_path.stem).strip() or subdir.name
 
-            # 第一行 = 标题
-            raw_title = non_empty[0]
-            # 去掉【xxx】前缀
-            title = re.sub(r'^【[^】]*】\s*', '', raw_title).strip()
-
-            # 最后非空行 = 编号
-            code = non_empty[-1].strip()
-
-            # 中间行 = 描述
-            # 如果只有2行非空行，描述为空
-            if len(non_empty) <= 2:
-                description = title
+            if non_empty:
+                # 最后非空行 = 编号
+                code = non_empty[-1].strip()
+                # 描述 = 除编号外的全文
+                description = "\n".join(non_empty[:-1]).strip()
             else:
-                description = "\n".join(non_empty[1:-1]).strip()
+                # txt 无内容：编号用文件名，描述用标题兜底
+                code = title
+                description = title
 
             if not description:
                 description = title

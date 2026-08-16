@@ -8,7 +8,7 @@
  * 4. 确认后上传图片 + 元数据到服务器，批量导入到素材库
  *
  * 目录结构要求：每个子文件夹为一个素材，包含：
- * - 一个 .txt 文件（第一行=标题，最后非空行=编号，中间=描述）
+ * - 一个 .txt 文件（文件名=标题，最后非空行=编号，其余行=描述）
  * - 若干 .jpg/.png 图片（按文件名中数字排序）
  */
 import { useState, useEffect, useRef } from 'react'
@@ -69,23 +69,23 @@ function inferCategory(txtContent: string): string {
   return '虚拟商品'
 }
 
-/** 解析 txt 文本，提取标题/编号/描述 */
-function parseTxtContent(text: string): { title: string; code: string; description: string } | null {
+/** 解析 txt：标题 = txt 文件名（去掉【xxx】前缀）；最后非空行 = 编号；其余 = 描述 */
+function parseTxtContent(text: string, fileName: string, folderName: string): { title: string; code: string; description: string } {
+  // 标题 = txt 文件名，不是从内容里提取
+  const title = fileName.replace(/\.txt$/i, '').replace(/^【[^】]*】\s*/, '').trim() || folderName
+
   const lines = text.split('\n').map(l => l.trim())
   const nonEmpty = lines.filter(Boolean)
-  if (nonEmpty.length < 2) return null
-
-  // 第一非空行 = 标题，去掉【xxx】前缀
-  const rawTitle = nonEmpty[0]
-  const title = rawTitle.replace(/^【[^】]*】\s*/, '').trim()
+  if (nonEmpty.length === 0) {
+    // txt 无内容：编号用文件名，描述用标题兜底
+    return { title, code: title, description: title }
+  }
 
   // 最后非空行 = 编号
   const code = nonEmpty[nonEmpty.length - 1].trim()
 
-  // 中间行 = 描述
-  const description = nonEmpty.length <= 2
-    ? title
-    : nonEmpty.slice(1, -1).join('\n').trim() || title
+  // 描述 = 除编号外的全文
+  const description = nonEmpty.slice(0, -1).join('\n').trim() || title
 
   return { title, code, description }
 }
@@ -369,11 +369,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
           // 读第一个 txt 文件
           const txtFile = txtFiles.sort((a, b) => a.name.localeCompare(b.name))[0]
           const txtContent = await readTxtFile(txtFile)
-          const parsed2 = parseTxtContent(txtContent)
-          if (!parsed2) {
-            console.warn(`txt文件内容不足: ${folderName}/${txtFile.name}`)
-            continue
-          }
+          const parsed2 = parseTxtContent(txtContent, txtFile.name, folderName)
 
           // 排序图片（超出9张在导入校验时统一截取）
           const sorted = sortByNumericFilename(imgFiles)
