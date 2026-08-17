@@ -96,6 +96,8 @@ class XianyuPersonalPublisher:
         description = text(item_data.get("description"))
         if not title or not description:
             raise DirectPublishError("商品标题和商品描述不能为空")
+        # 闲鱼接口侧不再展示 itemTextDTO.title，将标题合并到描述最前面（两行回车间隔），保证商品仍展示标题
+        description = f"{title}\n\n{description}"
         if item_data.get("specifications") or item_data.get("sku_rows"):
             raise DirectPublishError("当前账号未开通鱼小铺，不能发布多规格和独立库存商品")
         # 发货方式先校验，避免运费模板等不支持配置在媒体上传后才失败。

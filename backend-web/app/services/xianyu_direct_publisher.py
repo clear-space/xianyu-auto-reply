@@ -235,6 +235,8 @@ class XianyuDirectPublisher:
         description = _text(item_data.get("description"))
         if not title or not description:
             raise DirectPublishError("商品标题和商品描述不能为空")
+        # 闲鱼接口侧不再展示 itemTextDTO.title，将标题合并到描述最前面（两行回车间隔），保证商品仍展示标题
+        description = f"{title}\n\n{description}"
         # 未选择平台分类时，按内置兜底分类补全（优先电子资料）。
         applied_default: dict[str, Any] | None = None
         if _category_missing(item_data):
