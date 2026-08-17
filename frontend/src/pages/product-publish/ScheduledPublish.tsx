@@ -99,11 +99,11 @@ function LogDetailPanel({ detail }: { detail: ScheduleLogDetail }) {
       ))}
       {filtered.length > 0 && (
         <div>
-          <div className="font-medium text-slate-600 dark:text-slate-300 mb-1">被去重过滤的素材</div>
+          <div className="font-medium text-slate-600 dark:text-slate-300 mb-1">被去重过滤的素材（{filtered.length}）</div>
           <div className="flex flex-wrap gap-2">
             {filtered.map((f, i) => (
-              <span key={i} className="badge-gray" title={f.title}>
-                {f.item_no ?? '无编号'} {f.title}
+              <span key={i} className="badge-gray">
+                {f.item_no ?? '无编号'}
               </span>
             ))}
           </div>
@@ -174,6 +174,7 @@ export function ScheduledPublish() {
   const [logTotalPages, setLogTotalPages] = useState(0)
   const [showClearLogsConfirm, setShowClearLogsConfirm] = useState(false)
   const [clearingLogs, setClearingLogs] = useState(false)
+  const [clearDays, setClearDays] = useState(10) // 保留天数，0=清空全部，默认10天
   const [expandedLogIds, setExpandedLogIds] = useState<Set<number>>(new Set())
 
   /** 展开/收起执行记录明细 */
@@ -381,7 +382,7 @@ export function ScheduledPublish() {
   const handleClearLogs = async () => {
     setClearingLogs(true)
     try {
-      const res = await clearScheduleLogs()
+      const res = await clearScheduleLogs(clearDays > 0 ? clearDays : undefined)
       if (res.success) {
         addToast({ type: 'success', message: res.message || '清空成功' })
         setShowClearLogsConfirm(false)
@@ -563,9 +564,23 @@ export function ScheduledPublish() {
           <div className="vben-card-header">
             <h2 className="vben-card-title"><History className="w-4 h-4" />执行历史</h2>
             <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                <span className="text-sm text-slate-500">保留</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={clearDays}
+                  onChange={e => setClearDays(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="input-ios w-16 text-center"
+                  title="0=清空全部，N=保留最近N天"
+                />
+                <span className="text-sm text-slate-500">天</span>
+              </div>
               <button
                 onClick={() => setShowClearLogsConfirm(true)}
                 className="btn-ios-danger btn-sm"
+                title={clearDays > 0 ? `清空${clearDays}天前的执行日志` : '清空全部执行日志'}
                 disabled={clearingLogs}
               >
                 <Trash2 className="w-3.5 h-3.5" />清空日志
@@ -580,6 +595,7 @@ export function ScheduledPublish() {
             <table className="table-ios">
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
                 <tr>
+                  <th>规则名</th>
                   <th>计划时间</th>
                   <th>执行时间</th>
                   <th>批次ID</th>
@@ -590,13 +606,18 @@ export function ScheduledPublish() {
               </thead>
               <tbody>
                 {logs.length === 0 ? (
-                  <tr><td colSpan={6} className="text-center py-12 text-slate-400">
+                  <tr><td colSpan={7} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2"><History className="w-12 h-12 text-slate-300" />
                       <p>暂无执行记录</p></div>
                   </td></tr>
                 ) : logs.map(l => (
                   <Fragment key={l.id}>
                     <tr className={expandedLogIds.has(l.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
+                      <td className="text-sm whitespace-nowrap">
+                        <span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[160px]" title={l.schedule_name || `规则 #${l.schedule_id}`}>
+                          {l.schedule_name || `规则 #${l.schedule_id}`}
+                        </span>
+                      </td>
                       <td className="text-sm whitespace-nowrap">
                         {new Date(l.scheduled_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </td>
@@ -632,7 +653,7 @@ export function ScheduledPublish() {
                     </tr>
                     {expandedLogIds.has(l.id) && l.detail_json && (
                       <tr>
-                        <td colSpan={6} className="bg-slate-50 dark:bg-slate-800/60 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
+                        <td colSpan={7} className="bg-slate-50 dark:bg-slate-800/60 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
                           <LogDetailPanel detail={l.detail_json} />
                         </td>
                       </tr>
@@ -819,7 +840,11 @@ export function ScheduledPublish() {
       <ConfirmModal
         isOpen={showClearLogsConfirm}
         title="确认清空日志"
-        message="确认清空所有定时发布执行日志？此操作不可撤销。"
+        message={
+          clearDays > 0
+            ? `确认清空 ${clearDays} 天前的定时发布执行日志（保留最近 ${clearDays} 天）？此操作不可撤销。`
+            : '确认清空所有定时发布执行日志？此操作不可撤销。'
+        }
         confirmText="清空"
         type="danger"
         loading={clearingLogs}

@@ -144,6 +144,7 @@ class ScheduledPublishTaskService:
         # 计划时间记规则预计算的 next_trigger_at（而非扫描时间）
         log_entry = PublishScheduleLog(
             schedule_id=schedule.id,
+            schedule_name=schedule.name,
             scheduled_at=schedule.next_trigger_at or now,
             total_count=len(schedule.account_ids) * len(schedule.material_ids),
             status="running",

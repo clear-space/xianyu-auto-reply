@@ -535,7 +535,8 @@ async def trigger_schedule(
     from common.utils.time_utils import get_beijing_now
 
     log_entry = await svc.create_log(
-        schedule_id, get_beijing_now(), len(account_ids) * len(materials)
+        schedule_id, get_beijing_now(), len(account_ids) * len(materials),
+        schedule_name=schedule.name,
     )
     await svc.update_log(log_entry.id, {"batch_id": batch_id, "status": "running"})
 
@@ -614,14 +615,19 @@ async def list_all_schedule_logs(
 @router.delete("/logs/clear", response_model=ApiResponse)
 @router.post("/logs/clear", response_model=ApiResponse)
 async def clear_schedule_logs(
+    days: int | None = Query(default=None, ge=0, description="保留最近N天的执行记录；0或不传则清空全部"),
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """清空定时发布执行日志（清空全部，不限时间）"""
+    """清空定时发布执行日志（可指定保留最近 N 天，前端默认 10 天；不传或传 0 则清空全部）"""
+    from datetime import timedelta
+
     from loguru import logger
     from sqlalchemy import delete, select
+
     from common.models.publish_schedule import PublishSchedule
     from common.models.publish_schedule_log import PublishScheduleLog
+    from common.utils.time_utils import get_beijing_now
 
     query_user_id = None if _is_admin(current_user) else current_user.id
 
@@ -632,15 +638,22 @@ async def clear_schedule_logs(
             sub_stmt = select(PublishSchedule.id).where(PublishSchedule.user_id == query_user_id)
             conds.append(PublishScheduleLog.schedule_id.in_(sub_stmt))
 
+        if days and days > 0:
+            cutoff = get_beijing_now() - timedelta(days=days)
+            conds.append(PublishScheduleLog.created_at < cutoff)
+            scope_label = f"{days}天前的"
+        else:
+            scope_label = "全部"
+
         stmt = delete(PublishScheduleLog).where(*conds)
         result = await session.execute(stmt)
         await session.commit()
 
         deleted_count = result.rowcount or 0
-        logger.info(f"[定时发布] 用户 {current_user.id} 已清空 {deleted_count} 条执行日志")
+        logger.info(f"[定时发布] 用户 {current_user.id} 已清空 {deleted_count} 条{scope_label}执行日志")
         return ApiResponse(
             success=True,
-            message=f"已清空 {deleted_count} 条执行日志",
+            message=f"已清空 {deleted_count} 条{scope_label}执行日志",
             data={"deleted_count": deleted_count},
         )
     except Exception as e:

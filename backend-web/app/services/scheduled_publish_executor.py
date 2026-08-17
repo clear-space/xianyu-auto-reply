@@ -125,10 +125,10 @@ class ScheduledPublishExecutor:
                     ):
                         if m["id"] not in filtered_ids:
                             filtered_ids.add(m["id"])
+                            # 只记录编号，不存标题，控制明细体积
                             filtered_materials.append(
                                 {
                                     "material_id": m["id"],
-                                    "title": m.get("title", ""),
                                     "item_no": f"A{m['_item_no']}",
                                     "round": round_no,
                                 }

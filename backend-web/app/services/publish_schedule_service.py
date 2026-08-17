@@ -44,6 +44,7 @@ def _log_to_dict(l: PublishScheduleLog) -> dict:
     return {
         "id": l.id,
         "schedule_id": l.schedule_id,
+        "schedule_name": l.schedule_name,
         "batch_id": l.batch_id,
         "scheduled_at": safe_isoformat(l.scheduled_at),
         "executed_at": safe_isoformat(l.executed_at),
@@ -215,9 +216,13 @@ class PublishScheduleService:
         )
         return (await self.session.execute(stmt)).scalars().first()
 
-    async def create_log(self, schedule_id: int, scheduled_at: datetime, total_count: int) -> PublishScheduleLog:
+    async def create_log(
+        self, schedule_id: int, scheduled_at: datetime, total_count: int,
+        schedule_name: Optional[str] = None,
+    ) -> PublishScheduleLog:
         log = PublishScheduleLog(
             schedule_id=schedule_id,
+            schedule_name=schedule_name,
             scheduled_at=scheduled_at,
             total_count=total_count,
         )

@@ -594,6 +594,7 @@ export interface UpdateScheduleParams {
 export interface PublishScheduleLog {
   id: number
   schedule_id: number
+  schedule_name?: string | null
   batch_id?: string | null
   scheduled_at: string
   executed_at?: string | null
@@ -626,7 +627,7 @@ export interface ScheduleLogDetail {
       account_counts?: { success: number; failed: number; account_error: number }
     }>
   }>
-  filtered?: Array<{ material_id?: number; title?: string; item_no?: string; round?: number }>
+  filtered?: Array<{ material_id?: number; item_no?: string; round?: number }>
 }
 
 /** 规则列表响应 */
@@ -699,9 +700,10 @@ export const getAllScheduleLogs = (page = 1, pageSize = 20): Promise<ScheduleLog
   return get(`${SCHEDULE_PREFIX}/logs/global?${params}`)
 }
 
-/** 清空定时发布执行日志 */
-export const clearScheduleLogs = async (): Promise<{ success: boolean; message: string }> => {
-  return post<{ success: boolean; message: string }>(`${SCHEDULE_PREFIX}/logs/clear`)
+/** 清空定时发布执行日志（days>0 只清 N 天前的，不传或 0 清空全部） */
+export const clearScheduleLogs = async (days?: number): Promise<{ success: boolean; message: string }> => {
+  const qs = days && days > 0 ? `?days=${days}` : ''
+  return post<{ success: boolean; message: string }>(`${SCHEDULE_PREFIX}/logs/clear${qs}`)
 }
 
 // ==================== 定时发布实时进度 ====================

@@ -29,6 +29,9 @@ class PublishScheduleLog(TimestampMixin, Base):
     schedule_id: Mapped[int] = mapped_column(
         BigInteger, nullable=False, index=True, comment="关联的定时规则ID"
     )
+    schedule_name: Mapped[str | None] = mapped_column(
+        String(100), comment="规则名称快照（规则删除后执行记录仍可查看名称）"
+    )
     batch_id: Mapped[str | None] = mapped_column(
         String(36), comment="批量发布的 batch_id"
     )

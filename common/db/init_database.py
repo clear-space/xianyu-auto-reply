@@ -1790,6 +1790,7 @@ class DatabaseInitializer:
         ],
         "xy_publish_schedule_logs": [
             ("detail_json", "JSON DEFAULT NULL COMMENT '执行明细JSON（成功/失败商品编号明细、补发轮次、账号级错误）'", "error_message"),
+            ("schedule_name", "VARCHAR(100) DEFAULT NULL COMMENT '规则名称快照（规则删除后执行记录仍可查看名称）'", "schedule_id"),
         ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
