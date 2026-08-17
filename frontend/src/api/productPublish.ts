@@ -266,6 +266,22 @@ export interface PublishSingleResponseData {
 
 export type PublishSingleResponse = ApiResponse<PublishSingleResponseData>
 
+export interface PublishCommissionConfig {
+  title: string
+  default_title: string
+  tips: string
+  percent: string
+  max_commission: string
+  tip_url: string
+}
+
+export interface PublishAccountCapability {
+  account_id: string
+  is_fish_shop: boolean
+  support_sku_or_inventory: boolean
+  commission_config: PublishCommissionConfig
+}
+
 export interface PublishBatchResponseData {
   batch_id: string
   total: number
@@ -310,7 +326,7 @@ export const getMaterials = (
 }
 
 /** 获取单条素材详情 */
-export const getMaterial = (id: number): Promise<ApiResponse> =>
+export const getMaterial = (id: number): Promise<ApiResponse<ProductMaterial>> =>
   get(`${PREFIX}/materials/${id}`)
 
 /** 更新素材 */
@@ -328,6 +344,12 @@ export const batchDeleteMaterials = (ids: number[]): Promise<ApiResponse> =>
   post(`${PREFIX}/materials/batch-delete`, { ids })
 
 // ==================== 发布接口 ====================
+
+/** 查询账号是否开通鱼小铺及其发布能力。 */
+export const getPublishAccountCapability = (
+  accountId: string,
+): Promise<ApiResponse<PublishAccountCapability>> =>
+  get(`${PREFIX}/accounts/${encodeURIComponent(accountId)}/capability`)
 
 /** 单品发布（同步调用闲鱼发布接口） */
 export const publishSingle = (params: {
