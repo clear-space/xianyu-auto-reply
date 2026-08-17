@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.product_material import ProductMaterial
@@ -141,15 +141,16 @@ class ProductMaterialService:
     async def list_materials(
         self, user_id: int = None, page: int = 1, page_size: int = 20,
         title: str = None, category: str = None, condition: str = None,
-        platform_category_id: str = None,
+        platform_category_id: str = None, keyword: str = None,
     ) -> Dict[str, Any]:
         """分页查询素材列表
-        
+
         Args:
             user_id: 用户ID，为None时查询全部（管理员场景）
             title: 标题模糊搜索
             category: 分类筛选
             condition: 成色筛选
+            keyword: 关键词搜索（匹配标题或描述）
         """
         page = max(page, 1)
         page_size = page_size if page_size in (10, 20, 50, 100, 500, 1000) else 20
@@ -159,6 +160,11 @@ class ProductMaterialService:
             base_cond.append(ProductMaterial.user_id == user_id)
         if title:
             base_cond.append(ProductMaterial.title.ilike(f"%{title}%"))
+        if keyword:
+            base_cond.append(or_(
+                ProductMaterial.title.ilike(f"%{keyword}%"),
+                ProductMaterial.description.ilike(f"%{keyword}%"),
+            ))
         if category:
             base_cond.append(ProductMaterial.category == category)
         if condition:

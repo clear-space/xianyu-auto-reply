@@ -346,6 +346,7 @@ async def list_materials(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, description="每页条数"),
     title: str = Query(None, description="标题模糊搜索"),
+    keyword: str = Query(None, description="关键词搜索（匹配标题或描述）"),
     category: str = Query(None, description="分类筛选"),
     condition: str = Query(None, description="成色筛选"),
     platform_category_id: str = Query(None, description="平台分类ID筛选"),
@@ -358,7 +359,7 @@ async def list_materials(
     query_user_id = None if _is_admin(current_user) else current_user.id
     data = await svc.list_materials(
         query_user_id, page=page, page_size=page_size,
-        title=title, category=category, condition=condition,
+        title=title, keyword=keyword, category=category, condition=condition,
         platform_category_id=platform_category_id,
     )
     # 管理员场景：批量补充用户名

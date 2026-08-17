@@ -3,7 +3,7 @@
  * 使用后端分页展示素材，并提供只读详情与导入操作。
  */
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Eye, Image, Loader2, Upload, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Eye, Image, Loader2, Search, SearchX, Upload, X } from 'lucide-react'
 import { getMaterial, getMaterials, type ProductMaterial } from '@/api/productPublish'
 import { useUIStore } from '@/store/uiStore'
 
@@ -174,11 +174,22 @@ export function MaterialPickerModal({ onSelect, onClose }: MaterialPickerModalPr
   const [totalPages, setTotalPages] = useState(0)
   const [detail, setDetail] = useState<ProductMaterial | null>(null)
   const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null)
+  const [searchInput, setSearchInput] = useState('')
+  const [keyword, setKeyword] = useState('')
+
+  // 搜索防抖：输入停顿 300ms 后按关键词重新查询
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setKeyword(searchInput.trim())
+      setPage(1)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchInput])
 
   useEffect(() => {
     let active = true
     setLoading(true)
-    getMaterials(page, pageSize).then((result) => {
+    getMaterials(page, pageSize, { keyword }).then((result) => {
       if (!active) return
       if (!result.success || !result.data) {
         addToast({ type: 'error', message: result.message || '加载素材失败' })
@@ -194,7 +205,7 @@ export function MaterialPickerModal({ onSelect, onClose }: MaterialPickerModalPr
       if (active) setLoading(false)
     })
     return () => { active = false }
-  }, [addToast, page, pageSize])
+  }, [addToast, page, pageSize, keyword])
 
   const showDetail = async (material: ProductMaterial) => {
     setDetailLoadingId(material.id)
@@ -219,15 +230,32 @@ export function MaterialPickerModal({ onSelect, onClose }: MaterialPickerModalPr
           <div><h2 className="modal-title">从素材库选择</h2><p className="mt-1 text-xs text-slate-400">共 {total} 条素材</p></div>
           <button type="button" className="modal-close" title="关闭" onClick={onClose}><X className="h-5 w-5" /></button>
         </div>
-        <div className="modal-body min-h-0 flex-1 p-0">
-          <div className="table-scroll h-full">
+        <div className="modal-body flex min-h-0 flex-1 flex-col p-0">
+          <div className="flex flex-shrink-0 items-center gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+            <div className="relative max-w-sm flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                className="input-ios pl-9 pr-8"
+                placeholder="搜索素材标题或描述"
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+              />
+              {searchInput && (
+                <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 transition-colors hover:text-slate-600 dark:hover:text-slate-200" title="清空搜索" onClick={() => setSearchInput('')}>
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="table-scroll min-h-0 flex-1">
             <table className="table-ios min-w-[760px]">
               <thead><tr><th>素材</th><th>价格</th><th>分类</th><th>规格</th><th>媒体</th><th className="w-32">操作</th></tr></thead>
               <tbody>
                 {loading ? (
                   <tr><td colSpan={6} className="py-16 text-center"><Loader2 className="mx-auto h-7 w-7 animate-spin text-blue-500" /></td></tr>
                 ) : materials.length === 0 ? (
-                  <tr><td colSpan={6} className="py-16 text-center text-slate-400"><Image className="mx-auto mb-2 h-10 w-10 text-slate-300" />素材库为空，请先添加素材</td></tr>
+                  <tr><td colSpan={6} className="py-16 text-center text-slate-400">{keyword ? <><SearchX className="mx-auto mb-2 h-10 w-10 text-slate-300" />未找到匹配“{keyword}”的素材</> : <><Image className="mx-auto mb-2 h-10 w-10 text-slate-300" />素材库为空，请先添加素材</>}</td></tr>
                 ) : materials.map((material) => (
                   <tr key={material.id}>
                     <td><div className="flex min-w-56 items-center gap-3">{material.images?.[0] ? <img src={material.images[0]} alt="" className="h-12 w-12 flex-shrink-0 rounded-lg object-cover" /> : <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400 dark:bg-slate-700">无图</div>}<div className="min-w-0 max-w-72"><p className="truncate font-medium text-slate-800 dark:text-slate-100" title={material.title}>{material.title}</p><p className="mt-1 line-clamp-2 break-words text-xs text-slate-400" title={material.description}>{material.description}</p></div></div></td>
