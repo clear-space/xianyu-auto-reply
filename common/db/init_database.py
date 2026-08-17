@@ -361,6 +361,13 @@ class DatabaseInitializer:
             True,
             "定时扫描到期发布规则并触发批量发布",
         ),
+        (
+            "scheduled_offline",
+            "定时下架任务",
+            60,
+            True,
+            "定时扫描到期下架规则并触发自动下架",
+        ),
     )
     
     # ========== 所有数据表的DDL定义 ==========
@@ -1779,10 +1786,79 @@ class DatabaseInitializer:
                 INDEX idx_psl_batch (batch_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时发布执行记录表';
         """,
+
+        # 54. 自动下架规则表
+        "xy_offline_schedules": """
+            CREATE TABLE IF NOT EXISTS xy_offline_schedules (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                user_id BIGINT NOT NULL COMMENT '所属用户ID',
+                name VARCHAR(100) NOT NULL COMMENT '规则名称',
+                schedule_mode VARCHAR(20) NOT NULL DEFAULT 'daily' COMMENT '重复模式：daily-每天, weekly-每周',
+                schedule_config JSON NOT NULL COMMENT '时间配置JSON',
+                account_ids JSON NOT NULL COMMENT '闲鱼账号ID列表（仅下架这些账号的商品）',
+                offline_days INT NOT NULL DEFAULT 7 COMMENT '上架天数阈值X：上架早于X天前的商品才下架',
+                no_order_days INT NOT NULL DEFAULT 0 COMMENT '无订单天数Y：最近Y天内无订单才下架，0=不检查订单',
+                max_count INT NOT NULL DEFAULT 10 COMMENT '下架数量上限Z：每个账号每次触发最多下架Z个商品',
+                enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+                last_triggered_at DATETIME COMMENT '上次触发时间',
+                next_trigger_at DATETIME COMMENT '下次触发时间',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_os_user (user_id),
+                INDEX idx_os_next_trigger (enabled, next_trigger_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自动下架规则表';
+        """,
+
+        # 55. 自动下架执行记录表
+        "xy_offline_schedule_logs": """
+            CREATE TABLE IF NOT EXISTS xy_offline_schedule_logs (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                schedule_id BIGINT NOT NULL COMMENT '关联的下架规则ID',
+                schedule_name VARCHAR(100) COMMENT '规则名称快照（规则删除后执行记录仍可查看名称）',
+                batch_id VARCHAR(36) COMMENT '批次ID（本次触发标识）',
+                scheduled_at DATETIME NOT NULL COMMENT '计划执行时间',
+                executed_at DATETIME COMMENT '实际执行时间',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending-待执行, running-执行中, completed-已完成, failed-失败, cancelled-已取消',
+                total_count INT DEFAULT 0 COMMENT '筛选出的商品总数',
+                success_count INT DEFAULT 0 COMMENT '成功下架数',
+                failed_count INT DEFAULT 0 COMMENT '失败数',
+                error_message VARCHAR(1000) COMMENT '失败原因',
+                detail_json JSON COMMENT '执行明细JSON（每账号成功/失败商品明细、账号级错误）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_osl_schedule (schedule_id),
+                INDEX idx_osl_batch (batch_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自动下架执行记录表';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        # 自动下架规则表：兼容旧实验代码预建的缺列表（逐列存在性检查，缺失才 ALTER）
+        "xy_offline_schedules": [
+            ("offline_days", "INT NOT NULL DEFAULT 7 COMMENT '上架天数阈值X：上架早于X天前的商品才下架'", "account_ids"),
+            ("no_order_days", "INT NOT NULL DEFAULT 0 COMMENT '无订单天数Y：最近Y天内无订单才下架，0=不检查订单'", "offline_days"),
+            ("max_count", "INT NOT NULL DEFAULT 10 COMMENT '下架数量上限Z：每个账号每次触发最多下架Z个商品'", "no_order_days"),
+            ("enabled", "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'", "max_count"),
+            ("last_triggered_at", "DATETIME COMMENT '上次触发时间'", "enabled"),
+            ("next_trigger_at", "DATETIME COMMENT '下次触发时间'", "last_triggered_at"),
+            ("created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'", "next_trigger_at"),
+            ("updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'", "created_at"),
+        ],
+        "xy_offline_schedule_logs": [
+            ("schedule_name", "VARCHAR(100) DEFAULT NULL COMMENT '规则名称快照（规则删除后执行记录仍可查看名称）'", "schedule_id"),
+            ("batch_id", "VARCHAR(36) COMMENT '批次ID（本次触发标识）'", "schedule_name"),
+            ("scheduled_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '计划执行时间'", "batch_id"),
+            ("executed_at", "DATETIME COMMENT '实际执行时间'", "scheduled_at"),
+            ("status", "VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending-待执行, running-执行中, completed-已完成, failed-失败, cancelled-已取消'", "executed_at"),
+            ("total_count", "INT DEFAULT 0 COMMENT '筛选出的商品总数'", "status"),
+            ("success_count", "INT DEFAULT 0 COMMENT '成功下架数'", "total_count"),
+            ("failed_count", "INT DEFAULT 0 COMMENT '失败数'", "success_count"),
+            ("error_message", "VARCHAR(1000) COMMENT '失败原因'", "failed_count"),
+            ("detail_json", "JSON DEFAULT NULL COMMENT '执行明细JSON（每账号成功/失败商品明细、账号级错误）'", "error_message"),
+            ("created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'", "detail_json"),
+            ("updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'", "created_at"),
+        ],
         "xy_publish_schedules": [
             ("publish_mode", "VARCHAR(20) NOT NULL DEFAULT 'specified' COMMENT '发布模式：specified-指定发布（全部所选素材），random-随机发布'", "material_ids"),
             ("random_count", "INT DEFAULT NULL COMMENT '随机发布数量（publish_mode=random 时有效）'", "publish_mode"),

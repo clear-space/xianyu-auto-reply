@@ -8,8 +8,6 @@
 """
 from __future__ import annotations
 
-import re
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -21,8 +19,9 @@ from app.api.deps import get_current_active_user, get_db_session
 from app.services.publish_schedule_service import PublishScheduleService
 from common.models.user import User, UserRole
 from common.schemas.common import ApiResponse
+from common.utils.schedule_time import validate_schedule_config as _validate_schedule_config
 
-router = APIRouter(prefix="/product-publish/schedules", tags=["商品发布-定时发布"])
+router = APIRouter(prefix="/product-publish/schedules", tags=["商品发布-定时管理"])
 
 
 def _is_admin(user: User) -> bool:
@@ -33,43 +32,6 @@ def _is_admin(user: User) -> bool:
 
 _SCHEDULE_MODES = {"once", "daily", "weekly"}
 _PUBLISH_MODES = {"specified", "random"}
-_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
-
-
-def _validate_schedule_config(schedule_mode: str, config: dict) -> None:
-    """校验时间配置合法性，非法时抛出 ValueError"""
-    if schedule_mode == "once":
-        dt_str = config.get("datetime")
-        if not dt_str:
-            raise ValueError("单次模式必须设置执行时间")
-        try:
-            datetime.fromisoformat(str(dt_str))
-        except (ValueError, TypeError):
-            raise ValueError("单次模式执行时间格式不合法")
-        return
-
-    if schedule_mode not in ("daily", "weekly"):
-        raise ValueError(f"不支持的重复模式: {schedule_mode}")
-
-    if config.get("random"):
-        time_range = config.get("time_range") or {}
-        start = str(time_range.get("start", "00:00"))
-        end = str(time_range.get("end", "23:59"))
-        if not (_TIME_RE.match(start) and _TIME_RE.match(end)):
-            raise ValueError("时间段格式不合法，应为 HH:MM")
-        if start >= end:
-            raise ValueError("时间段开始时间必须早于结束时间")
-    else:
-        times = config.get("times") or []
-        if not times:
-            raise ValueError("请至少设置一个时间点")
-        if not all(_TIME_RE.match(str(t)) for t in times):
-            raise ValueError("时间点格式不合法，应为 HH:MM")
-
-    if schedule_mode == "weekly":
-        days = config.get("days") or []
-        if not days or not all(isinstance(d, int) and 1 <= d <= 7 for d in days):
-            raise ValueError("每周模式必须选择有效的星期（1=周一 ~ 7=周日）")
 
 
 def _validate_publish_fields(
@@ -610,6 +572,119 @@ async def list_all_schedule_logs(
     query_user_id = None if _is_admin(current_user) else current_user.id
     data = await svc.list_logs(schedule_id=None, page=page, page_size=page_size, user_id=query_user_id)
     return ApiResponse(success=True, message="查询成功", data=data)
+
+
+@router.get("/history/global", response_model=ApiResponse)
+async def list_unified_schedule_history(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20),
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """合并查询定时发布与自动下架的执行历史（定时历史统一视图，带规则类别）"""
+    from sqlalchemy import func, literal, union_all
+
+    from common.models.offline_schedule import OfflineSchedule
+    from common.models.offline_schedule_log import OfflineScheduleLog
+    from common.models.publish_schedule import PublishSchedule
+    from common.models.publish_schedule_log import PublishScheduleLog
+    from common.utils.time_utils import safe_isoformat
+
+    page = max(page, 1)
+    page_size = page_size if page_size in (10, 20, 50, 100) else 20
+    query_user_id = None if _is_admin(current_user) else current_user.id
+
+    pub_conds = []
+    off_conds = []
+    if query_user_id is not None:
+        pub_conds.append(
+            PublishScheduleLog.schedule_id.in_(
+                select(PublishSchedule.id).where(PublishSchedule.user_id == query_user_id)
+            )
+        )
+        off_conds.append(
+            OfflineScheduleLog.schedule_id.in_(
+                select(OfflineSchedule.id).where(OfflineSchedule.user_id == query_user_id)
+            )
+        )
+
+    pub_stmt = select(
+        literal("publish").label("rule_type"),
+        PublishScheduleLog.id.label("log_id"),
+        PublishScheduleLog.schedule_id.label("schedule_id"),
+        PublishScheduleLog.schedule_name.label("schedule_name"),
+        PublishScheduleLog.batch_id.label("batch_id"),
+        PublishScheduleLog.scheduled_at.label("scheduled_at"),
+        PublishScheduleLog.executed_at.label("executed_at"),
+        PublishScheduleLog.status.label("status"),
+        PublishScheduleLog.total_count.label("total_count"),
+        PublishScheduleLog.success_count.label("success_count"),
+        PublishScheduleLog.failed_count.label("failed_count"),
+        PublishScheduleLog.error_message.label("error_message"),
+        PublishScheduleLog.detail_json.label("detail_json"),
+        PublishScheduleLog.created_at.label("created_at"),
+    ).where(*pub_conds)
+
+    off_stmt = select(
+        literal("offline").label("rule_type"),
+        OfflineScheduleLog.id.label("log_id"),
+        OfflineScheduleLog.schedule_id.label("schedule_id"),
+        OfflineScheduleLog.schedule_name.label("schedule_name"),
+        OfflineScheduleLog.batch_id.label("batch_id"),
+        OfflineScheduleLog.scheduled_at.label("scheduled_at"),
+        OfflineScheduleLog.executed_at.label("executed_at"),
+        OfflineScheduleLog.status.label("status"),
+        OfflineScheduleLog.total_count.label("total_count"),
+        OfflineScheduleLog.success_count.label("success_count"),
+        OfflineScheduleLog.failed_count.label("failed_count"),
+        OfflineScheduleLog.error_message.label("error_message"),
+        OfflineScheduleLog.detail_json.label("detail_json"),
+        OfflineScheduleLog.created_at.label("created_at"),
+    ).where(*off_conds)
+
+    union_sub = union_all(pub_stmt, off_stmt).subquery()
+
+    count_stmt = select(func.count()).select_from(union_sub)
+    total = (await session.execute(count_stmt)).scalar() or 0
+
+    stmt = (
+        select(union_sub)
+        .order_by(union_sub.c.scheduled_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = (await session.execute(stmt)).all()
+
+    list_data = [
+        {
+            "rule_type": r.rule_type,
+            "log_id": r.log_id,
+            "schedule_id": r.schedule_id,
+            "schedule_name": r.schedule_name,
+            "batch_id": r.batch_id,
+            "scheduled_at": safe_isoformat(r.scheduled_at),
+            "executed_at": safe_isoformat(r.executed_at),
+            "status": r.status,
+            "total_count": r.total_count,
+            "success_count": r.success_count,
+            "failed_count": r.failed_count,
+            "error_message": r.error_message,
+            "detail_json": r.detail_json or {},
+            "created_at": safe_isoformat(r.created_at),
+        }
+        for r in rows
+    ]
+    return ApiResponse(
+        success=True,
+        message="查询成功",
+        data={
+            "list": list_data,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+        },
+    )
 
 
 @router.delete("/logs/clear", response_model=ApiResponse)

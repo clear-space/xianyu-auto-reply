@@ -135,3 +135,72 @@ async def internal_publish_batch(
             "total": len(req.account_ids) * len(materials),
         },
     )
+
+
+class InternalOfflineExecuteRequest(BaseModel):
+    """内部自动下架请求（含 user_id，无需认证）"""
+    user_id: int = Field(..., description="所属用户ID")
+    schedule_id: Optional[int] = Field(None, description="下架规则ID（scheduler 传入）")
+    schedule_log_id: Optional[int] = Field(None, description="关联的下架执行记录ID（scheduler 传入）")
+    batch_id: Optional[str] = Field(None, description="批次ID（scheduler 预生成）")
+
+
+@router.post("/offline/execute", response_model=ApiResponse)
+async def internal_offline_execute(
+    req: InternalOfflineExecuteRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """内部自动下架（scheduler 定时下架任务调用，无需用户认证）
+
+    走自动下架共享执行器（筛选/分组下架/删本地），与手动触发共用同一份实现。
+    """
+    from sqlalchemy import select
+
+    from app.services.offline_executor import OfflineExecutor
+    from common.models.offline_schedule import OfflineSchedule
+    from common.models.offline_schedule_log import OfflineScheduleLog
+
+    schedule = None
+    if req.schedule_id:
+        schedule = (
+            await session.execute(
+                select(OfflineSchedule).where(OfflineSchedule.id == req.schedule_id)
+            )
+        ).scalar_one_or_none()
+    elif req.schedule_log_id:
+        log_entry = (
+            await session.execute(
+                select(OfflineScheduleLog).where(OfflineScheduleLog.id == req.schedule_log_id)
+            )
+        ).scalar_one_or_none()
+        if log_entry:
+            schedule = (
+                await session.execute(
+                    select(OfflineSchedule).where(OfflineSchedule.id == log_entry.schedule_id)
+                )
+            ).scalar_one_or_none()
+
+    if not schedule:
+        return ApiResponse(success=False, message="下架规则不存在")
+
+    batch_id = req.batch_id or str(uuid.uuid4())
+    schedule_data = {
+        "id": schedule.id,
+        "account_ids": list(schedule.account_ids or []),
+        "offline_days": schedule.offline_days,
+        "no_order_days": schedule.no_order_days,
+        "max_count": schedule.max_count,
+    }
+    background_tasks.add_task(
+        OfflineExecutor.run,
+        user_id=req.user_id,
+        schedule_data=schedule_data,
+        batch_id=batch_id,
+        schedule_log_id=req.schedule_log_id,
+    )
+    return ApiResponse(
+        success=True,
+        message=f"自动下架任务已提交（{len(schedule_data['account_ids'])} 个账号）",
+        data={"batch_id": batch_id},
+    )

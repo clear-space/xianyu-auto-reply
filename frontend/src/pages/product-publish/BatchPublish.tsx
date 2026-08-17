@@ -449,7 +449,7 @@ export function BatchPublish() {
           onClose={() => setShowScheduleForm(false)}
           onSaved={() => {
             setShowScheduleForm(false)
-            addToast({ type: 'success', message: '定时规则已保存，可在「定时发布」页面查看' })
+            addToast({ type: 'success', message: '定时规则已保存，可在「定时管理」页面查看' })
           }}
         />
       )}

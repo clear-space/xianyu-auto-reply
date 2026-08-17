@@ -53,6 +53,7 @@ from . import (
     password_login,
     product_publish,
     publish_schedule,
+    offline_schedule,
     product_publish_capability,
     publish_addresses,
     personal_addresses,
@@ -110,7 +111,8 @@ api_router.include_router(cookies.router, prefix="/cookies", tags=["账号管理
 api_router.include_router(items.items_router, tags=["商品管理"])  # items.py已定义prefix="/items"
 api_router.include_router(orders.router, prefix="/orders", tags=["订单管理"])
 api_router.include_router(product_publish.router, tags=["商品发布"])  # 已定义prefix="/product-publish"
-api_router.include_router(publish_schedule.router, tags=["商品发布-定时发布"])  # 已定义prefix="/product-publish/schedules"
+api_router.include_router(publish_schedule.router, tags=["商品发布-定时管理"])  # 已定义prefix="/product-publish/schedules"
+api_router.include_router(offline_schedule.router, tags=["商品发布-定时管理"])  # 已定义prefix="/product-publish/offline-schedules"
 api_router.include_router(product_publish_capability.router, tags=["商品发布账号能力"])
 api_router.include_router(publish_addresses.router, tags=["商品发布随机地址池"])  # 已定义prefix="/product-publish/addresses"
 api_router.include_router(personal_addresses.router, tags=["个人发布地址库"])  # 已定义prefix="/product-publish/personal-addresses"

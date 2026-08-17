@@ -12,10 +12,52 @@
 from __future__ import annotations
 
 import random
+import re
 from datetime import datetime, time, timedelta
 from typing import Optional
 
 from common.utils.time_utils import BEIJING_TZ, get_beijing_now
+
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def validate_schedule_config(schedule_mode: str, config: dict) -> None:
+    """校验时间配置合法性，非法时抛出 ValueError（中文消息，供 API 路由直接返回）。
+
+    定时发布与自动下架模块共用此校验，保证规则一致。
+    """
+    if schedule_mode == "once":
+        dt_str = config.get("datetime")
+        if not dt_str:
+            raise ValueError("单次模式必须设置执行时间")
+        try:
+            datetime.fromisoformat(str(dt_str))
+        except (ValueError, TypeError):
+            raise ValueError("单次模式执行时间格式不合法")
+        return
+
+    if schedule_mode not in ("daily", "weekly"):
+        raise ValueError(f"不支持的重复模式: {schedule_mode}")
+
+    if config.get("random"):
+        time_range = config.get("time_range") or {}
+        start = str(time_range.get("start", "00:00"))
+        end = str(time_range.get("end", "23:59"))
+        if not (_TIME_RE.match(start) and _TIME_RE.match(end)):
+            raise ValueError("时间段格式不合法，应为 HH:MM")
+        if start >= end:
+            raise ValueError("时间段开始时间必须早于结束时间")
+    else:
+        times = config.get("times") or []
+        if not times:
+            raise ValueError("请至少设置一个时间点")
+        if not all(_TIME_RE.match(str(t)) for t in times):
+            raise ValueError("时间点格式不合法，应为 HH:MM")
+
+    if schedule_mode == "weekly":
+        days = config.get("days") or []
+        if not days or not all(isinstance(d, int) and 1 <= d <= 7 for d in days):
+            raise ValueError("每周模式必须选择有效的星期（1=周一 ~ 7=周日）")
 
 
 def parse_time(t_str: str) -> Optional[time]:
@@ -191,4 +233,5 @@ __all__ = [
     "compute_next_trigger",
     "parse_time",
     "random_time_between",
+    "validate_schedule_config",
 ]

@@ -706,6 +706,43 @@ export const clearScheduleLogs = async (days?: number): Promise<{ success: boole
   return post<{ success: boolean; message: string }>(`${SCHEDULE_PREFIX}/logs/clear${qs}`)
 }
 
+/** 定时历史条目（发布与下架合并视图） */
+export interface ScheduleHistoryItem {
+  rule_type: 'publish' | 'offline'
+  log_id: number
+  schedule_id: number
+  schedule_name?: string | null
+  batch_id?: string | null
+  scheduled_at: string
+  executed_at?: string | null
+  status: string
+  total_count: number
+  success_count: number
+  failed_count: number
+  error_message?: string | null
+  detail_json?: Record<string, unknown> | null
+  created_at?: string
+}
+
+/** 定时历史列表响应 */
+export interface ScheduleHistoryResponse {
+  success: boolean
+  message: string
+  data: {
+    list: ScheduleHistoryItem[]
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+  }
+}
+
+/** 合并查询定时发布与自动下架的执行历史 */
+export const getScheduleHistory = (page = 1, pageSize = 20): Promise<ScheduleHistoryResponse> => {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return get(`${SCHEDULE_PREFIX}/history/global?${params}`)
+}
+
 // ==================== 定时发布实时进度 ====================
 
 /** 活跃的定时发布任务进度 */

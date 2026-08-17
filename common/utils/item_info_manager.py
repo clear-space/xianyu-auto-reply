@@ -185,6 +185,12 @@ class ItemInfoManager:
                     for card in card_list:
                         card_data = card.get('cardData', {})
                         if card_data:
+                            # 上架时间：闲鱼返回字段名不固定，多候选兜底（供自动下架规则筛选使用）
+                            publish_time = None
+                            for _key in ("publishTime", "gmtCreate", "createTime", "onSaleTime"):
+                                if card_data.get(_key) not in (None, "", 0):
+                                    publish_time = card_data.get(_key)
+                                    break
                             item_info = {
                                 'id': card_data.get('id', ''),
                                 'title': card_data.get('title', ''),
@@ -198,7 +204,8 @@ class ItemInfoManager:
                                 'detail_params': card_data.get('detailParams', {}),
                                 'track_params': card_data.get('trackParams', {}),
                                 'item_label_data': card_data.get('itemLabelDataVO', {}),
-                                'card_type': card.get('cardType', 0)
+                                'card_type': card.get('cardType', 0),
+                                'publish_time': publish_time,
                             }
                             items_list.append(item_info)
 

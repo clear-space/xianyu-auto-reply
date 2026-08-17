@@ -9,12 +9,15 @@ import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Layers, CheckCircle, XCircle } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, getAllScheduleLogs, clearScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type PublishScheduleLog, type ScheduleLogDetail, type ActiveScheduleProgress } from '@/api/productPublish'
+import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, clearScheduleLogs, getScheduleHistory, getActiveScheduleProgress, type PublishSchedule, type ScheduleHistoryItem, type ScheduleLogDetail, type ActiveScheduleProgress } from '@/api/productPublish'
+import { clearOfflineScheduleLogs, type OfflineLogDetail } from '@/api/offlineSchedules'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { ScheduleFormModal } from './ScheduleFormModal'
+import { OfflineRules } from './OfflineRules'
+import { OfflineLogDetailPanel } from './OfflineHistory'
 
-type Tab = 'rules' | 'history'
+type Tab = 'publish-rules' | 'offline-rules' | 'schedule-history'
 
 const MODE_LABELS: Record<string, string> = { once: '单次', daily: '每天', weekly: '每周' }
 const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
@@ -145,8 +148,9 @@ function formatConfig(sc: PublishSchedule): string {
 
 export function ScheduledPublish() {
   const { addToast } = useUIStore()
-  const [tab, setTab] = useState<Tab>('rules')
+  const [tab, setTab] = useState<Tab>('publish-rules')
   const [loading, setLoading] = useState(true)
+  const [offlineRulesTotal, setOfflineRulesTotal] = useState(0)
 
   // 规则列表
   const [schedules, setSchedules] = useState<PublishSchedule[]>([])
@@ -167,22 +171,22 @@ export function ScheduledPublish() {
   const [expandedPanels, setExpandedPanels] = useState<Set<number>>(new Set())
   const progressPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // 历史记录
-  const [logs, setLogs] = useState<PublishScheduleLog[]>([])
-  const [logTotal, setLogTotal] = useState(0)
-  const [logPage, setLogPage] = useState(1)
-  const [logTotalPages, setLogTotalPages] = useState(0)
+  // 历史记录（发布与下架合并视图）
+  const [historyItems, setHistoryItems] = useState<ScheduleHistoryItem[]>([])
+  const [historyTotal, setHistoryTotal] = useState(0)
+  const [historyPage, setHistoryPage] = useState(1)
+  const [historyTotalPages, setHistoryTotalPages] = useState(0)
   const [showClearLogsConfirm, setShowClearLogsConfirm] = useState(false)
   const [clearingLogs, setClearingLogs] = useState(false)
   const [clearDays, setClearDays] = useState(10) // 保留天数，0=清空全部，默认10天
-  const [expandedLogIds, setExpandedLogIds] = useState<Set<number>>(new Set())
+  const [expandedLogKeys, setExpandedLogKeys] = useState<Set<string>>(new Set())
 
-  /** 展开/收起执行记录明细 */
-  const toggleLogExpand = (id: number) => {
-    setExpandedLogIds(prev => {
+  /** 展开/收起执行记录明细（key = 类别-记录ID，两张表ID可能重复） */
+  const toggleLogExpand = (key: string) => {
+    setExpandedLogKeys(prev => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
@@ -200,16 +204,16 @@ export function ScheduledPublish() {
     } catch { /* ignore */ }
   }, [page, pageSize])
 
-  const loadLogs = useCallback(async (p = logPage) => {
+  const loadHistory = useCallback(async (p = historyPage) => {
     try {
-      const res = await getAllScheduleLogs(p, 20)
+      const res = await getScheduleHistory(p, 20)
       if (res.success) {
-        setLogs(res.data.list)
-        setLogTotal(res.data.total)
-        setLogTotalPages(res.data.total_pages)
+        setHistoryItems(res.data.list)
+        setHistoryTotal(res.data.total)
+        setHistoryTotalPages(res.data.total_pages)
       }
     } catch { /* ignore */ }
-  }, [logPage])
+  }, [historyPage])
 
   useEffect(() => {
     setLoading(true)
@@ -217,8 +221,8 @@ export function ScheduledPublish() {
   }, [loadSchedules])
 
   useEffect(() => {
-    if (tab === 'history') loadLogs()
-  }, [tab, loadLogs])
+    if (tab === 'schedule-history') loadHistory()
+  }, [tab, loadHistory])
 
   // 轮询活跃的定时发布任务进度
   useEffect(() => {
@@ -254,7 +258,7 @@ export function ScheduledPublish() {
 
   const handleRefresh = () => {
     loadSchedules(page, pageSize)
-    if (tab === 'history') loadLogs(logPage)
+    if (tab === 'schedule-history') loadHistory(historyPage)
   }
 
   /** 全选/取消全选当前页 */
@@ -382,14 +386,19 @@ export function ScheduledPublish() {
   const handleClearLogs = async () => {
     setClearingLogs(true)
     try {
-      const res = await clearScheduleLogs(clearDays > 0 ? clearDays : undefined)
-      if (res.success) {
-        addToast({ type: 'success', message: res.message || '清空成功' })
+      const days = clearDays > 0 ? clearDays : undefined
+      // 同时清空发布与下架执行日志（定时历史合并视图）
+      const [pubRes, offRes] = await Promise.all([
+        clearScheduleLogs(days),
+        clearOfflineScheduleLogs(days),
+      ])
+      if (pubRes.success || offRes.success) {
+        addToast({ type: 'success', message: '定时历史已清空' })
         setShowClearLogsConfirm(false)
-        if (logPage === 1) await loadLogs(1)
-        else setLogPage(1)
+        if (historyPage === 1) await loadHistory(1)
+        else setHistoryPage(1)
       } else {
-        addToast({ type: 'error', message: res.message || '清空失败' })
+        addToast({ type: 'error', message: '清空失败' })
       }
     } catch {
       addToast({ type: 'error', message: '清空失败' })
@@ -405,8 +414,8 @@ export function ScheduledPublish() {
       {/* 标题栏 */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="page-title">定时发布</h1>
-          <p className="page-description">设置定时规则，到时间自动触发批量发布</p>
+          <h1 className="page-title">定时管理</h1>
+          <p className="page-description">设置定时规则，到时间自动执行批量发布与自动下架</p>
         </div>
         <div className="flex gap-2">
           {selectedIds.length > 0 && (
@@ -426,8 +435,9 @@ export function ScheduledPublish() {
       {/* Tab 切换 */}
       <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg w-fit">
         {([
-          { key: 'rules', label: '定时规则', icon: Clock },
-          { key: 'history', label: '执行历史', icon: History },
+          { key: 'publish-rules', label: '发布规则', icon: Clock },
+          { key: 'offline-rules', label: '下架规则', icon: Clock },
+          { key: 'schedule-history', label: '定时历史', icon: History },
         ] as { key: Tab; label: string; icon: any }[]).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -437,15 +447,18 @@ export function ScheduledPublish() {
             }`}>
             <t.icon className="w-4 h-4" />
             {t.label}
-            {t.key === 'rules' && total > 0 && (
+            {t.key === 'publish-rules' && total > 0 && (
               <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded-full">{total}</span>
+            )}
+            {t.key === 'offline-rules' && offlineRulesTotal > 0 && (
+              <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded-full">{offlineRulesTotal}</span>
             )}
           </button>
         ))}
       </div>
 
       {/* Tab 1: 定时规则列表 */}
-      {tab === 'rules' && (
+      {tab === 'publish-rules' && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
           className="vben-card flex flex-col" style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
           <div className="vben-card-header">
@@ -557,12 +570,12 @@ export function ScheduledPublish() {
         </motion.div>
       )}
 
-      {/* Tab 2: 执行历史 */}
-      {tab === 'history' && (
+      {/* Tab 2: 定时历史（发布与下架合并视图） */}
+      {tab === 'schedule-history' && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
           className="vben-card flex flex-col" style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
           <div className="vben-card-header">
-            <h2 className="vben-card-title"><History className="w-4 h-4" />执行历史</h2>
+            <h2 className="vben-card-title"><History className="w-4 h-4" />定时历史</h2>
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1">
                 <span className="text-sm text-slate-500">保留</span>
@@ -585,92 +598,100 @@ export function ScheduledPublish() {
               >
                 <Trash2 className="w-3.5 h-3.5" />清空日志
               </button>
-              <button className="btn-ios-secondary btn-sm" onClick={() => loadLogs(logPage)}>
+              <button className="btn-ios-secondary btn-sm" onClick={() => loadHistory(historyPage)}>
                 <RefreshCw className="w-3.5 h-3.5" />刷新
               </button>
-              <span className="badge-primary">共 {logTotal} 条</span>
+              <span className="badge-primary">共 {historyTotal} 条</span>
             </div>
           </div>
           <div className="flex-1 overflow-x-auto overflow-y-auto">
             <table className="table-ios">
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
                 <tr>
+                  <th>类别</th>
                   <th>规则名</th>
                   <th>计划时间</th>
                   <th>执行时间</th>
-                  <th>批次ID</th>
                   <th>结果</th>
                   <th>状态</th>
                   <th>明细</th>
                 </tr>
               </thead>
               <tbody>
-                {logs.length === 0 ? (
+                {historyItems.length === 0 ? (
                   <tr><td colSpan={7} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2"><History className="w-12 h-12 text-slate-300" />
                       <p>暂无执行记录</p></div>
                   </td></tr>
-                ) : logs.map(l => (
-                  <Fragment key={l.id}>
-                    <tr className={expandedLogIds.has(l.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
-                      <td className="text-sm whitespace-nowrap">
-                        <span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[160px]" title={l.schedule_name || `规则 #${l.schedule_id}`}>
-                          {l.schedule_name || `规则 #${l.schedule_id}`}
-                        </span>
-                      </td>
-                      <td className="text-sm whitespace-nowrap">
-                        {new Date(l.scheduled_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </td>
-                      <td className="text-sm whitespace-nowrap text-slate-500">
-                        {l.executed_at ? new Date(l.executed_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'}
-                      </td>
-                      <td className="text-sm text-slate-500 font-mono">
-                        {l.batch_id ? l.batch_id.slice(0, 12) + '...' : '-'}
-                      </td>
-                      <td className="text-sm">
-                        <span className="text-green-600">{l.success_count} 成功</span>
-                        {l.failed_count > 0 && <span className="text-red-500 ml-1">/ {l.failed_count} 失败</span>}
-                        <span className="text-slate-400 ml-1">/ {l.total_count} 总</span>
-                        {l.error_message && (
-                          <div className="text-xs text-red-400 truncate max-w-[220px]" title={l.error_message}>{l.error_message}</div>
-                        )}
-                      </td>
-                      <td>
-                        <span className={STATUS_CONFIG[l.status]?.cls || 'badge-gray'}>
-                          {STATUS_CONFIG[l.status]?.label || l.status}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          onClick={() => toggleLogExpand(l.id)}
-                          disabled={!l.detail_json}
-                          className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-500"
-                          title={l.detail_json ? '展开明细' : '暂无明细'}
-                        >
-                          {expandedLogIds.has(l.id) ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                        </button>
-                      </td>
-                    </tr>
-                    {expandedLogIds.has(l.id) && l.detail_json && (
-                      <tr>
-                        <td colSpan={7} className="bg-slate-50 dark:bg-slate-800/60 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
-                          <LogDetailPanel detail={l.detail_json} />
+                ) : historyItems.map(l => {
+                  const rowKey = `${l.rule_type}-${l.log_id}`
+                  const isExpanded = expandedLogKeys.has(rowKey)
+                  return (
+                    <Fragment key={rowKey}>
+                      <tr className={isExpanded ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
+                        <td>
+                          <span className={l.rule_type === 'offline' ? 'badge-warning' : 'badge-info'}>
+                            {l.rule_type === 'offline' ? '下架' : '发布'}
+                          </span>
+                        </td>
+                        <td className="text-sm whitespace-nowrap">
+                          <span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[150px]" title={l.schedule_name || `规则 #${l.schedule_id}`}>
+                            {l.schedule_name || `规则 #${l.schedule_id}`}
+                          </span>
+                        </td>
+                        <td className="text-sm whitespace-nowrap">
+                          {new Date(l.scheduled_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </td>
+                        <td className="text-sm whitespace-nowrap text-slate-500">
+                          {l.executed_at ? new Date(l.executed_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'}
+                        </td>
+                        <td className="text-sm">
+                          <span className="text-green-600">{l.success_count} 成功</span>
+                          {l.failed_count > 0 && <span className="text-red-500 ml-1">/ {l.failed_count} 失败</span>}
+                          <span className="text-slate-400 ml-1">/ {l.total_count} {l.rule_type === 'offline' ? '候选' : '总'}</span>
+                          {l.error_message && (
+                            <div className="text-xs text-red-400 truncate max-w-[200px]" title={l.error_message}>{l.error_message}</div>
+                          )}
+                        </td>
+                        <td>
+                          <span className={STATUS_CONFIG[l.status]?.cls || 'badge-gray'}>
+                            {STATUS_CONFIG[l.status]?.label || l.status}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => toggleLogExpand(rowKey)}
+                            disabled={!l.detail_json}
+                            className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-500"
+                            title={l.detail_json ? '展开明细' : '暂无明细'}
+                          >
+                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </button>
                         </td>
                       </tr>
-                    )}
-                  </Fragment>
-                ))}
+                      {isExpanded && l.detail_json && (
+                        <tr>
+                          <td colSpan={7} className="bg-slate-50 dark:bg-slate-800/60 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
+                            {l.rule_type === 'offline'
+                              ? <OfflineLogDetailPanel detail={l.detail_json as OfflineLogDetail} />
+                              : <LogDetailPanel detail={l.detail_json as ScheduleLogDetail} />}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>
-          {logTotalPages > 1 && (
+          {historyTotalPages > 1 && (
             <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700">
-              <span className="text-sm text-slate-500">{logTotal} 条，第 {logPage}/{logTotalPages} 页</span>
+              <span className="text-sm text-slate-500">{historyTotal} 条，第 {historyPage}/{historyTotalPages} 页</span>
               <div className="flex gap-1">
-                <button onClick={() => setLogPage(p => Math.max(1, p - 1))} disabled={logPage <= 1}
+                <button onClick={() => setHistoryPage(p => Math.max(1, p - 1))} disabled={historyPage <= 1}
                   className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50">
                   <ChevronLeft className="w-4 h-4" /></button>
-                <button onClick={() => setLogPage(p => Math.min(logTotalPages, p + 1))} disabled={logPage >= logTotalPages}
+                <button onClick={() => setHistoryPage(p => Math.min(historyTotalPages, p + 1))} disabled={historyPage >= historyTotalPages}
                   className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50">
                   <ChevronRight className="w-4 h-4" /></button>
               </div>
@@ -678,6 +699,9 @@ export function ScheduledPublish() {
           )}
         </motion.div>
       )}
+
+      {/* Tab 3: 下架规则 */}
+      {tab === 'offline-rules' && <OfflineRules onTotalChange={setOfflineRulesTotal} />}
 
       {/* 定时发布实时进度面板 */}
       {activeProgressList.length > 0 && (
@@ -842,8 +866,8 @@ export function ScheduledPublish() {
         title="确认清空日志"
         message={
           clearDays > 0
-            ? `确认清空 ${clearDays} 天前的定时发布执行日志（保留最近 ${clearDays} 天）？此操作不可撤销。`
-            : '确认清空所有定时发布执行日志？此操作不可撤销。'
+            ? `确认清空 ${clearDays} 天前的定时历史（发布与下架执行日志，保留最近 ${clearDays} 天）？此操作不可撤销。`
+            : '确认清空所有定时历史（发布与下架执行日志）？此操作不可撤销。'
         }
         confirmText="清空"
         type="danger"

@@ -27,6 +27,61 @@ from common.models.default_reply import DefaultReply
 from common.models.card import Card
 
 
+def normalize_publish_time(value) -> str | None:
+    """把闲鱼返回的上架时间归一化为带时区的 ISO 字符串（支持毫秒/秒时间戳与常见字符串格式）"""
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            ts = float(value)
+            if ts > 1e12:
+                ts /= 1000  # 毫秒时间戳
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.isdigit():
+                ts = float(digits)
+                if ts > 1e12:
+                    ts /= 1000
+                return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d",
+            ):
+                try:
+                    parsed = datetime.strptime(digits, fmt)
+                except ValueError:
+                    continue
+                return parsed.replace(tzinfo=timezone.utc).isoformat()
+    except (ValueError, OverflowError, OSError):
+        pass
+    return None
+
+
+def get_item_publish_time(metadata_json: dict | None, created_at) -> datetime | None:
+    """取商品上架时间（aware datetime）；metadata 缺失时兜底用本地首次入库时间。
+
+    供自动下架规则筛选使用（上架时间早于 X 天前）。
+    注意：xy_catalog_items.created_at 入库时为 UTC 墙钟时间，MySQL DATETIME 读回是
+    naive 的，统一按 UTC 归一化为 aware，避免与北京时区截止时间比较时报错。
+    """
+    if metadata_json:
+        s = metadata_json.get("publish_time")
+        if s:
+            try:
+                dt = datetime.fromisoformat(str(s))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except ValueError:
+                pass
+    if created_at is None:
+        return None
+    if getattr(created_at, "tzinfo", None) is None:
+        return created_at.replace(tzinfo=timezone.utc)
+    return created_at
+
+
 class ItemService:
     """Read/write operations for catalog items."""
 
@@ -607,6 +662,7 @@ class ItemService:
         if existing_item:
             new_title = item.get("title", "")
             new_price = item.get("price_text", "")
+            normalized_pt = normalize_publish_time(item.get("publish_time"))
             changed = False
             if existing_item.title != new_title:
                 existing_item.title = new_title
@@ -617,9 +673,14 @@ class ItemService:
             metadata_json = existing_item.metadata_json or {}
             if metadata_json.get("category") != category:
                 metadata_json["category"] = category
+                changed = True
+            # 补存上架时间（供自动下架规则筛选）
+            if normalized_pt and metadata_json.get("publish_time") != normalized_pt:
+                metadata_json["publish_time"] = normalized_pt
+                changed = True
+            if changed:
                 existing_item.metadata_json = metadata_json
                 flag_modified(existing_item, "metadata_json")
-                changed = True
             return changed
 
         new_item = XYCatalogItem(
@@ -632,6 +693,7 @@ class ItemService:
             metadata_json={
                 "description": "",
                 "category": category,
+                "publish_time": normalize_publish_time(item.get("publish_time")),
                 "detail": json.dumps(item, ensure_ascii=False),
             },
             created_at=datetime.now(timezone.utc),
