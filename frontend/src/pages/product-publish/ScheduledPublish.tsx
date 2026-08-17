@@ -5,11 +5,11 @@
  * 1. Tab 1 - 定时规则列表：查看/新建/编辑/删除/开关/手动触发
  * 2. Tab 2 - 执行历史：查看所有规则的历史执行记录
  */
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Layers, CheckCircle, XCircle } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, getAllScheduleLogs, clearScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type PublishScheduleLog, type ActiveScheduleProgress } from '@/api/productPublish'
+import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, getAllScheduleLogs, clearScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type PublishScheduleLog, type ScheduleLogDetail, type ActiveScheduleProgress } from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { ScheduleFormModal } from './ScheduleFormModal'
@@ -41,6 +41,79 @@ const getSyncStatusClassName = (status: string) => {
   if (status === 'skipped') return 'badge-warning'
   if (status === 'unknown') return 'badge-warning'
   return 'badge-secondary'
+}
+
+const MATERIAL_RESULT_CONFIG: Record<string, { label: string; cls: string }> = {
+  success: { label: '成功', cls: 'badge-success' },
+  failed: { label: '失败', cls: 'badge-danger' },
+  account_error: { label: '账号错误', cls: 'badge-warning' },
+}
+
+/** 执行记录明细面板（detail_json 展开） */
+function LogDetailPanel({ detail }: { detail: ScheduleLogDetail }) {
+  const rounds = detail.rounds || []
+  const filtered = detail.filtered || []
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="flex flex-wrap gap-2 items-center">
+        <span className="badge-gray">模式：{detail.publish_mode === 'random' ? '随机发布' : '指定发布'}</span>
+        {detail.random_count != null && <span className="badge-gray">目标 {detail.random_count} 条</span>}
+        {detail.deduplicate && <span className="badge-gray">已启用去重</span>}
+        {detail.target_ok != null && <span className="badge-gray">素材成功 {detail.target_ok} 条</span>}
+        {(detail.filtered_count != null ? detail.filtered_count : filtered.length) > 0 && (
+          <span className="badge-gray">过滤 {detail.filtered_count ?? filtered.length} 条</span>
+        )}
+        {detail.detail_truncated && (
+          <span className="badge-warning">素材过多，仅展示账号结果计数</span>
+        )}
+      </div>
+      {rounds.map(r => (
+        <div key={r.round}>
+          <div className="font-medium text-slate-600 dark:text-slate-300 mb-1">第 {r.round} 轮（{r.materials.length} 条素材）</div>
+          <div className="space-y-1">
+            {r.materials.map((m, i) => {
+              const cfg = MATERIAL_RESULT_CONFIG[m.result] || { label: m.result, cls: 'badge-gray' }
+              const accounts = m.accounts || []
+              const failedAccounts = accounts.filter(a => a.status !== 'success')
+              const counts = m.account_counts
+              return (
+                <div key={i} className="flex flex-wrap items-center gap-2">
+                  <span className={cfg.cls}>{cfg.label}</span>
+                  <span className="font-mono text-slate-500">{m.item_no ?? '无编号'}</span>
+                  <span className="truncate max-w-[280px] text-slate-700 dark:text-slate-200" title={m.title}>{m.title}</span>
+                  {failedAccounts.length > 0 && (
+                    <span className="text-xs text-red-500" title={failedAccounts.map(a => a.error).join('；')}>
+                      {failedAccounts.map(a => a.account_id).join('、')} 失败
+                    </span>
+                  )}
+                  {counts && !accounts.length && (
+                    <span className="text-xs text-slate-400">
+                      成功 {counts.success} · 失败 {counts.failed} · 账号错误 {counts.account_error}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+      {filtered.length > 0 && (
+        <div>
+          <div className="font-medium text-slate-600 dark:text-slate-300 mb-1">被去重过滤的素材</div>
+          <div className="flex flex-wrap gap-2">
+            {filtered.map((f, i) => (
+              <span key={i} className="badge-gray" title={f.title}>
+                {f.item_no ?? '无编号'} {f.title}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {rounds.length === 0 && filtered.length === 0 && (
+        <p className="text-slate-400">暂无明细</p>
+      )}
+    </div>
+  )
 }
 
 function formatNextTrigger(dt: string | null | undefined): string {
@@ -101,6 +174,17 @@ export function ScheduledPublish() {
   const [logTotalPages, setLogTotalPages] = useState(0)
   const [showClearLogsConfirm, setShowClearLogsConfirm] = useState(false)
   const [clearingLogs, setClearingLogs] = useState(false)
+  const [expandedLogIds, setExpandedLogIds] = useState<Set<number>>(new Set())
+
+  /** 展开/收起执行记录明细 */
+  const toggleLogExpand = (id: number) => {
+    setExpandedLogIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const loadSchedules = useCallback(async (p = page, size = pageSize) => {
     try {
@@ -401,7 +485,14 @@ export function ScheduledPublish() {
                     <td>
                       <span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[180px]" title={s.name}>{s.name}</span>
                     </td>
-                    <td><span className="badge-gray">{MODE_LABELS[s.schedule_mode] || s.schedule_mode}</span></td>
+                    <td>
+                      <span className="badge-gray">{MODE_LABELS[s.schedule_mode] || s.schedule_mode}</span>
+                      {s.publish_mode === 'random' && (
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          随机 {s.random_count} 条{s.deduplicate_enabled ? ' · 去重' : ''}
+                        </div>
+                      )}
+                    </td>
                     <td className="text-sm text-slate-500">{formatConfig(s)}</td>
                     <td className="text-sm text-slate-500">
                       {(s.account_count ?? s.account_ids.length)} 账号 / {(s.material_count ?? s.material_ids.length)} 素材
@@ -494,36 +585,59 @@ export function ScheduledPublish() {
                   <th>批次ID</th>
                   <th>结果</th>
                   <th>状态</th>
+                  <th>明细</th>
                 </tr>
               </thead>
               <tbody>
                 {logs.length === 0 ? (
-                  <tr><td colSpan={5} className="text-center py-12 text-slate-400">
+                  <tr><td colSpan={6} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2"><History className="w-12 h-12 text-slate-300" />
                       <p>暂无执行记录</p></div>
                   </td></tr>
                 ) : logs.map(l => (
-                  <tr key={l.id}>
-                    <td className="text-sm whitespace-nowrap">
-                      {new Date(l.scheduled_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </td>
-                    <td className="text-sm whitespace-nowrap text-slate-500">
-                      {l.executed_at ? new Date(l.executed_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'}
-                    </td>
-                    <td className="text-sm text-slate-500 font-mono">
-                      {l.batch_id ? l.batch_id.slice(0, 12) + '...' : '-'}
-                    </td>
-                    <td className="text-sm">
-                      <span className="text-green-600">{l.success_count} 成功</span>
-                      {l.failed_count > 0 && <span className="text-red-500 ml-1">/ {l.failed_count} 失败</span>}
-                      <span className="text-slate-400 ml-1">/ {l.total_count} 总</span>
-                    </td>
-                    <td>
-                      <span className={STATUS_CONFIG[l.status]?.cls || 'badge-gray'}>
-                        {STATUS_CONFIG[l.status]?.label || l.status}
-                      </span>
-                    </td>
-                  </tr>
+                  <Fragment key={l.id}>
+                    <tr className={expandedLogIds.has(l.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
+                      <td className="text-sm whitespace-nowrap">
+                        {new Date(l.scheduled_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </td>
+                      <td className="text-sm whitespace-nowrap text-slate-500">
+                        {l.executed_at ? new Date(l.executed_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'}
+                      </td>
+                      <td className="text-sm text-slate-500 font-mono">
+                        {l.batch_id ? l.batch_id.slice(0, 12) + '...' : '-'}
+                      </td>
+                      <td className="text-sm">
+                        <span className="text-green-600">{l.success_count} 成功</span>
+                        {l.failed_count > 0 && <span className="text-red-500 ml-1">/ {l.failed_count} 失败</span>}
+                        <span className="text-slate-400 ml-1">/ {l.total_count} 总</span>
+                        {l.error_message && (
+                          <div className="text-xs text-red-400 truncate max-w-[220px]" title={l.error_message}>{l.error_message}</div>
+                        )}
+                      </td>
+                      <td>
+                        <span className={STATUS_CONFIG[l.status]?.cls || 'badge-gray'}>
+                          {STATUS_CONFIG[l.status]?.label || l.status}
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          onClick={() => toggleLogExpand(l.id)}
+                          disabled={!l.detail_json}
+                          className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-500"
+                          title={l.detail_json ? '展开明细' : '暂无明细'}
+                        >
+                          {expandedLogIds.has(l.id) ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </button>
+                      </td>
+                    </tr>
+                    {expandedLogIds.has(l.id) && l.detail_json && (
+                      <tr>
+                        <td colSpan={6} className="bg-slate-50 dark:bg-slate-800/60 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
+                          <LogDetailPanel detail={l.detail_json} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

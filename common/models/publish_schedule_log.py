@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Index, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -47,4 +47,7 @@ class PublishScheduleLog(TimestampMixin, Base):
     failed_count: Mapped[int] = mapped_column(Integer, default=0, comment="失败次数")
     error_message: Mapped[str | None] = mapped_column(
         String(1000), comment="失败原因"
+    )
+    detail_json: Mapped[dict | None] = mapped_column(
+        JSON, comment="执行明细JSON（成功/失败商品编号明细、补发轮次、账号级错误）"
     )

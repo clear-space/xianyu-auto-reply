@@ -374,6 +374,26 @@ async def list_materials(
     return ApiResponse(success=True, message="查询成功", data=data)
 
 
+@router.get("/materials/ids", response_model=ApiResponse)
+async def list_material_ids(
+    title: str = Query(None, description="标题模糊搜索"),
+    keyword: str = Query(None, description="关键词搜索（匹配标题或描述）"),
+    category: str = Query(None, description="分类筛选"),
+    condition: str = Query(None, description="成色筛选"),
+    platform_category_id: str = Query(None, description="平台分类ID筛选"),
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """查询素材ID列表（无分页，供前端"全选所有素材"使用，筛选条件与列表接口一致）"""
+    svc = ProductMaterialService(session)
+    query_user_id = None if _is_admin(current_user) else current_user.id
+    ids = await svc.list_material_ids(
+        query_user_id, title=title, keyword=keyword, category=category,
+        condition=condition, platform_category_id=platform_category_id,
+    )
+    return ApiResponse(success=True, message="查询成功", data={"ids": ids})
+
+
 class BatchDeleteRequest(BaseModel):
     """批量删除素材请求"""
     ids: List[int] = Field(..., min_length=1, description="素材ID列表")
@@ -1245,7 +1265,10 @@ async def _update_schedule_log_on_complete(
             stmt = select(PublishScheduleLog).where(PublishScheduleLog.id == schedule_log_id)
             log_entry = (await session.execute(stmt)).scalar_one_or_none()
             if log_entry:
+                from common.utils.time_utils import get_beijing_now
+
                 log_entry.status = "failed" if is_error else "completed"
+                log_entry.executed_at = get_beijing_now()
                 log_entry.success_count = success_count
                 log_entry.failed_count = failed_count
                 if error_message:

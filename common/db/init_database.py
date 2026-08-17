@@ -1783,6 +1783,14 @@ class DatabaseInitializer:
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_publish_schedules": [
+            ("publish_mode", "VARCHAR(20) NOT NULL DEFAULT 'specified' COMMENT '发布模式：specified-指定发布（全部所选素材），random-随机发布'", "material_ids"),
+            ("random_count", "INT DEFAULT NULL COMMENT '随机发布数量（publish_mode=random 时有效）'", "publish_mode"),
+            ("deduplicate_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '去重开关（随机模式可用）'", "random_count"),
+        ],
+        "xy_publish_schedule_logs": [
+            ("detail_json", "JSON DEFAULT NULL COMMENT '执行明细JSON（成功/失败商品编号明细、补发轮次、账号级错误）'", "error_message"),
+        ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
         ],

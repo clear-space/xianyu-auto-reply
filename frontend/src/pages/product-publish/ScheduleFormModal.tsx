@@ -12,7 +12,7 @@ import { motion } from 'framer-motion'
 import { Clock, X, Loader2, Save, ChevronLeft, ChevronRight, Search, Image } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { getAccountDetails } from '@/api/accounts'
-import { getMaterials, createSchedule, updateSchedule, type ProductMaterial, type PublishSchedule, type ScheduleConfig, type CreateScheduleParams, type UpdateScheduleParams } from '@/api/productPublish'
+import { getMaterials, getAllMaterialIds, createSchedule, updateSchedule, type ProductMaterial, type PublishSchedule, type ScheduleConfig, type CreateScheduleParams, type UpdateScheduleParams } from '@/api/productPublish'
 
 interface Props {
   initial?: PublishSchedule | null
@@ -24,6 +24,7 @@ interface Props {
 
 type ScheduleMode = 'once' | 'daily' | 'weekly'
 type TimeMode = 'fixed' | 'random'
+type PublishMode = 'specified' | 'random'
 
 const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 const DEFAULT_TIME_RANGE = { start: '09:00', end: '21:00' }
@@ -36,6 +37,9 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
   const [dataLoading, setDataLoading] = useState(true)
 
   const [name, setName] = useState(initial?.name || '')
+  const [publishMode, setPublishMode] = useState<PublishMode>(initial?.publish_mode || 'specified')
+  const [randomCount, setRandomCount] = useState<number>(initial?.random_count || 1)
+  const [deduplicate, setDeduplicate] = useState<boolean>(initial?.deduplicate_enabled || false)
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(initial?.schedule_mode || 'daily')
   const [timeMode, setTimeMode] = useState<TimeMode>(() => {
     if (initial?.schedule_config?.random) return 'random'
@@ -117,6 +121,15 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
       addToast({ type: 'warning', message: '请至少设置一个时间点' }); return
     }
 
+    if (publishMode === 'random') {
+      if (!randomCount || randomCount < 1) {
+        addToast({ type: 'warning', message: '随机发布数量至少为 1' }); return
+      }
+      if (randomCount > selectedMaterials.size) {
+        addToast({ type: 'warning', message: `随机发布数量不能超过所选素材数（${selectedMaterials.size}）` }); return
+      }
+    }
+
     setLoading(true)
     try {
       const params: CreateScheduleParams = {
@@ -125,6 +138,9 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
         schedule_config: buildConfig(),
         account_ids: Array.from(selectedAccounts),
         material_ids: Array.from(selectedMaterials),
+        publish_mode: publishMode,
+        random_count: publishMode === 'random' ? randomCount : null,
+        deduplicate_enabled: publishMode === 'random' ? deduplicate : false,
       }
 
       if (initial) {
@@ -168,13 +184,34 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
     if (selectedAccounts.size === accounts.length) setSelectedAccounts(new Set())
     else setSelectedAccounts(new Set(accounts.map((a: any) => a.id)))
   }
-  const toggleAllMaterials = () => {
-    const currentPageIds = materials.map(m => m.id)
-    const allSelected = currentPageIds.length > 0 && currentPageIds.every(id => selectedMaterials.has(id))
-    if (allSelected) {
-      setSelectedMaterials(prev => { const n = new Set(prev); currentPageIds.forEach(id => n.delete(id)); return n })
-    } else {
-      setSelectedMaterials(prev => { const n = new Set(prev); currentPageIds.forEach(id => n.add(id)); return n })
+  const [selectAllLoading, setSelectAllLoading] = useState(false)
+
+  /** 全选/取消全选所有素材（跨分页，按当前搜索条件） */
+  const toggleAllMaterials = async () => {
+    if (selectAllLoading) return
+    setSelectAllLoading(true)
+    try {
+      const filters: { title?: string } = {}
+      if (materialSearch.trim()) filters.title = materialSearch.trim()
+      const res = await getAllMaterialIds(Object.keys(filters).length > 0 ? filters : undefined)
+      const allIds: number[] = res.success ? (res.data?.ids || []) : []
+      if (allIds.length === 0) {
+        addToast({ type: 'warning', message: '当前筛选条件下没有素材' })
+        return
+      }
+      const allSelected = allIds.every(id => selectedMaterials.has(id))
+      setSelectedMaterials(prev => {
+        const n = new Set(prev)
+        allIds.forEach(id => allSelected ? n.delete(id) : n.add(id))
+        return n
+      })
+      addToast(allSelected
+        ? { type: 'success', message: `已取消全选 ${allIds.length} 条素材` }
+        : { type: 'success', message: `已全选 ${allIds.length} 条素材` })
+    } catch {
+      addToast({ type: 'error', message: '获取素材列表失败，请重试' })
+    } finally {
+      setSelectAllLoading(false)
     }
   }
 
@@ -190,7 +227,9 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
 
   const allCurrentMaterialsSelected = materials.length > 0 && materials.every(m => selectedMaterials.has(m.id))
 
-  const totalPublishes = selectedAccounts.size * selectedMaterials.size
+  const totalPublishes = selectedAccounts.size * (
+    publishMode === 'random' ? Math.min(randomCount || 0, selectedMaterials.size) : selectedMaterials.size
+  )
 
   if (dataLoading) {
     return (
@@ -327,6 +366,49 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
             </div>
           </div>
 
+          {/* 发布模式 */}
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h3 className="vben-card-title text-sm">发布模式</h3>
+            </div>
+            <div className="vben-card-body space-y-3">
+              <div className="flex gap-2">
+                {([
+                  { key: 'specified', label: '指定发布', desc: '发布全部所选素材' },
+                  { key: 'random', label: '随机发布', desc: '每次触发从素材池随机选 N 条' },
+                ] as { key: PublishMode; label: string; desc: string }[]).map(m => (
+                  <button key={m.key} type="button" onClick={() => setPublishMode(m.key)}
+                    className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${
+                      publishMode === m.key
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600'
+                        : 'border-slate-300 dark:border-slate-600 text-slate-600 hover:border-blue-400'
+                    }`}>
+                    <div className="font-medium">{m.label}</div>
+                    <div className="text-xs opacity-70">{m.desc}</div>
+                  </button>
+                ))}
+              </div>
+
+              {publishMode === 'random' && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <label className="input-label text-sm">每次随机发布</label>
+                    <input type="number" min={1} max={selectedMaterials.size || 1} className="input-ios w-24"
+                      value={randomCount} onChange={e => setRandomCount(Math.max(1, parseInt(e.target.value) || 1))} />
+                    <span className="text-sm text-slate-500">条（发布不足自动补发）</span>
+                  </div>
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" className="w-4 h-4 mt-0.5 text-blue-600 rounded"
+                      checked={deduplicate} onChange={e => setDeduplicate(e.target.checked)} />
+                    <span className="text-sm text-slate-600 dark:text-slate-300">
+                      启用去重：发布前刷新账号在售商品，素材标题前缀编号（A+数字）已在售的不再发布
+                    </span>
+                  </label>
+                </>
+              )}
+            </div>
+          </div>
+
           {/* 选择账号 */}
           <div className="vben-card">
             <div className="vben-card-header">
@@ -357,8 +439,9 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
             <div className="vben-card-header">
               <h3 className="vben-card-title text-sm"><Image className="w-4 h-4" />选择素材</h3>
               <div className="flex items-center gap-2">
-                <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllMaterials}>
-                  {allCurrentMaterialsSelected && materials.length > 0 ? '取消全选' : '全选'}
+                <button className="text-sm text-blue-500 hover:underline flex items-center gap-1" onClick={toggleAllMaterials} disabled={selectAllLoading}>
+                  {selectAllLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+                  {allCurrentMaterialsSelected && materials.length > 0 ? '取消全选' : '全选所有'}
                 </button>
                 <span className="badge-primary text-xs">已选 {selectedMaterials.size} 条</span>
               </div>
@@ -466,7 +549,7 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
           {/* 预览 */}
           <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
             <span className="text-sm text-slate-500">
-              {selectedAccounts.size} 账号 × {selectedMaterials.size} 素材
+              {selectedAccounts.size} 账号 × {publishMode === 'random' ? randomCount : selectedMaterials.size} 素材
             </span>
             <span className="text-lg font-semibold text-blue-600 dark:text-blue-400">
               = {totalPublishes} 次发布

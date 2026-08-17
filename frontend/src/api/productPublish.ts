@@ -326,6 +326,20 @@ export const getMaterials = (
   return get(`${PREFIX}/materials?${params}`)
 }
 
+/** 查询素材ID列表（无分页，供"全选所有素材"使用，筛选条件与分页列表一致） */
+export const getAllMaterialIds = (
+  filters?: { title?: string; keyword?: string; category?: string; condition?: string; platform_category_id?: string }
+): Promise<ApiResponse<{ ids: number[] }>> => {
+  const params = new URLSearchParams()
+  if (filters?.title) params.append('title', filters.title)
+  if (filters?.keyword) params.append('keyword', filters.keyword)
+  if (filters?.category) params.append('category', filters.category)
+  if (filters?.condition) params.append('condition', filters.condition)
+  if (filters?.platform_category_id) params.append('platform_category_id', filters.platform_category_id)
+  const qs = params.toString()
+  return get(`${PREFIX}/materials/ids${qs ? `?${qs}` : ''}`)
+}
+
 /** 获取单条素材详情 */
 export const getMaterial = (id: number): Promise<ApiResponse<ProductMaterial>> =>
   get(`${PREFIX}/materials/${id}`)
@@ -530,6 +544,9 @@ export interface PublishSchedule {
   schedule_config: ScheduleConfig
   account_ids: string[]
   material_ids: number[]
+  publish_mode: 'specified' | 'random'
+  random_count?: number | null
+  deduplicate_enabled: boolean
   enabled: boolean
   last_triggered_at?: string | null
   next_trigger_at?: string | null
@@ -555,6 +572,9 @@ export interface CreateScheduleParams {
   schedule_config: ScheduleConfig
   account_ids: string[]
   material_ids: number[]
+  publish_mode?: 'specified' | 'random'
+  random_count?: number | null
+  deduplicate_enabled?: boolean
 }
 
 /** 更新定时规则参数 */
@@ -564,6 +584,9 @@ export interface UpdateScheduleParams {
   schedule_config?: Record<string, unknown>
   account_ids?: string[]
   material_ids?: number[]
+  publish_mode?: string
+  random_count?: number | null
+  deduplicate_enabled?: boolean
   enabled?: boolean
 }
 
@@ -579,7 +602,31 @@ export interface PublishScheduleLog {
   success_count: number
   failed_count: number
   error_message?: string | null
+  detail_json?: ScheduleLogDetail | null
   created_at: string
+}
+
+/** 执行记录明细（detail_json） */
+export interface ScheduleLogDetail {
+  publish_mode?: string
+  random_count?: number | null
+  deduplicate?: boolean
+  target_ok?: number
+  detail_truncated?: boolean
+  filtered_count?: number
+  rounds?: Array<{
+    round: number
+    materials: Array<{
+      material_id?: number
+      title?: string
+      item_no?: string | null
+      result: 'success' | 'failed' | 'account_error'
+      accounts?: Array<{ account_id: string; status: string; error?: string }>
+      /** 明细过大压缩后：仅保留各账号状态计数（accounts 数组被丢弃） */
+      account_counts?: { success: number; failed: number; account_error: number }
+    }>
+  }>
+  filtered?: Array<{ material_id?: number; title?: string; item_no?: string; round?: number }>
 }
 
 /** 规则列表响应 */

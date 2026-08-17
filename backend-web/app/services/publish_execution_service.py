@@ -248,6 +248,16 @@ class PublishExecutorService:
 
         logger.info(f"批量发布开始: batch_id={batch_id}, 账号数={len(account_ids)}, 商品数={len(materials)}")
 
+        # 按素材聚合账号维度结果（供定时发布的自动补发判定使用）
+        material_keys = [
+            m.get("id") if m.get("id") is not None else f"idx_{i}"
+            for i, m in enumerate(materials)
+        ]
+        mat_agg: Dict[str, Dict[str, Any]] = {
+            key: {"material_id": m.get("id"), "title": m.get("title", ""), "accounts": []}
+            for key, m in zip(material_keys, materials)
+        }
+
         account_map = await self._get_account_map(account_ids, user_id)
 
         for account_id in account_ids:
@@ -266,7 +276,10 @@ class PublishExecutorService:
                     message=f"{account_error}，未触发自动获取商品",
                 )
                 logger.warning(f"账号 {account_id} 无法发布，跳过: {account_error}")
-                for material in materials:
+                for key, material in zip(material_keys, materials):
+                    mat_agg[key]["accounts"].append(
+                        {"account_id": account_id, "status": "account_error", "error": account_error}
+                    )
                     log = await log_svc.create_log(
                         user_id=user_id,
                         account_id=account_id,
@@ -310,7 +323,10 @@ class PublishExecutorService:
                 logger.warning(
                     f"账号 {account_id} 发布能力检测失败，跳过该账号所有素材: {capability_message}"
                 )
-                for material in materials:
+                for key, material in zip(material_keys, materials):
+                    mat_agg[key]["accounts"].append(
+                        {"account_id": account_id, "status": "account_error", "error": capability_message}
+                    )
                     log = await log_svc.create_log(
                         user_id=user_id,
                         account_id=account_id,
@@ -334,6 +350,9 @@ class PublishExecutorService:
                     resolved_address = await address_svc.resolve_publish_address(account_id, material, queue_state)
                 except ValueError as address_error:
                     failed_count += 1
+                    mat_agg[material_keys[idx]]["accounts"].append(
+                        {"account_id": account_id, "status": "failed", "error": str(address_error)}
+                    )
                     log = await log_svc.create_log(
                         user_id=user_id,
                         account_id=account_id,
@@ -386,6 +405,9 @@ class PublishExecutorService:
                     if result.get("success"):
                         success_count += 1
                         account_success_count += 1
+                        mat_agg[material_keys[idx]]["accounts"].append(
+                            {"account_id": account_id, "status": "success"}
+                        )
                         await log_svc.update_log(
                             log_id=log.id,
                             status="success",
@@ -394,6 +416,9 @@ class PublishExecutorService:
                         )
                     else:
                         failed_count += 1
+                        mat_agg[material_keys[idx]]["accounts"].append(
+                            {"account_id": account_id, "status": "failed", "error": result.get("message")}
+                        )
                         await log_svc.update_log(
                             log_id=log.id,
                             status="failed",
@@ -406,6 +431,9 @@ class PublishExecutorService:
                 except Exception as exc:
                     failed_count += 1
                     logger.error(f"批量接口发布单品异常: account={account_id}, title={material.get('title')}: {exc}")
+                    mat_agg[material_keys[idx]]["accounts"].append(
+                        {"account_id": account_id, "status": "failed", "error": str(exc)[:300]}
+                    )
                     await log_svc.update_log(log_id=log.id, status="failed", error_message=str(exc))
 
             if account_success_count > 0 and account is not None:
@@ -441,6 +469,31 @@ class PublishExecutorService:
 
         logger.info(f"批量发布结束: batch_id={batch_id}, 成功={success_count}, 失败={failed_count}")
 
+        # 素材级结果汇总：账号级失败（不存在/无权/无Cookie/能力检测失败）不计入素材失败，
+        # 供定时发布自动补发判定使用（成功数以素材维度与 random_count 比对）。
+        from app.services.scheduled_publish_executor import extract_item_number
+
+        material_results: List[Dict[str, Any]] = []
+        for key in material_keys:
+            agg = mat_agg[key]
+            accounts = agg["accounts"]
+            valid_accounts = [a for a in accounts if a["status"] != "account_error"]
+            material_results.append(
+                {
+                    "material_id": agg["material_id"],
+                    "title": agg["title"],
+                    "item_no": extract_item_number(agg["title"]),
+                    "accounts": accounts,
+                    # 素材级成功：至少一个有效账号，且所有有效账号都发布成功
+                    "ok": bool(valid_accounts)
+                    and all(a["status"] == "success" for a in valid_accounts),
+                    "has_valid_account": bool(valid_accounts),
+                    "success_accounts": sum(1 for a in accounts if a["status"] == "success"),
+                    "failed_accounts": sum(1 for a in valid_accounts if a["status"] == "failed"),
+                    "account_error_accounts": len(accounts) - len(valid_accounts),
+                }
+            )
+
         return {
             "success": True,
             "batch_id": batch_id,
@@ -448,6 +501,7 @@ class PublishExecutorService:
             "success_count": success_count,
             "failed_count": failed_count,
             "log_ids": log_ids,
+            "material_results": material_results,
         }
 
 

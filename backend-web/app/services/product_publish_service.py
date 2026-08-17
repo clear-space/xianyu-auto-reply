@@ -196,6 +196,38 @@ class ProductMaterialService:
             "total_pages": (total + page_size - 1) // page_size if total else 0,
         }
 
+    async def list_material_ids(
+        self, user_id: int = None, title: str = None, category: str = None,
+        condition: str = None, platform_category_id: str = None, keyword: str = None,
+    ) -> List[int]:
+        """查询素材ID列表（无分页，供前端"全选所有素材"使用）
+
+        筛选条件与 list_materials 保持一致。
+        """
+        base_cond = [ProductMaterial.is_deleted.is_(False)]
+        if user_id is not None:
+            base_cond.append(ProductMaterial.user_id == user_id)
+        if title:
+            base_cond.append(ProductMaterial.title.ilike(f"%{title}%"))
+        if keyword:
+            base_cond.append(or_(
+                ProductMaterial.title.ilike(f"%{keyword}%"),
+                ProductMaterial.description.ilike(f"%{keyword}%"),
+            ))
+        if category:
+            base_cond.append(ProductMaterial.category == category)
+        if condition:
+            base_cond.append(ProductMaterial.condition == condition)
+        if platform_category_id:
+            base_cond.append(ProductMaterial.platform_category_id == platform_category_id)
+
+        stmt = (
+            select(ProductMaterial.id)
+            .where(*base_cond)
+            .order_by(desc(ProductMaterial.created_at))
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def get(self, material_id: int, user_id: int = None) -> Optional[ProductMaterial]:
         """查询单条素材
         
@@ -213,13 +245,18 @@ class ProductMaterialService:
         if not material_ids:
             return []
         unique_ids = list(dict.fromkeys(material_ids))
-        stmt = select(ProductMaterial).where(
-            ProductMaterial.user_id == user_id,
-            ProductMaterial.id.in_(unique_ids),
-            ProductMaterial.is_deleted.is_(False),
-        )
-        rows = (await self.session.execute(stmt)).scalars().all()
-        material_map = {row.id: row for row in rows}
+        material_map = {}
+        # 分批查询：素材过多时避免 IN 子句超出 MySQL max_allowed_packet
+        for i in range(0, len(unique_ids), 500):
+            batch = unique_ids[i:i + 500]
+            stmt = select(ProductMaterial).where(
+                ProductMaterial.user_id == user_id,
+                ProductMaterial.id.in_(batch),
+                ProductMaterial.is_deleted.is_(False),
+            )
+            rows = (await self.session.execute(stmt)).scalars().all()
+            for row in rows:
+                material_map[row.id] = row
         return [material_map[mid] for mid in material_ids if mid in material_map]
 
     async def update(self, material_id: int, user_id: int = None, data: dict = None) -> Optional[ProductMaterial]:

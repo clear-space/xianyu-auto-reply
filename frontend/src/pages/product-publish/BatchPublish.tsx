@@ -12,7 +12,7 @@ import { motion } from 'framer-motion'
 import { Layers, CheckCircle, XCircle, Clock, Play, Loader2, Save } from 'lucide-react'
 import { ScheduleFormModal } from './ScheduleFormModal'
 import { useUIStore } from '@/store/uiStore'
-import { publishBatch, getBatchStatus, getMaterials, type ProductMaterial, type BatchAccountStatus } from '@/api/productPublish'
+import { publishBatch, getBatchStatus, getMaterials, getAllMaterialIds, type ProductMaterial, type BatchAccountStatus } from '@/api/productPublish'
 import { getAccountDetails } from '@/api/accounts'
 
 interface BatchProgress {
@@ -189,13 +189,33 @@ export function BatchPublish() {
   const toggleAccount = (id: string) => setSelectedAccounts(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const toggleMaterial = (id: number) => setSelectedMaterials(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const toggleAllAccounts = () => selectedAccounts.size === accounts.length ? setSelectedAccounts(new Set()) : setSelectedAccounts(new Set(accounts.map((a: any) => a.id)))
-  const toggleAllMaterials = () => {
-    const ids = filteredMaterials.map(m => m.id)
-    const allSelected = ids.length > 0 && ids.every(id => selectedMaterials.has(id))
-    if (allSelected) {
-      setSelectedMaterials(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n })
-    } else {
-      setSelectedMaterials(prev => { const n = new Set(prev); ids.forEach(id => n.add(id)); return n })
+  const [selectAllLoading, setSelectAllLoading] = useState(false)
+  /** 全选/取消全选所有素材（跨分页，按当前搜索条件） */
+  const toggleAllMaterials = async () => {
+    if (selectAllLoading) return
+    setSelectAllLoading(true)
+    try {
+      const filters: { title?: string } = {}
+      if (materialSearch.trim()) filters.title = materialSearch.trim()
+      const res = await getAllMaterialIds(Object.keys(filters).length > 0 ? filters : undefined)
+      const allIds: number[] = res.success ? (res.data?.ids || []) : []
+      if (allIds.length === 0) {
+        addToast({ type: 'warning', message: '没有可选择的素材' })
+        return
+      }
+      const allSelected = allIds.every(id => selectedMaterials.has(id))
+      setSelectedMaterials(prev => {
+        const n = new Set(prev)
+        allIds.forEach(id => allSelected ? n.delete(id) : n.add(id))
+        return n
+      })
+      addToast(allSelected
+        ? { type: 'success', message: `已取消全选 ${allIds.length} 条素材` }
+        : { type: 'success', message: `已全选 ${allIds.length} 条素材` })
+    } catch {
+      addToast({ type: 'error', message: '获取素材列表失败，请重试' })
+    } finally {
+      setSelectAllLoading(false)
     }
   }
 
@@ -265,8 +285,9 @@ export function BatchPublish() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="vben-card">
           <div className="vben-card-header">
             <h2 className="vben-card-title">选择素材</h2>
-            <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllMaterials}>
-              {selectedMaterials.size === filteredMaterials.length && filteredMaterials.length > 0 ? '取消全选' : '全选'}
+            <button className="text-sm text-blue-500 hover:underline flex items-center gap-1" onClick={toggleAllMaterials} disabled={selectAllLoading}>
+              {selectAllLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+              {selectedMaterials.size === filteredMaterials.length && filteredMaterials.length > 0 ? '取消全选' : '全选所有'}
             </button>
           </div>
           <div className="vben-card-body">

@@ -9,143 +9,12 @@
 from __future__ import annotations
 
 import asyncio
-import random
-from datetime import datetime, time, timedelta, timezone
-from typing import Optional
+from datetime import datetime
 
 from loguru import logger
 
-BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-# ==================== 时间计算工具（与 backend-web 的 publish_schedule_service 保持一致） ====================
-
-def _parse_time(t_str: str) -> Optional[time]:
-    try:
-        h, m = t_str.strip().split(":")
-        return time(int(h), int(m))
-    except (ValueError, TypeError):
-        return None
-
-
-def _random_time_between(start_str: str, end_str: str) -> time:
-    start = _parse_time(start_str) or time(0, 0)
-    end = _parse_time(end_str) or time(23, 59)
-    start_minutes = start.hour * 60 + start.minute
-    end_minutes = end.hour * 60 + end.minute
-    if end_minutes <= start_minutes:
-        end_minutes = start_minutes + 1
-    random_minutes = random.randint(start_minutes, end_minutes)
-    return time(random_minutes // 60, random_minutes % 60)
-
-
-def _next_daily(config: dict, now: datetime, today) -> Optional[datetime]:
-    use_random = config.get("random", False)
-    time_range = config.get("time_range")
-    times = config.get("times", [])
-
-    if use_random and time_range:
-        start_str = time_range.get("start", "00:00")
-        end_str = time_range.get("end", "23:59")
-        trigger_time = _random_time_between(start_str, end_str)
-        candidate = datetime.combine(today, trigger_time).replace(tzinfo=BEIJING_TZ)
-        if candidate <= now:
-            candidate = datetime.combine(today + timedelta(days=1), _random_time_between(start_str, end_str)).replace(tzinfo=BEIJING_TZ)
-        return candidate
-
-    if times:
-        time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
-        time_points.sort()
-        for tp in time_points:
-            candidate = datetime.combine(today, tp).replace(tzinfo=BEIJING_TZ)
-            if candidate > now:
-                return candidate
-        if time_points:
-            return datetime.combine(today + timedelta(days=1), time_points[0]).replace(tzinfo=BEIJING_TZ)
-
-    candidate = datetime.combine(today, time(0, 0)).replace(tzinfo=BEIJING_TZ)
-    if candidate <= now:
-        candidate = datetime.combine(today + timedelta(days=1), time(0, 0)).replace(tzinfo=BEIJING_TZ)
-    return candidate
-
-
-def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
-    days = config.get("days", [])
-    if not days:
-        return None
-    use_random = config.get("random", False)
-    time_range = config.get("time_range")
-    times = config.get("times", [])
-
-    for offset in range(8):
-        candidate_date = today + timedelta(days=offset)
-        candidate_weekday = candidate_date.isoweekday()
-        if candidate_weekday not in days:
-            continue
-
-        if offset == 0:
-            if use_random and time_range:
-                trigger_time = _random_time_between(time_range.get("start", "00:00"), time_range.get("end", "23:59"))
-                candidate = datetime.combine(candidate_date, trigger_time).replace(tzinfo=BEIJING_TZ)
-                if candidate > now:
-                    return candidate
-                continue
-            if times:
-                time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
-                time_points.sort()
-                for tp in time_points:
-                    candidate = datetime.combine(candidate_date, tp).replace(tzinfo=BEIJING_TZ)
-                    if candidate > now:
-                        return candidate
-                continue
-            candidate = datetime.combine(candidate_date, time(0, 0)).replace(tzinfo=BEIJING_TZ)
-            if candidate > now:
-                return candidate
-            continue
-
-        # 未来某天，取最早时间点
-        if use_random and time_range:
-            trigger_time = _random_time_between(time_range.get("start", "00:00"), time_range.get("end", "23:59"))
-        elif times:
-            time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
-            time_points.sort()
-            trigger_time = time_points[0] if time_points else time(0, 0)
-        else:
-            trigger_time = time(0, 0)
-        return datetime.combine(candidate_date, trigger_time).replace(tzinfo=BEIJING_TZ)
-
-    return None
-
-
-def _compute_next_trigger(schedule_mode: str, schedule_config: dict, after: datetime = None) -> Optional[datetime]:
-    if after is None:
-        now = datetime.now(BEIJING_TZ)
-    else:
-        now = after
-    today = now.date()
-
-    if schedule_mode == "once":
-        dt_str = schedule_config.get("datetime")
-        if not dt_str:
-            return None
-        try:
-            dt = datetime.fromisoformat(dt_str)
-        except (ValueError, TypeError):
-            return None
-        # 确保时区一致
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=BEIJING_TZ)
-        if dt <= now:
-            return None
-        return dt
-
-    if schedule_mode == "daily":
-        return _next_daily(schedule_config, now, today)
-
-    if schedule_mode == "weekly":
-        return _next_weekly(schedule_config, now, today)
-
-    return None
+# 时间计算统一在 common.utils.schedule_time 维护（backend-web 与 scheduler 共用一份）
+from common.utils.schedule_time import compute_next_trigger as _compute_next_trigger
 
 
 # ==================== 定时发布任务服务 ====================
@@ -168,6 +37,7 @@ class ScheduledPublishTaskService:
     async def _execute_inner(self):
         from common.db.session import async_session_maker
         from common.models.publish_schedule import PublishSchedule
+        from common.models.publish_schedule_log import PublishScheduleLog
         from common.utils.time_utils import get_beijing_now
         from sqlalchemy import select
 
@@ -190,53 +60,98 @@ class ScheduledPublishTaskService:
                 logger.info(f"【{self.task_name}】发现 {len(due_schedules)} 条到期规则")
 
                 for schedule in due_schedules:
+                    # 防重复触发：存在 running 执行记录的规则本轮跳过
+                    running_stmt = (
+                        select(PublishScheduleLog.id)
+                        .where(
+                            PublishScheduleLog.schedule_id == schedule.id,
+                            PublishScheduleLog.status == "running",
+                        )
+                        .limit(1)
+                    )
+                    if (await session.execute(running_stmt)).scalars().first():
+                        logger.info(
+                            f"【{self.task_name}】规则 #{schedule.id}「{schedule.name}」"
+                            f"存在执行中的记录，本轮跳过"
+                        )
+                        continue
+
                     logger.info(
                         f"【{self.task_name}】触发规则 #{schedule.id}「{schedule.name}」"
                         f", 账号={len(schedule.account_ids)}, 素材={len(schedule.material_ids)}"
                     )
                     try:
-                        await self._trigger_schedule(session, schedule, now)
+                        submitted = await self._trigger_schedule(session, schedule, now)
                     except Exception as e:
                         logger.error(f"【{self.task_name}】触发规则 #{schedule.id} 失败: {e}")
                         await session.rollback()
+                        submitted = False
 
-                    # 无论成功或失败都推进（_trigger_schedule 成功路径已自行 commit）
-                    try:
-                        await self._advance_schedule(session, schedule)
-                    except Exception as e2:
-                        logger.error(f"【{self.task_name}】推进规则 #{schedule.id} 失败: {e2}")
-                        await session.rollback()
+                    if submitted:
+                        # 提交成功才推进调度周期
+                        try:
+                            await self._advance_schedule(session, schedule)
+                        except Exception as e2:
+                            logger.error(f"【{self.task_name}】推进规则 #{schedule.id} 失败: {e2}")
+                            await session.rollback()
+                    else:
+                        # 提交失败：不推进 next_trigger_at（下轮扫描自动重试）；
+                        # 连续 3 次失败才推进，避免无限重试占用扫描
+                        recent_stmt = (
+                            select(PublishScheduleLog.status)
+                            .where(PublishScheduleLog.schedule_id == schedule.id)
+                            .order_by(PublishScheduleLog.id.desc())
+                            .limit(3)
+                        )
+                        recent_statuses = list(
+                            (await session.execute(recent_stmt)).scalars().all()
+                        )
+                        consec_failed = 0
+                        for st in recent_statuses:
+                            if st == "failed":
+                                consec_failed += 1
+                            else:
+                                break
+                        if consec_failed >= 3:
+                            logger.warning(
+                                f"【{self.task_name}】规则 #{schedule.id} 连续 {consec_failed} 次"
+                                f"提交失败，推进调度周期"
+                            )
+                            try:
+                                await self._advance_schedule(session, schedule)
+                            except Exception as e3:
+                                logger.error(f"【{self.task_name}】推进规则 #{schedule.id} 失败: {e3}")
+                                await session.rollback()
 
                     await asyncio.sleep(2)
 
         except Exception as e:
             logger.error(f"【{self.task_name}】扫描异常: {e}")
 
-    async def _trigger_schedule(self, session, schedule, now: datetime):
-        """触发单条规则：创建执行日志 + 调用批量发布 API"""
+    async def _trigger_schedule(self, session, schedule, now: datetime) -> bool:
+        """触发单条规则：创建执行日志 + 调用内部批量发布 API（提交成功返回 True）"""
         import uuid
 
         from app.core.http_client import get_http_client
         from app.core.config import get_settings
         from common.models.publish_schedule_log import PublishScheduleLog
+        from common.utils.time_utils import get_beijing_now
 
         settings = get_settings()
 
-        total_count = len(schedule.account_ids) * len(schedule.material_ids)
+        batch_id = str(uuid.uuid4())
 
+        # 计划时间记规则预计算的 next_trigger_at（而非扫描时间）
         log_entry = PublishScheduleLog(
             schedule_id=schedule.id,
-            scheduled_at=now,
-            total_count=total_count,
+            scheduled_at=schedule.next_trigger_at or now,
+            total_count=len(schedule.account_ids) * len(schedule.material_ids),
             status="running",
+            batch_id=batch_id,
         )
         session.add(log_entry)
         await session.commit()
         await session.refresh(log_entry)
-
-        batch_id = str(uuid.uuid4())
-        log_entry.batch_id = batch_id
-        await session.commit()
 
         backend_url = settings.backend_service_url or "http://localhost:8089"
         # 使用内部端点（无需用户认证，直接传入 user_id）
@@ -251,28 +166,30 @@ class ScheduledPublishTaskService:
                     "user_id": schedule.user_id,
                     "account_ids": schedule.account_ids,
                     "material_ids": schedule.material_ids,
+                    "schedule_id": schedule.id,
                     "schedule_log_id": log_entry.id,
+                    "batch_id": batch_id,
                 },
             )
             if result.get("success"):
                 logger.info(
                     f"【{self.task_name}】规则 #{schedule.id} 批量发布已提交: batch_id={batch_id}"
                 )
-                log_entry.status = "running"
-            else:
-                log_entry.status = "failed"
-                log_entry.error_message = result.get("message", "API返回失败")
-                logger.warning(
-                    f"【{self.task_name}】规则 #{schedule.id} 提交失败: "
-                    f"{log_entry.error_message}"
-                )
+                return True
+            log_entry.status = "failed"
+            log_entry.error_message = result.get("message", "API返回失败")
+            logger.warning(
+                f"【{self.task_name}】规则 #{schedule.id} 提交失败: "
+                f"{log_entry.error_message}"
+            )
         except Exception as e:
             log_entry.status = "failed"
             log_entry.error_message = f"调用API异常: {str(e)[:800]}"
             logger.error(f"【{self.task_name}】调用批量发布API异常: {e}")
 
-        log_entry.executed_at = now
+        log_entry.executed_at = get_beijing_now()
         await session.commit()
+        return False
 
     async def _advance_schedule(self, session, schedule):
         """推进规则的 next_trigger_at，once 模式完成后自动禁用"""

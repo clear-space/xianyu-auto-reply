@@ -3,13 +3,12 @@
 
 功能：
 1. 定时规则 CRUD（创建/查询/更新/删除/开关）
-2. next_trigger_at 计算（支持单次/每天/每周 + 指定时间点/时间段随机）
+2. next_trigger_at 计算（时间计算统一在 common.utils.schedule_time，本服务直接引用）
 3. 执行记录管理
 """
 from __future__ import annotations
 
-import random
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import desc, func, select
@@ -17,161 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.publish_schedule import PublishSchedule
 from common.models.publish_schedule_log import PublishScheduleLog
-from common.utils.time_utils import BEIJING_TZ, get_beijing_now, safe_isoformat
-
-
-def _compute_next_trigger(schedule_mode: str, schedule_config: dict, after: datetime = None) -> Optional[datetime]:
-    """
-    根据调度配置计算下一次触发时间。
-
-    schedule_config 结构：
-      - once:     {"datetime": "2026-08-01T20:00:00"}
-      - daily:    {"times": ["08:00", "20:00"]}  或  {"time_range": {"start":"18:00","end":"22:00"}, "random": true}
-      - weekly:   {"days": [1,3,5], "times": ["20:00"]}  或  {"days":[1,3,5], "time_range": {...}, "random": true}
-
-    Args:
-        schedule_mode: once / daily / weekly
-        schedule_config: 时间配置 JSON
-        after: 计算此时间之后的下一次触发，默认当前时间
-
-    Returns:
-        下次触发的 datetime，如无法计算（如 once 已过期）返回 None
-    """
-    now = after if after else get_beijing_now()
-    today = now.date()
-
-    if schedule_mode == "once":
-        dt_str = schedule_config.get("datetime")
-        if not dt_str:
-            return None
-        try:
-            dt = datetime.fromisoformat(dt_str)
-        except (ValueError, TypeError):
-            return None
-        # 确保时区一致：如果解析的是 naive datetime，补上北京时间
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=BEIJING_TZ)
-        # 如果时间已过，返回 None（调用方应禁用规则）
-        if dt <= now:
-            return None
-        return dt
-
-    if schedule_mode == "daily":
-        return _next_daily(schedule_config, now, today)
-
-    if schedule_mode == "weekly":
-        return _next_weekly(schedule_config, now, today)
-
-    return None
-
-
-def _next_daily(config: dict, now: datetime, today) -> Optional[datetime]:
-    """计算每天的 next_trigger_at"""
-    use_random = config.get("random", False)
-    time_range = config.get("time_range")
-    times = config.get("times", [])
-
-    if use_random and time_range:
-        # 时间段随机：每次计算都随机一个时间点
-        start_str = time_range.get("start", "00:00")
-        end_str = time_range.get("end", "23:59")
-        trigger_time = _random_time_between(start_str, end_str)
-        candidate = datetime.combine(today, trigger_time).replace(tzinfo=BEIJING_TZ)
-        if candidate <= now:
-            # 今天已过，算明天的
-            candidate = datetime.combine(today + timedelta(days=1), _random_time_between(start_str, end_str)).replace(tzinfo=BEIJING_TZ)
-        return candidate
-
-    if times:
-        # 指定时间点列表：找到今天第一个未过的时间
-        time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
-        time_points.sort()
-        for tp in time_points:
-            candidate = datetime.combine(today, tp).replace(tzinfo=BEIJING_TZ)
-            if candidate > now:
-                return candidate
-        # 今天都过了，取明天第一个时间点
-        if time_points:
-            return datetime.combine(today + timedelta(days=1), time_points[0]).replace(tzinfo=BEIJING_TZ)
-
-    # 默认 00:00
-    candidate = datetime.combine(today, time(0, 0)).replace(tzinfo=BEIJING_TZ)
-    if candidate <= now:
-        candidate = datetime.combine(today + timedelta(days=1), time(0, 0)).replace(tzinfo=BEIJING_TZ)
-    return candidate
-
-
-def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
-    """计算每周的 next_trigger_at"""
-    days = config.get("days", [])
-    if not days:
-        return None
-
-    use_random = config.get("random", False)
-    time_range = config.get("time_range")
-    times = config.get("times", [])
-
-    for offset in range(8):  # 最多查一周
-        candidate_date = today + timedelta(days=offset)
-        candidate_weekday = candidate_date.isoweekday()
-
-        if candidate_weekday in days:
-            # 如果就是今天，检查时间是否已过
-            if offset == 0:
-                if use_random and time_range:
-                    trigger_time = _random_time_between(time_range.get("start", "00:00"), time_range.get("end", "23:59"))
-                    candidate = datetime.combine(candidate_date, trigger_time).replace(tzinfo=BEIJING_TZ)
-                    if candidate > now:
-                        return candidate
-                    continue  # 今天已过，找下一个
-                if times:
-                    time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
-                    time_points.sort()
-                    for tp in time_points:
-                        candidate = datetime.combine(candidate_date, tp).replace(tzinfo=BEIJING_TZ)
-                        if candidate > now:
-                            return candidate
-                    continue  # 今天已过，找下一个
-                # 默认用 00:00
-                candidate = datetime.combine(candidate_date, time(0, 0)).replace(tzinfo=BEIJING_TZ)
-                if candidate > now:
-                    return candidate
-                continue
-
-            # 不是今天，直接用第一个时间点
-            if use_random and time_range:
-                trigger_time = _random_time_between(time_range.get("start", "00:00"), time_range.get("end", "23:59"))
-            elif times:
-                time_points = [_parse_time(t) for t in times if _parse_time(t) is not None]
-                time_points.sort()
-                trigger_time = time_points[0] if time_points else time(0, 0)
-            else:
-                trigger_time = time(0, 0)
-
-            return datetime.combine(candidate_date, trigger_time).replace(tzinfo=BEIJING_TZ)
-
-    return None
-
-
-def _parse_time(t_str: str) -> Optional[time]:
-    """解析 HH:MM 格式的时间字符串"""
-    try:
-        h, m = t_str.strip().split(":")
-        return time(int(h), int(m))
-    except (ValueError, TypeError):
-        return None
-
-
-def _random_time_between(start_str: str, end_str: str) -> time:
-    """在时间段内随机生成一个时间点（精确到分钟）"""
-    start = _parse_time(start_str) or time(0, 0)
-    end = _parse_time(end_str) or time(23, 59)
-    start_minutes = start.hour * 60 + start.minute
-    end_minutes = end.hour * 60 + end.minute
-    if end_minutes <= start_minutes:
-        end_minutes = start_minutes + 1  # 至少间隔1分钟
-    random_minutes = random.randint(start_minutes, end_minutes)
-    return time(random_minutes // 60, random_minutes % 60)
+from common.utils.schedule_time import compute_next_trigger as _compute_next_trigger
+from common.utils.time_utils import get_beijing_now, safe_isoformat
 
 
 def _schedule_to_dict(s: PublishSchedule) -> dict:
@@ -183,6 +29,9 @@ def _schedule_to_dict(s: PublishSchedule) -> dict:
         "schedule_config": s.schedule_config or {},
         "account_ids": s.account_ids or [],
         "material_ids": s.material_ids or [],
+        "publish_mode": s.publish_mode or "specified",
+        "random_count": s.random_count,
+        "deduplicate_enabled": bool(s.deduplicate_enabled),
         "enabled": s.enabled,
         "last_triggered_at": safe_isoformat(s.last_triggered_at),
         "next_trigger_at": safe_isoformat(s.next_trigger_at),
@@ -203,6 +52,7 @@ def _log_to_dict(l: PublishScheduleLog) -> dict:
         "success_count": l.success_count,
         "failed_count": l.failed_count,
         "error_message": l.error_message,
+        "detail_json": l.detail_json or {},
         "created_at": safe_isoformat(l.created_at),
         "updated_at": safe_isoformat(l.updated_at),
     }
@@ -225,6 +75,9 @@ class PublishScheduleService:
             schedule_config=data.get("schedule_config", {}),
             account_ids=data.get("account_ids", []),
             material_ids=data.get("material_ids", []),
+            publish_mode=data.get("publish_mode", "specified"),
+            random_count=data.get("random_count"),
+            deduplicate_enabled=bool(data.get("deduplicate_enabled", False)),
             enabled=data.get("enabled", True),
         )
         # 计算首次触发时间
@@ -287,11 +140,18 @@ class PublishScheduleService:
 
         updatable = [
             "name", "schedule_mode", "schedule_config",
-            "account_ids", "material_ids", "enabled",
+            "account_ids", "material_ids",
+            "publish_mode", "random_count", "deduplicate_enabled",
+            "enabled",
         ]
         for field in updatable:
             if field in data and data[field] is not None:
                 setattr(schedule, field, data[field])
+
+        # 指定发布模式下清掉随机配置（None 值不会被上面的通用循环处理）
+        if schedule.publish_mode == "specified":
+            schedule.random_count = None
+            schedule.deduplicate_enabled = False
 
         # 重新计算下次触发时间
         schedule.next_trigger_at = _compute_next_trigger(
@@ -334,11 +194,26 @@ class PublishScheduleService:
             schedule.next_trigger_at = _compute_next_trigger(
                 schedule.schedule_mode, schedule.schedule_config
             )
+            # once 且时间已过：无法再触发，保持禁用（否则规则永远挂在列表里）
+            if schedule.next_trigger_at is None and schedule.schedule_mode == "once":
+                schedule.enabled = False
         await self.session.commit()
         await self.session.refresh(schedule)
         return schedule
 
     # ========== 执行日志 ==========
+
+    async def get_running_log(self, schedule_id: int) -> Optional[PublishScheduleLog]:
+        """查询规则当前的 running 执行记录（用于防重复触发）"""
+        stmt = (
+            select(PublishScheduleLog)
+            .where(
+                PublishScheduleLog.schedule_id == schedule_id,
+                PublishScheduleLog.status == "running",
+            )
+            .order_by(PublishScheduleLog.id.desc())
+        )
+        return (await self.session.execute(stmt)).scalars().first()
 
     async def create_log(self, schedule_id: int, scheduled_at: datetime, total_count: int) -> PublishScheduleLog:
         log = PublishScheduleLog(

@@ -72,6 +72,19 @@ class PublishBatchStatusService:
         )
 
     @classmethod
+    async def update_material_count(cls, batch_id: str, material_count: int) -> None:
+        """更新批次的素材总数（定时发布自动补发轮次会追加素材）"""
+        async with cls._lock:
+            cls._cleanup_locked()
+            record = cls._cache.get(batch_id)
+            if not record:
+                return
+            record["material_count"] = material_count
+            for acc in record["accounts"].values():
+                acc["material_count"] = material_count
+            record["last_access"] = time.time()
+
+    @classmethod
     async def get_batch_snapshot(cls, batch_id: str) -> dict[str, Any] | None:
         async with cls._lock:
             cls._cleanup_locked()

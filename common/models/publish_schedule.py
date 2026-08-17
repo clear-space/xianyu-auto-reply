@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, JSON, String
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -39,6 +39,17 @@ class PublishSchedule(TimestampMixin, Base):
     # 发布配置
     account_ids: Mapped[list] = mapped_column(JSON, nullable=False, comment="闲鱼账号ID列表")
     material_ids: Mapped[list] = mapped_column(JSON, nullable=False, comment="素材ID列表")
+    publish_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="specified",
+        comment="发布模式：specified-指定发布（全部所选素材），random-随机发布"
+    )
+    random_count: Mapped[int | None] = mapped_column(
+        Integer, comment="随机发布数量（publish_mode=random 时有效，每次触发从素材池随机选 N 条）"
+    )
+    deduplicate_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+        comment="去重开关（随机模式可用）：发布前刷新账号在售列表，按素材标题前缀编号（A+数字）过滤已存在"
+    )
 
     # 状态
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")
