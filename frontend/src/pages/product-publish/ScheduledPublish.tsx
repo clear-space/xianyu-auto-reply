@@ -15,7 +15,7 @@ import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { ScheduleFormModal } from './ScheduleFormModal'
 import { OfflineRules } from './OfflineRules'
-import { OfflineLogDetailPanel } from './OfflineHistory'
+import { OfflineLogDetailPanel } from './OfflineLogDetailPanel'
 
 type Tab = 'publish-rules' | 'offline-rules' | 'schedule-history'
 

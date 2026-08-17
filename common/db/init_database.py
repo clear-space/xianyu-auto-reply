@@ -3588,7 +3588,7 @@ class DatabaseInitializer:
                     try:
                         await session.execute(
                             text("""
-                                INSERT IGNORE INTO xy_scheduled_tasks 
+                                INSERT IGNORE INTO xy_scheduled_tasks
                                 (task_code, task_name, interval_seconds, enabled, description, created_at, updated_at)
                                 VALUES (:task_code, :task_name, :interval_seconds, :enabled, :description, NOW(), NOW())
                             """),
@@ -3602,7 +3602,21 @@ class DatabaseInitializer:
                         )
                     except Exception as e:
                         logger.warning(f"定时任务 {task_code} 插入失败: {e}")
-                
+
+                # 清理历史实验残留：旧 offline_schedule 实验播种的"自动下架任务"已废弃
+                # （现功能使用 task_code=scheduled_offline 的"定时下架任务"，旧的没有执行循环，纯显示冗余）
+                try:
+                    cleanup_result = await session.execute(
+                        text("""
+                            DELETE FROM xy_scheduled_tasks
+                            WHERE task_name = '自动下架任务' AND task_code <> 'scheduled_offline'
+                        """)
+                    )
+                    if cleanup_result.rowcount:
+                        logger.info(f"✓ 已清理 {cleanup_result.rowcount} 条实验残留任务（自动下架任务）")
+                except Exception as e:
+                    logger.warning(f"清理实验残留任务失败: {e}")
+
                 await session.commit()
                 logger.info(f"✓ 定时任务配置初始化完成，共 {len(self.DEFAULT_SCHEDULED_TASKS)} 项")
                 
