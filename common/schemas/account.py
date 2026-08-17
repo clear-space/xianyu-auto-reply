@@ -26,6 +26,7 @@ class AccountDetail(BaseModel):
     send_before_confirm: bool = False
     only_send_card: bool = False
     auto_red_flower: bool = False
+    auto_match_cards: bool = True
     ai_reply_block_ordered_users: bool = False
     delivery_disabled: bool = False
     delivery_disabled_reason: str | None = None
@@ -110,6 +111,11 @@ class AccountReplyDelayUpdate(BaseModel):
 class AccountScheduledRedeliveryUpdate(BaseModel):
     """定时补发货开关更新"""
     scheduled_redelivery: bool = Field(..., description="定时补发货开关")
+
+
+class AccountAutoMatchCardsUpdate(BaseModel):
+    """商品入库自动关联卡券开关更新"""
+    auto_match_cards: bool = Field(..., description="商品入库自动关联卡券开关")
 
 
 class AccountScheduledRateUpdate(BaseModel):

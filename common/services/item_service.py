@@ -482,6 +482,14 @@ class ItemService:
         finally:
             await manager.close()
 
+        # 新商品入库后自动关联卡券（按前缀编号匹配；失败不影响商品同步主流程）
+        try:
+            await self._auto_match_cards_after_fetch(account, fetched_items)
+        except Exception as exc:
+            logger.warning(
+                f"账号[{account.account_id}] 入库后自动关联卡券失败（不影响商品同步）: {exc}"
+            )
+
         return {
             "success": True,
             "message": f"获取到 {len(fetched_items)} 个商品",
@@ -491,6 +499,36 @@ class ItemService:
             "page_size": page_size,
             "saved_count": total_saved_count,
         }
+
+    async def _auto_match_cards_after_fetch(
+        self, account: XYAccount, fetched_items: list[dict]
+    ) -> None:
+        """商品入库后自动按前缀编号关联卡券（账号级开关 auto_match_cards 控制，默认开启）。
+
+        使用独立 session；任何异常向上抛出，由调用方捕获并记录，绝不影响商品同步主流程。
+        """
+        from common.db.session import async_session_maker
+        from common.services.card_matcher import CardMatcher
+
+        if not getattr(account, "auto_match_cards", True):
+            return  # 该账号已关闭自动关联
+
+        item_ids = [
+            str(it.get("id") or "").strip()
+            for it in fetched_items
+            if str(it.get("id") or "").strip()
+        ]
+        if not item_ids:
+            return
+
+        async with async_session_maker() as match_session:
+            matcher = CardMatcher(match_session)
+            stats = await matcher.match_cards_for_item_ids(account.owner_id, item_ids)
+            if stats.get("added"):
+                logger.info(
+                    f"[自动关联卡券] 账号 {account.account_id} 本次入库 {len(item_ids)} 件，"
+                    f"新增关联 {stats['added']} 对（匹配卡券 {stats['matched_cards']} 张）"
+                )
 
     async def fetch_all_items_from_accounts(
         self,

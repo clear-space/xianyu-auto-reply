@@ -72,6 +72,15 @@ async def lifespan(app: FastAPI):
     if not await check_database_connection():
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
+
+    # 执行字段迁移（迁移清单与 backend-web 共用，
+    # 防止模型新增字段后本服务先于 backend-web 重启时报列不存在）
+    try:
+        from common.db.init_database import DatabaseInitializer
+
+        await DatabaseInitializer().migrate_columns()
+    except Exception as e:
+        logger.warning(f"字段迁移执行失败（不影响启动）: {e}")
     
     # 从数据库加载日志保留天数配置
     from common.utils.logging_utils import apply_db_log_retention, run_db_log_retention_sync

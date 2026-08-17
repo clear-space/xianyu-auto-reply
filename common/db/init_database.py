@@ -1973,6 +1973,7 @@ class DatabaseInitializer:
             ("refund_cancel_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '退款订单注销开关'", "ai_reply_block_ordered_users"),
             ("refund_cancel_url", "VARCHAR(255) DEFAULT NULL COMMENT '退款订单注销请求URL'", "refund_cancel_enabled"),
             ("refund_cancel_timeout", "INT DEFAULT 60 COMMENT '退款订单注销超时时间(秒)'", "refund_cancel_url"),
+            ("auto_match_cards", "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '商品入库后自动按前缀编号关联卡券开关'", "auto_red_flower"),
         ],
         "xy_orders": [
             ("card_only_delivered", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '仅发卡券流程是否已处理'", "delivery_fail_reason"),

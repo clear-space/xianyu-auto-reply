@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload, Send, Ticket, AlertCircle } from 'lucide-react'
-import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, cancelPasswordLogin, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountReplyDelay, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountOnlySendCard, updateAccountAutoRedFlower, updateAccountAiReplyBlockOrderedUsers, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
+import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload, Send, Ticket, Link2, AlertCircle } from 'lucide-react'
+import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, cancelPasswordLogin, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountReplyDelay, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountOnlySendCard, updateAccountAutoRedFlower, updateAccountAiReplyBlockOrderedUsers, updateAccountAutoMatchCards, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
 import { getDefaultReply, updateDefaultReply, uploadDefaultReplyImage } from '@/api/keywords'
 import { getAutoRateConfig, updateAutoRateConfig } from '@/api/autoRate'
 import { checkAdminDefaultPassword } from '@/api/auth'
@@ -21,6 +21,7 @@ type ModalType = 'qrcode' | 'password' | 'manual' | 'edit' | 'default-reply' | '
 interface AccountWithKeywordCount extends AccountDetail {
   keywordCount?: number
   aiEnabled?: boolean
+  auto_match_cards?: boolean
 }
 
 interface AccountPagination {
@@ -1249,6 +1250,20 @@ export function Accounts() {
     }
   }
 
+  // ==================== 商品入库自动关联卡券开关 ====================
+  const handleToggleAutoMatchCards = async (account: AccountWithKeywordCount) => {
+    const newEnabled = !account.auto_match_cards
+    try {
+      await updateAccountAutoMatchCards(account.id, newEnabled)
+      setAccounts(prev => prev.map(a =>
+        a.id === account.id ? { ...a, auto_match_cards: newEnabled } : a,
+      ))
+      addToast({ type: 'success', message: `商品入库自动关联卡券已${newEnabled ? '开启' : '关闭'}` })
+    } catch {
+      addToast({ type: 'error', message: '操作失败' })
+    }
+  }
+
   // ==================== 定时补评价开关 ====================
   const handleToggleScheduledRate = async (account: AccountWithKeywordCount) => {
     const newEnabled = !account.scheduled_rate
@@ -2443,6 +2458,18 @@ export function Accounts() {
                           title={`定时补发货：${account.scheduled_redelivery ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <Repeat className="w-3.5 h-3.5" />
+                        </button>
+                        {/* 商品入库自动关联卡券 */}
+                        <button
+                          onClick={() => handleToggleAutoMatchCards(account)}
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                            account.auto_match_cards
+                              ? 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:hover:bg-violet-900/50'
+                              : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
+                          }`}
+                          title={`商品入库自动关联卡券：${account.auto_match_cards ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
+                        >
+                          <Link2 className="w-3.5 h-3.5" />
                         </button>
                         {/* 定时补评价 */}
                         <button

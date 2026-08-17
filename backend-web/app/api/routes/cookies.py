@@ -36,6 +36,7 @@ from common.schemas.account import (
     AccountRemarkUpdate,
     AccountReplyDelayUpdate,
     AccountScheduledRedeliveryUpdate,
+    AccountAutoMatchCardsUpdate,
     AccountScheduledRateUpdate,
     AccountSendBeforeConfirmUpdate,
     AccountOnlySendCardUpdate,
@@ -198,6 +199,7 @@ async def list_cookie_details(
                 enabled=_status_to_enabled(account.status),
                 auto_confirm=bool(account.auto_confirm),
                 scheduled_redelivery=bool(account.scheduled_redelivery),
+                auto_match_cards=bool(account.auto_match_cards),
                 scheduled_rate=bool(account.scheduled_rate),
                 auto_polish=bool(account.auto_polish),
                 confirm_before_send=bool(account.confirm_before_send),
@@ -343,6 +345,7 @@ async def list_cookie_details_paginated(
             "online": account.account_id in online_ids,
             "auto_confirm": bool(account.auto_confirm),
             "scheduled_redelivery": bool(account.scheduled_redelivery),
+            "auto_match_cards": bool(account.auto_match_cards),
             "scheduled_rate": bool(account.scheduled_rate),
             "auto_polish": bool(account.auto_polish),
             "confirm_before_send": bool(account.confirm_before_send),
@@ -828,6 +831,19 @@ async def update_account_only_send_card(
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_only_send_card(account, payload.only_send_card)
     return ApiResponse(success=True, message="只发卡券不确认发货设置已更新")
+
+
+@router.put("/{account_id}/auto-match-cards", response_model=ApiResponse)
+async def update_account_auto_match_cards(
+    account_id: str,
+    payload: AccountAutoMatchCardsUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """更新商品入库自动关联卡券开关"""
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    await account_service.update_auto_match_cards(account, payload.auto_match_cards)
+    return ApiResponse(success=True, message="商品入库自动关联卡券设置已更新")
 
 
 @router.put("/{account_id}/auto-red-flower", response_model=ApiResponse)

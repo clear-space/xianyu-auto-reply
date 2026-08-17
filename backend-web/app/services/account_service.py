@@ -433,6 +433,12 @@ class AccountService:
         self.session.add(account)
         await self.session.commit()
 
+    async def update_auto_match_cards(self, account: XYAccount, auto_match_cards: bool) -> None:
+        """更新商品入库自动关联卡券开关"""
+        account.auto_match_cards = auto_match_cards
+        self.session.add(account)
+        await self.session.commit()
+
     async def update_scheduled_rate(self, account: XYAccount, scheduled_rate: bool) -> None:
         """更新定时补评价开关"""
         account.scheduled_rate = scheduled_rate

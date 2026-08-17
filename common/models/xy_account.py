@@ -88,6 +88,9 @@ class XYAccount(TimestampMixin, Base):
     # 自动求小红花开关
     auto_red_flower: Mapped[bool] = mapped_column(Boolean, default=False, comment="自动求小红花开关")
 
+    # 商品入库自动关联卡券开关
+    auto_match_cards: Mapped[bool] = mapped_column(Boolean, default=True, comment="商品入库后自动按前缀编号关联卡券开关")
+
     # 禁止发货开关（仅做配置存储，发货逻辑后续接入）
     delivery_disabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="禁止发货开关")
 

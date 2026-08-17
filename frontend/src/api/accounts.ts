@@ -65,6 +65,7 @@ export const getAccountDetailsPaginated = async (
     online?: boolean
     auto_confirm: boolean
     scheduled_redelivery?: boolean
+    auto_match_cards?: boolean
     scheduled_rate?: boolean
     auto_polish?: boolean
     confirm_before_send?: boolean
@@ -142,6 +143,7 @@ export const getAccountDetailsPaginated = async (
       online: item.online ?? false,
       auto_confirm: item.auto_confirm,
       scheduled_redelivery: item.scheduled_redelivery || false,
+      auto_match_cards: item.auto_match_cards ?? true,
       scheduled_rate: item.scheduled_rate || false,
       auto_polish: item.auto_polish || false,
       confirm_before_send: item.confirm_before_send || false,
@@ -254,6 +256,11 @@ export const updateAccountReplyDelay = (id: string, replyDelaySeconds: number): 
 // 更新定时补发货开关
 export const updateAccountScheduledRedelivery = (id: string, scheduledRedelivery: boolean): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/scheduled-redelivery`, { scheduled_redelivery: scheduledRedelivery })
+}
+
+// 更新商品入库自动关联卡券开关
+export const updateAccountAutoMatchCards = (id: string, autoMatchCards: boolean): Promise<ApiResponse> => {
+  return put(`${COOKIE_PREFIX}/${id}/auto-match-cards`, { auto_match_cards: autoMatchCards })
 }
 
 // 更新定时补评价开关
