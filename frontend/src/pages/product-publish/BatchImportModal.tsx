@@ -23,6 +23,11 @@ const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新�
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
 const TXT_EXT = '.txt'
 
+/** 单次批量导入请求最多携带的素材条数。
+ * 一次请求塞太多素材时 multipart 请求体过大，浏览器序列化内存溢出 / 代理截断，
+ * 后端收到不完整请求体后 multipart 解析失败返回 400，故改为小批量分批上传。 */
+const IMPORT_BATCH_SIZE = 10
+
 /** 单条素材的本地数据 */
 interface LocalMaterial {
   code: string
@@ -219,6 +224,8 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
   // 导入状态
   const [importing, setImporting] = useState(false)
+  // 分批导入进度：done = 已完成批次，total = 总批次
+  const [importProgress, setImportProgress] = useState({ done: 0, total: 0 })
   const [importResult, setImportResult] = useState<{
     imported: number
     failed: number
@@ -540,112 +547,147 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     setImporting(true)
     setImportResult(null)
     try {
-      const formData = new FormData()
+      // 小批量分批上传：单请求体积过大时浏览器序列化 multipart 内存溢出，
+      // 请求体被截断后后端解析失败返回 400，故按 IMPORT_BATCH_SIZE 切块顺序发送
+      const batches: LocalMaterial[][] = []
+      for (let i = 0; i < validItems.length; i += IMPORT_BATCH_SIZE) {
+        batches.push(validItems.slice(i, i + IMPORT_BATCH_SIZE))
+      }
+      setImportProgress({ done: 0, total: batches.length })
 
-      // 构建元数据数组（不含图片文件本身）
-      const metadataList = validItems.map((m) => {
-        const s = getSettings(m.code)
-        const recognized = recognizedCategories[m.code]
-        const draft = editedDrafts[m.code]
-        if (draft) {
-          // 完整修改过的条目：图片已在服务器（URL 直传），元数据以弹窗编辑结果为准
+      let totalImported = 0
+      let totalFailed = 0
+      let failedBatches = 0
+      const allFailedItems: { code: string; reason: string }[] = []
+
+      for (let b = 0; b < batches.length; b++) {
+        const batch = batches[b]
+        const formData = new FormData()
+
+        // 构建本批元数据数组（不含图片文件本身；图片字段下标使用批内局部索引）
+        const metadataList = batch.map((m) => {
+          const s = getSettings(m.code)
+          const recognized = recognizedCategories[m.code]
+          const draft = editedDrafts[m.code]
+          if (draft) {
+            // 完整修改过的条目：图片已在服务器（URL 直传），元数据以弹窗编辑结果为准
+            return {
+              code: m.code,
+              folder_name: m.folder_name,
+              title: draft.title,
+              description: draft.description,
+              image_count: 0,
+              images: draft.images || [],
+              price: draft.price,
+              original_price: draft.original_price ?? null,
+              category: draft.category ?? '',
+              condition: draft.condition ?? '全新',
+              brand: draft.brand ?? '',
+              delivery_method: draft.delivery_method ?? 'express',
+              shipping_method: draft.shipping_method ?? 'free',
+              support_pickup: draft.support_pickup ?? false,
+              postage: draft.postage ?? 0,
+              quantity: draft.quantity ?? 1,
+              videos: draft.videos ?? [],
+              specifications: draft.specifications ?? [],
+              sku_rows: draft.sku_rows ?? [],
+              platform_category_id: draft.platform_category_id ?? '',
+              platform_category_name: draft.platform_category_name ?? '',
+              platform_channel_category_id: draft.platform_channel_category_id ?? '',
+              platform_channel_category_name: draft.platform_channel_category_name ?? '',
+              platform_leaf_id: draft.platform_leaf_id ?? '',
+              platform_tb_category_id: draft.platform_tb_category_id ?? '',
+              platform_category_path: draft.platform_category_path ?? [],
+              platform_attributes: draft.platform_attributes ?? [],
+              address: draft.address ?? null,
+              address_expected_text: draft.address_expected_text ?? null,
+              remark: draft.remark ?? null,
+            }
+          }
+          const { title, description } = buildFinalContent(m)
           return {
             code: m.code,
             folder_name: m.folder_name,
-            title: draft.title,
-            description: draft.description,
-            image_count: 0,
-            images: draft.images || [],
-            price: draft.price,
-            original_price: draft.original_price ?? null,
-            category: draft.category ?? '',
-            condition: draft.condition ?? '全新',
-            brand: draft.brand ?? '',
-            delivery_method: draft.delivery_method ?? 'express',
-            shipping_method: draft.shipping_method ?? 'free',
-            support_pickup: draft.support_pickup ?? false,
-            postage: draft.postage ?? 0,
-            quantity: draft.quantity ?? 1,
-            videos: draft.videos ?? [],
-            specifications: draft.specifications ?? [],
-            sku_rows: draft.sku_rows ?? [],
-            platform_category_id: draft.platform_category_id ?? '',
-            platform_category_name: draft.platform_category_name ?? '',
-            platform_channel_category_id: draft.platform_channel_category_id ?? '',
-            platform_channel_category_name: draft.platform_channel_category_name ?? '',
-            platform_leaf_id: draft.platform_leaf_id ?? '',
-            platform_tb_category_id: draft.platform_tb_category_id ?? '',
-            platform_category_path: draft.platform_category_path ?? [],
-            platform_attributes: draft.platform_attributes ?? [],
-            address: draft.address ?? null,
-            address_expected_text: draft.address_expected_text ?? null,
-            remark: draft.remark ?? null,
+            title: title.slice(0, 30),
+            description: description.slice(0, 1500),
+            image_count: Math.min(m.image_count, 9),
+            price: parseFloat(s.price) || 0,
+            original_price: s.original_price ? parseFloat(s.original_price) : null,
+            category: s.category,
+            condition: s.condition,
+            brand: s.brand.trim(),
+            delivery_method: s.shipping_method === 'none' ? 'pickup' : 'express',
+            shipping_method: s.shipping_method,
+            support_pickup: s.support_pickup,
+            postage: s.shipping_method === 'free' || s.shipping_method === 'none' ? 0 : (parseFloat(s.postage) || 0),
+            quantity: parseInt(s.quantity) || 1,
+            ...(recognized ? {
+              platform_category_id: recognized.cat_id ?? '',
+              platform_category_name: recognized.cat_name ?? '',
+              platform_channel_category_id: recognized.channel_cat_id ?? '',
+              platform_channel_category_name: recognized.channel_cat_name ?? '',
+              platform_leaf_id: recognized.leaf_id ?? '',
+              platform_tb_category_id: recognized.tb_cat_id ?? '',
+              platform_category_path: recognized.path ?? [],
+            } : {}),
           }
-        }
-        const { title, description } = buildFinalContent(m)
-        return {
-          code: m.code,
-          folder_name: m.folder_name,
-          title: title.slice(0, 30),
-          description: description.slice(0, 1500),
-          image_count: Math.min(m.image_count, 9),
-          price: parseFloat(s.price) || 0,
-          original_price: s.original_price ? parseFloat(s.original_price) : null,
-          category: s.category,
-          condition: s.condition,
-          brand: s.brand.trim(),
-          delivery_method: s.shipping_method === 'none' ? 'pickup' : 'express',
-          shipping_method: s.shipping_method,
-          support_pickup: s.support_pickup,
-          postage: s.shipping_method === 'free' || s.shipping_method === 'none' ? 0 : (parseFloat(s.postage) || 0),
-          quantity: parseInt(s.quantity) || 1,
-          ...(recognized ? {
-            platform_category_id: recognized.cat_id ?? '',
-            platform_category_name: recognized.cat_name ?? '',
-            platform_channel_category_id: recognized.channel_cat_id ?? '',
-            platform_channel_category_name: recognized.channel_cat_name ?? '',
-            platform_leaf_id: recognized.leaf_id ?? '',
-            platform_tb_category_id: recognized.tb_cat_id ?? '',
-            platform_category_path: recognized.path ?? [],
-          } : {}),
-        }
-      })
+        })
 
-      formData.append('materials', JSON.stringify(metadataList))
+        formData.append('materials', JSON.stringify(metadataList))
 
-      // 添加图片文件：img_{materialIndex}_{imageIndex}（完整修改过的条目图片已在服务器，跳过；最多9张在导入时截取）
-      validItems.forEach((m, i) => {
-        if (editedDrafts[m.code]) return
-        const imgFiles = materialFilesRef.current.get(m.code)
-        if (imgFiles) {
-          imgFiles.slice(0, 9).forEach((file, j) => {
-            formData.append(`img_${i}_${j}`, file, file.name)
-          })
-        }
-      })
+        // 添加图片文件：img_{批内索引}_{图片索引}（完整修改过的条目图片已在服务器，跳过；最多9张在导入时截取）
+        batch.forEach((m, i) => {
+          if (editedDrafts[m.code]) return
+          const imgFiles = materialFilesRef.current.get(m.code)
+          if (imgFiles) {
+            imgFiles.slice(0, 9).forEach((file, j) => {
+              formData.append(`img_${i}_${j}`, file, file.name)
+            })
+          }
+        })
 
-      const res = await batchImportMaterialsUpload(formData)
-      if (res.success && res.data) {
-        const mergedResult = {
-          ...res.data,
-          failed: res.data.failed + localFailed.length,
-          failed_items: [...res.data.failed_items, ...localFailed],
+        try {
+          const res = await batchImportMaterialsUpload(formData)
+          if (res.success && res.data) {
+            totalImported += res.data.imported
+            totalFailed += res.data.failed
+            allFailedItems.push(...res.data.failed_items)
+          } else {
+            // 整批被后端拒绝：该批全部记为失败，继续后续批次
+            failedBatches += 1
+            totalFailed += batch.length
+            const reason = res.message || '上传失败'
+            batch.forEach(m => allFailedItems.push({ code: m.code, reason }))
+          }
+        } catch {
+          // 网络异常/请求被截断：该批全部记为失败，继续后续批次
+          failedBatches += 1
+          totalFailed += batch.length
+          batch.forEach(m => allFailedItems.push({ code: m.code, reason: '批次上传失败，请重试' }))
         }
-        setImportResult(mergedResult)
-        if (mergedResult.failed === 0) {
-          addToast({ type: 'success', message: `成功导入 ${mergedResult.imported} 条素材！` })
-          timerRef.current = setTimeout(() => {
-            revokeAllBlobs()
-            onImported()
-          }, 1200)
-        } else {
-          addToast({
-            type: 'warning',
-            message: `导入完成：成功 ${mergedResult.imported} 条，失败 ${mergedResult.failed} 条`,
-          })
-        }
+        setImportProgress({ done: b + 1, total: batches.length })
+      }
+
+      const mergedResult = {
+        imported: totalImported,
+        failed: totalFailed + localFailed.length,
+        failed_items: [...allFailedItems, ...localFailed],
+      }
+      setImportResult(mergedResult)
+      if (mergedResult.failed === 0) {
+        addToast({ type: 'success', message: `成功导入 ${mergedResult.imported} 条素材！` })
+        timerRef.current = setTimeout(() => {
+          revokeAllBlobs()
+          onImported()
+        }, 1200)
+      } else if (failedBatches === batches.length) {
+        // 所有批次请求均失败（如网络中断、代理限制），提示用户重试
+        addToast({ type: 'error', message: '导入失败，请重试' })
       } else {
-        addToast({ type: 'error', message: res.message || '导入失败' })
+        addToast({
+          type: 'warning',
+          message: `导入完成：成功 ${mergedResult.imported} 条，失败 ${mergedResult.failed} 条`,
+        })
       }
     } catch {
       addToast({ type: 'error', message: '导入失败，请重试' })
@@ -1310,7 +1352,11 @@ export function BatchImportModal({ onClose, onImported }: Props) {
             disabled={!scanned || selectedCount === 0 || importing}
           >
             {importing && <Loader2 className="w-4 h-4 animate-spin" />}
-            {importing ? '导入中...' : `导入选中 (${selectedCount})`}
+            {importing
+              ? importProgress.total > 0
+                ? `导入中 (${importProgress.done}/${importProgress.total})`
+                : '导入中...'
+              : `导入选中 (${selectedCount})`}
           </button>
         </div>
       </div>
