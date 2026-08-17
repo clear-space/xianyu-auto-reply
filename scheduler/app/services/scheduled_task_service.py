@@ -42,6 +42,7 @@ TASK_CODE_DM_SEND = "dm_send"
 TASK_CODE_AUTO_ORDER = "auto_order"
 TASK_CODE_SCHEDULED_PUBLISH = "scheduled_publish"
 TASK_CODE_SCHEDULED_OFFLINE = "scheduled_offline"
+TASK_CODE_SCHEDULER_WATCHDOG = "scheduler_watchdog"
 
 # 默认配置（数据库无配置时使用）
 DEFAULT_CONFIGS = {
@@ -68,6 +69,7 @@ DEFAULT_CONFIGS = {
     TASK_CODE_AUTO_ORDER: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_SCHEDULED_PUBLISH: {"interval_seconds": 30, "enabled": True},
     TASK_CODE_SCHEDULED_OFFLINE: {"interval_seconds": 60, "enabled": True},
+    TASK_CODE_SCHEDULER_WATCHDOG: {"interval_seconds": 1800, "enabled": True},
 }
 
 

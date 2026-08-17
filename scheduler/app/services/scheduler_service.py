@@ -40,6 +40,7 @@ from app.services.scheduler.dm_send_task import dm_send_task_service
 from app.services.scheduler.auto_order_task import auto_order_task_service
 from app.services.scheduler.scheduled_publish_task import scheduled_publish_task_service
 from app.services.scheduler.offline_task import offline_task_service
+from app.services.scheduler.watchdog_task import watchdog_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -65,6 +66,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_AUTO_ORDER,
     TASK_CODE_SCHEDULED_PUBLISH,
     TASK_CODE_SCHEDULED_OFFLINE,
+    TASK_CODE_SCHEDULER_WATCHDOG,
 )
 from common.db.session import async_session_maker
 
@@ -99,6 +101,7 @@ class SchedulerService:
         self._auto_order_task_handle: Optional[asyncio.Task] = None
         self._scheduled_publish_task_handle: Optional[asyncio.Task] = None
         self._scheduled_offline_task_handle: Optional[asyncio.Task] = None
+        self._scheduler_watchdog_task_handle: Optional[asyncio.Task] = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -122,6 +125,7 @@ class SchedulerService:
         self._auto_order_task = auto_order_task_service
         self._scheduled_publish_task = scheduled_publish_task_service
         self._scheduled_offline_task = offline_task_service
+        self._scheduler_watchdog_task = watchdog_task_service
 
     @classmethod
     def get_instance(cls) -> "SchedulerService":
@@ -174,6 +178,7 @@ class SchedulerService:
             TASK_CODE_AUTO_ORDER,
             TASK_CODE_SCHEDULED_PUBLISH,
             TASK_CODE_SCHEDULED_OFFLINE,
+            TASK_CODE_SCHEDULER_WATCHDOG,
         ]:
             await self.reload_task_config(task_code)
     
@@ -208,6 +213,7 @@ class SchedulerService:
         self._auto_order_task_handle = asyncio.create_task(self._run_auto_order_loop())
         self._scheduled_publish_task_handle = asyncio.create_task(self._run_scheduled_publish_loop())
         self._scheduled_offline_task_handle = asyncio.create_task(self._run_scheduled_offline_loop())
+        self._scheduler_watchdog_task_handle = asyncio.create_task(self._run_scheduler_watchdog_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -286,6 +292,9 @@ class SchedulerService:
         if self._scheduled_offline_task_handle:
             self._scheduled_offline_task_handle.cancel()
             self._scheduled_offline_task_handle = None
+        if self._scheduler_watchdog_task_handle:
+            self._scheduler_watchdog_task_handle.cancel()
+            self._scheduler_watchdog_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
@@ -313,6 +322,7 @@ class SchedulerService:
         auto_order_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_ORDER)
         scheduled_publish_config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULED_PUBLISH)
         scheduled_offline_config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULED_OFFLINE)
+        scheduler_watchdog_config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULER_WATCHDOG)
         
         return {
             "running": self._running,
@@ -478,6 +488,13 @@ class SchedulerService:
                         and not self._scheduled_offline_task_handle.done()
                     ),
                 },
+                TASK_CODE_SCHEDULER_WATCHDOG: {
+                    "config": scheduler_watchdog_config or {"interval_seconds": 1800, "enabled": True},
+                    "task_running": (
+                        self._scheduler_watchdog_task_handle is not None
+                        and not self._scheduler_watchdog_task_handle.done()
+                    ),
+                },
             }
         }
     
@@ -557,9 +574,64 @@ class SchedulerService:
         elif task_code == TASK_CODE_SCHEDULED_OFFLINE:
             logger.info("[定时任务调度] 手动触发下架任务")
             await self._scheduled_offline_task.execute()
+        elif task_code == TASK_CODE_SCHEDULER_WATCHDOG:
+            logger.info("[定时任务调度] 手动触发自愈监测")
+            await self._scheduler_watchdog_task.execute()
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
     
+    def check_and_restart_loops(self) -> List[str]:
+        """自愈监测：检查各任务循环是否意外退出，意外退出则自动重启循环。
+
+        仅调度器运行中生效；返回本次重启的任务代码列表。
+        """
+        if not self._running:
+            return []
+
+        loop_codes = [
+            TASK_CODE_REDELIVERY,
+            TASK_CODE_RATE,
+            TASK_CODE_POLISH,
+            TASK_CODE_DAY_SWITCH,
+            TASK_CODE_CLEANUP_BROWSER_DATA,
+            TASK_CODE_FETCH_ORDERS,
+            TASK_CODE_FETCH_PENDING_ORDERS,
+            TASK_CODE_FETCH_REFUND_ORDERS,
+            TASK_CODE_FETCH_ITEMS,
+            TASK_CODE_LOGIN_RENEW,
+            TASK_CODE_TOKEN_RENEWAL,
+            TASK_CODE_COOKIES_REFRESH,
+            TASK_CODE_API_COOKIE_RENEW,
+            TASK_CODE_CLOSE_NOTICE,
+            TASK_CODE_RED_FLOWER,
+            TASK_CODE_DB_BACKUP,
+            TASK_CODE_DELIVERY_TIMEOUT,
+            TASK_CODE_LISTING_MONITOR,
+            TASK_CODE_SELLER_FILL,
+            TASK_CODE_DM_SEND,
+            TASK_CODE_AUTO_ORDER,
+            TASK_CODE_SCHEDULED_PUBLISH,
+            TASK_CODE_SCHEDULED_OFFLINE,
+        ]
+
+        restarted: List[str] = []
+        for code in loop_codes:
+            handle_name = f"_{code}_task_handle"
+            loop_name = f"_run_{code}_loop"
+            handle = getattr(self, handle_name, None)
+            # 循环意外退出（完成但非被取消）→ 自动重启
+            if handle is None or (handle.done() and not handle.cancelled()):
+                loop_fn = getattr(self, loop_name, None)
+                if loop_fn is None:
+                    continue
+                logger.warning(f"[定时任务调度] 检测到 {code} 任务循环意外退出，自动重启")
+                setattr(self, handle_name, asyncio.create_task(loop_fn()))
+                restarted.append(code)
+
+        if restarted:
+            logger.info(f"[定时任务调度] 自愈重启任务循环: {restarted}")
+        return restarted
+
     async def _run_redelivery_loop(self) -> None:
         """补发货任务执行循环"""
         logger.info("[定时任务调度] 补发货任务循环开始")
@@ -1311,6 +1383,37 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 定时下架任务循环结束")
+
+    async def _run_scheduler_watchdog_loop(self) -> None:
+        """调度器自愈监测任务执行循环"""
+        logger.info("[定时任务调度] 调度器自愈监测循环开始")
+
+        await self.reload_task_config(TASK_CODE_SCHEDULER_WATCHDOG)
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULER_WATCHDOG)
+            if not config:
+                config = {"interval_seconds": 1800, "enabled": True}
+
+            interval = config.get("interval_seconds", 1800)
+            enabled = config.get("enabled", True)
+
+            if enabled:
+                try:
+                    await self._scheduler_watchdog_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 调度器自愈监测被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] 调度器自愈监测执行异常: {e}")
+
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 调度器自愈监测等待被取消")
+                break
+
+        logger.info("[定时任务调度] 调度器自愈监测循环结束")
 
 
 # 全局实例获取函数
