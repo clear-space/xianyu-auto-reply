@@ -737,9 +737,16 @@ export interface ScheduleHistoryResponse {
   }
 }
 
-/** 合并查询定时发布与自动下架的执行历史 */
-export const getScheduleHistory = (page = 1, pageSize = 20): Promise<ScheduleHistoryResponse> => {
+/** 合并查询定时发布与自动下架的执行历史（支持关键词预筛：全局/类别/规则名） */
+export const getScheduleHistory = (
+  page = 1,
+  pageSize = 20,
+  keyword?: string,
+  scope: 'global' | 'rule_type' | 'schedule_name' = 'global'
+): Promise<ScheduleHistoryResponse> => {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  if (keyword && keyword.trim()) params.append('keyword', keyword.trim())
+  params.append('scope', scope)
   return get(`${SCHEDULE_PREFIX}/history/global?${params}`)
 }
 

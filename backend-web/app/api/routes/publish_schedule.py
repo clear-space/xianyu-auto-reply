@@ -588,11 +588,13 @@ async def list_all_schedule_logs(
 async def list_unified_schedule_history(
     page: int = Query(1, ge=1),
     page_size: int = Query(20),
+    keyword: str | None = Query(None, description="关键词预筛"),
+    scope: str = Query("global", description="搜索范围：global-全局, rule_type-类别, schedule_name-规则名"),
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """合并查询定时发布与自动下架的执行历史（定时历史统一视图，带规则类别）"""
-    from sqlalchemy import func, literal, union_all
+    """合并查询定时发布与自动下架的执行历史（定时历史统一视图，带规则类别与关键词预筛）"""
+    from sqlalchemy import func, literal, or_, union_all
 
     from common.models.offline_schedule import OfflineSchedule
     from common.models.offline_schedule_log import OfflineScheduleLog
@@ -603,6 +605,9 @@ async def list_unified_schedule_history(
     page = max(page, 1)
     page_size = page_size if page_size in (10, 20, 50, 100) else 20
     query_user_id = None if _is_admin(current_user) else current_user.id
+    kw = (keyword or "").strip()
+    if scope not in ("global", "rule_type", "schedule_name"):
+        scope = "global"
 
     pub_conds = []
     off_conds = []
@@ -617,6 +622,26 @@ async def list_unified_schedule_history(
                 select(OfflineSchedule.id).where(OfflineSchedule.user_id == query_user_id)
             )
         )
+
+    def _keyword_conds(label: str, name_col, err_col) -> list:
+        """按搜索范围生成关键词条件（label 为该分支的类别中文名）"""
+        if not kw:
+            return []
+        if scope == "rule_type":
+            return [literal(label).like(f"%{kw}%")]
+        if scope == "schedule_name":
+            return [name_col.like(f"%{kw}%")]
+        # global：类别中文名 / 规则名 / 失败原因
+        return [
+            or_(
+                literal(label).like(f"%{kw}%"),
+                name_col.like(f"%{kw}%"),
+                err_col.like(f"%{kw}%"),
+            )
+        ]
+
+    pub_conds += _keyword_conds("发布", PublishScheduleLog.schedule_name, PublishScheduleLog.error_message)
+    off_conds += _keyword_conds("下架", OfflineScheduleLog.schedule_name, OfflineScheduleLog.error_message)
 
     pub_stmt = select(
         literal("publish").label("rule_type"),

@@ -1798,7 +1798,7 @@ class DatabaseInitializer:
                 account_ids JSON NOT NULL COMMENT '闲鱼账号ID列表（仅下架这些账号的商品）',
                 offline_days INT NOT NULL DEFAULT 7 COMMENT '上架天数阈值X：上架早于X天前的商品才下架',
                 no_order_days INT NOT NULL DEFAULT 0 COMMENT '无订单天数Y：最近Y天内无订单才下架，0=不检查订单',
-                max_count INT NOT NULL DEFAULT 10 COMMENT '下架数量上限Z：每个账号每次触发最多下架Z个商品',
+                max_count INT NOT NULL DEFAULT 1 COMMENT '下架数量上限Z：每个账号每次触发最多下架Z个商品',
                 enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
                 last_triggered_at DATETIME COMMENT '上次触发时间',
                 next_trigger_at DATETIME COMMENT '下次触发时间',
@@ -1838,7 +1838,7 @@ class DatabaseInitializer:
         "xy_offline_schedules": [
             ("offline_days", "INT NOT NULL DEFAULT 7 COMMENT '上架天数阈值X：上架早于X天前的商品才下架'", "account_ids"),
             ("no_order_days", "INT NOT NULL DEFAULT 0 COMMENT '无订单天数Y：最近Y天内无订单才下架，0=不检查订单'", "offline_days"),
-            ("max_count", "INT NOT NULL DEFAULT 10 COMMENT '下架数量上限Z：每个账号每次触发最多下架Z个商品'", "no_order_days"),
+            ("max_count", "INT NOT NULL DEFAULT 1 COMMENT '下架数量上限Z：每个账号每次触发最多下架Z个商品'", "no_order_days"),
             ("enabled", "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'", "max_count"),
             ("last_triggered_at", "DATETIME COMMENT '上次触发时间'", "enabled"),
             ("next_trigger_at", "DATETIME COMMENT '下次触发时间'", "last_triggered_at"),

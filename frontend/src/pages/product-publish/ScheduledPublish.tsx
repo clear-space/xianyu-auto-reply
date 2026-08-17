@@ -7,7 +7,7 @@
  */
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Layers, CheckCircle, XCircle } from 'lucide-react'
+import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Layers, CheckCircle, XCircle, Search, X } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, clearScheduleLogs, getScheduleHistory, batchDeleteScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type ScheduleHistoryItem, type ScheduleLogDetail, type ActiveScheduleProgress } from '@/api/productPublish'
 import { clearOfflineScheduleLogs, getOfflineSchedules, type OfflineLogDetail } from '@/api/offlineSchedules'
@@ -183,6 +183,8 @@ export function ScheduledPublish() {
   const [selectedLogKeys, setSelectedLogKeys] = useState<string[]>([])
   const [batchDeleteLogsConfirm, setBatchDeleteLogsConfirm] = useState(false)
   const [batchDeletingLogs, setBatchDeletingLogs] = useState(false)
+  const [historyKeyword, setHistoryKeyword] = useState('')
+  const [historyScope, setHistoryScope] = useState<'global' | 'rule_type' | 'schedule_name'>('global')
 
   /** 展开/收起执行记录明细（key = 类别-记录ID，两张表ID可能重复） */
   const toggleLogExpand = (key: string) => {
@@ -208,6 +210,20 @@ export function ScheduledPublish() {
 
   const toggleSelectLog = (key: string) => {
     setSelectedLogKeys(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+  }
+
+  /** 关键词预筛查询（从第一页开始） */
+  const handleHistorySearch = () => {
+    if (historyPage === 1) loadHistory(1)
+    else setHistoryPage(1)
+  }
+
+  /** 重置关键词预筛（显式传空关键词，避免状态更新时序导致用旧条件查询） */
+  const handleHistoryReset = () => {
+    setHistoryKeyword('')
+    setHistoryScope('global')
+    loadHistory(1, '', 'global')
+    if (historyPage !== 1) setHistoryPage(1)
   }
 
   /** 批量删除选中的执行记录（跨发布/下架两张表） */
@@ -249,9 +265,9 @@ export function ScheduledPublish() {
     } catch { /* ignore */ }
   }, [page, pageSize])
 
-  const loadHistory = useCallback(async (p = historyPage) => {
+  const loadHistory = useCallback(async (p = historyPage, kw = historyKeyword, sc = historyScope) => {
     try {
-      const res = await getScheduleHistory(p, 20)
+      const res = await getScheduleHistory(p, 20, kw.trim() || undefined, sc)
       if (res.success) {
         setHistoryItems(res.data.list)
         setHistoryTotal(res.data.total)
@@ -261,7 +277,7 @@ export function ScheduledPublish() {
         setSelectedLogKeys(prev => prev.filter(k => currentKeys.has(k)))
       }
     } catch { /* ignore */ }
-  }, [historyPage])
+  }, [historyPage, historyKeyword, historyScope])
 
   useEffect(() => {
     setLoading(true)
@@ -276,8 +292,10 @@ export function ScheduledPublish() {
   }, [])
 
   useEffect(() => {
-    if (tab === 'schedule-history') loadHistory()
-  }, [tab, loadHistory])
+    // 切入定时历史 Tab 或翻页时加载；关键词输入不自动触发（由查询按钮显式执行）
+    if (tab === 'schedule-history') loadHistory(historyPage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, historyPage])
 
   // 轮询活跃的定时发布任务进度
   useEffect(() => {
@@ -671,6 +689,24 @@ export function ScheduledPublish() {
               </button>
               <span className="badge-primary">共 {historyTotal} 条</span>
             </div>
+          </div>
+          {/* 关键词预筛栏 */}
+          <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-b border-slate-200 dark:border-slate-700">
+            <select className="input-ios w-24" value={historyScope}
+              onChange={e => setHistoryScope(e.target.value as 'global' | 'rule_type' | 'schedule_name')}>
+              <option value="global">全局</option>
+              <option value="rule_type">类别</option>
+              <option value="schedule_name">规则名</option>
+            </select>
+            <input className="input-ios flex-1 min-w-[160px]" placeholder="输入关键词预筛（类别可输：发布/下架）"
+              value={historyKeyword} onChange={e => setHistoryKeyword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleHistorySearch()} />
+            <button className="btn-ios-primary btn-sm" onClick={handleHistorySearch}>
+              <Search className="w-3.5 h-3.5" />查询
+            </button>
+            <button className="btn-ios-secondary btn-sm" onClick={handleHistoryReset}>
+              <X className="w-3.5 h-3.5" />重置
+            </button>
           </div>
           <div className="flex-1 overflow-x-auto overflow-y-auto">
             <table className="table-ios">

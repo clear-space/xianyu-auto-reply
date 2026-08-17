@@ -48,7 +48,7 @@ class OfflineSchedule(TimestampMixin, Base):
         comment="无订单天数Y：最近Y天内无订单才下架，0=不检查订单"
     )
     max_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=10,
+        Integer, nullable=False, default=1,
         comment="下架数量上限Z：每个账号每次触发最多下架Z个商品"
     )
 

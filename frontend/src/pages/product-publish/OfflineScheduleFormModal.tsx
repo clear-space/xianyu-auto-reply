@@ -50,7 +50,7 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
   )
   const [offlineDays, setOfflineDays] = useState<number>(initial?.offline_days || 7)
   const [noOrderDays, setNoOrderDays] = useState<number>(initial?.no_order_days || 0)
-  const [maxCount, setMaxCount] = useState<number>(initial?.max_count || 10)
+  const [maxCount, setMaxCount] = useState<number>(initial?.max_count || 1)
 
   useEffect(() => {
     getAccountDetails()

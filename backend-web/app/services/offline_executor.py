@@ -47,7 +47,7 @@ class OfflineExecutor:
         account_ids = list(schedule_data.get("account_ids") or [])
         offline_days = int(schedule_data.get("offline_days") or 7)
         no_order_days = int(schedule_data.get("no_order_days") or 0)
-        max_count = int(schedule_data.get("max_count") or 10)
+        max_count = int(schedule_data.get("max_count") or 1)
 
         # ========== 第 1 阶段：筛选目标商品（独立 session） ==========
         try:

@@ -76,7 +76,7 @@ class OfflineScheduleService:
             account_ids=data.get("account_ids", []),
             offline_days=int(data.get("offline_days", 7)),
             no_order_days=int(data.get("no_order_days", 0)),
-            max_count=int(data.get("max_count", 10)),
+            max_count=int(data.get("max_count", 1)),
             enabled=data.get("enabled", True),
         )
         schedule.next_trigger_at = _compute_next_trigger(
