@@ -41,6 +41,7 @@ from app.services.scheduler.auto_order_task import auto_order_task_service
 from app.services.scheduler.scheduled_publish_task import scheduled_publish_task_service
 from app.services.scheduler.offline_task import offline_task_service
 from app.services.scheduler.watchdog_task import watchdog_task_service
+from app.services.scheduler.auto_match_cards_task import auto_match_cards_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -67,6 +68,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_SCHEDULED_PUBLISH,
     TASK_CODE_SCHEDULED_OFFLINE,
     TASK_CODE_SCHEDULER_WATCHDOG,
+    TASK_CODE_AUTO_MATCH_CARDS,
 )
 from common.db.session import async_session_maker
 
@@ -102,6 +104,7 @@ class SchedulerService:
         self._scheduled_publish_task_handle: Optional[asyncio.Task] = None
         self._scheduled_offline_task_handle: Optional[asyncio.Task] = None
         self._scheduler_watchdog_task_handle: Optional[asyncio.Task] = None
+        self._auto_match_cards_task_handle: Optional[asyncio.Task] = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -126,6 +129,7 @@ class SchedulerService:
         self._scheduled_publish_task = scheduled_publish_task_service
         self._scheduled_offline_task = offline_task_service
         self._scheduler_watchdog_task = watchdog_task_service
+        self._auto_match_cards_task = auto_match_cards_task_service
 
     @classmethod
     def get_instance(cls) -> "SchedulerService":
@@ -179,6 +183,7 @@ class SchedulerService:
             TASK_CODE_SCHEDULED_PUBLISH,
             TASK_CODE_SCHEDULED_OFFLINE,
             TASK_CODE_SCHEDULER_WATCHDOG,
+            TASK_CODE_AUTO_MATCH_CARDS,
         ]:
             await self.reload_task_config(task_code)
     
@@ -214,6 +219,7 @@ class SchedulerService:
         self._scheduled_publish_task_handle = asyncio.create_task(self._run_scheduled_publish_loop())
         self._scheduled_offline_task_handle = asyncio.create_task(self._run_scheduled_offline_loop())
         self._scheduler_watchdog_task_handle = asyncio.create_task(self._run_scheduler_watchdog_loop())
+        self._auto_match_cards_task_handle = asyncio.create_task(self._run_auto_match_cards_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -295,6 +301,9 @@ class SchedulerService:
         if self._scheduler_watchdog_task_handle:
             self._scheduler_watchdog_task_handle.cancel()
             self._scheduler_watchdog_task_handle = None
+        if self._auto_match_cards_task_handle:
+            self._auto_match_cards_task_handle.cancel()
+            self._auto_match_cards_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
@@ -323,6 +332,7 @@ class SchedulerService:
         scheduled_publish_config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULED_PUBLISH)
         scheduled_offline_config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULED_OFFLINE)
         scheduler_watchdog_config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULER_WATCHDOG)
+        auto_match_cards_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_MATCH_CARDS)
         
         return {
             "running": self._running,
@@ -495,6 +505,13 @@ class SchedulerService:
                         and not self._scheduler_watchdog_task_handle.done()
                     ),
                 },
+                TASK_CODE_AUTO_MATCH_CARDS: {
+                    "config": auto_match_cards_config or {"interval_seconds": 600, "enabled": True},
+                    "task_running": (
+                        self._auto_match_cards_task_handle is not None
+                        and not self._auto_match_cards_task_handle.done()
+                    ),
+                },
             }
         }
     
@@ -577,6 +594,9 @@ class SchedulerService:
         elif task_code == TASK_CODE_SCHEDULER_WATCHDOG:
             logger.info("[定时任务调度] 手动触发自愈监测")
             await self._scheduler_watchdog_task.execute()
+        elif task_code == TASK_CODE_AUTO_MATCH_CARDS:
+            logger.info("[定时任务调度] 手动触发自动关联卡券")
+            await self._auto_match_cards_task.execute()
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
     
@@ -612,6 +632,7 @@ class SchedulerService:
             TASK_CODE_AUTO_ORDER,
             TASK_CODE_SCHEDULED_PUBLISH,
             TASK_CODE_SCHEDULED_OFFLINE,
+            TASK_CODE_AUTO_MATCH_CARDS,
         ]
 
         restarted: List[str] = []
@@ -1414,6 +1435,37 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 调度器自愈监测循环结束")
+
+    async def _run_auto_match_cards_loop(self) -> None:
+        """自动关联卡券任务执行循环"""
+        logger.info("[定时任务调度] 自动关联卡券循环开始")
+
+        await self.reload_task_config(TASK_CODE_AUTO_MATCH_CARDS)
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_MATCH_CARDS)
+            if not config:
+                config = {"interval_seconds": 600, "enabled": True}
+
+            interval = config.get("interval_seconds", 600)
+            enabled = config.get("enabled", True)
+
+            if enabled:
+                try:
+                    await self._auto_match_cards_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 自动关联卡券被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] 自动关联卡券执行异常: {e}")
+
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 自动关联卡券等待被取消")
+                break
+
+        logger.info("[定时任务调度] 自动关联卡券循环结束")
 
 
 # 全局实例获取函数
