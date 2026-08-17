@@ -183,7 +183,7 @@ export function OfflineRules({ onTotalChange }: Props) {
             <RefreshCw className="w-4 h-4" />刷新
           </button>
           <button className="btn-ios-primary" onClick={() => { setEditTarget(null); setShowForm(true) }}>
-            <Plus className="w-4 h-4" />新建下架规则
+            <Plus className="w-4 h-4" />新建规则
           </button>
         </div>
       </div>
@@ -217,7 +217,7 @@ export function OfflineRules({ onTotalChange }: Props) {
               {schedules.length === 0 ? (
                 <tr><td colSpan={9} className="text-center py-12 text-slate-400">
                   <div className="flex flex-col items-center gap-2"><PackageX className="w-12 h-12 text-slate-300" />
-                    <p>暂无下架规则，点击「新建下架规则」开始</p></div>
+                    <p>暂无下架规则，点击「新建规则」开始</p></div>
                 </td></tr>
               ) : schedules.map(s => (
                 <tr key={s.id} className={selectedIds.includes(s.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>

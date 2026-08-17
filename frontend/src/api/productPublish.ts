@@ -743,6 +743,11 @@ export const getScheduleHistory = (page = 1, pageSize = 20): Promise<ScheduleHis
   return get(`${SCHEDULE_PREFIX}/history/global?${params}`)
 }
 
+/** 批量删除定时历史执行记录（跨发布/下架两张表，按类别+记录ID定位） */
+export const batchDeleteScheduleLogs = (
+  items: Array<{ rule_type: string; log_id: number }>
+): Promise<ApiResponse> => post(`${SCHEDULE_PREFIX}/logs/batch-delete`, { items })
+
 // ==================== 定时发布实时进度 ====================
 
 /** 活跃的定时发布任务进度 */

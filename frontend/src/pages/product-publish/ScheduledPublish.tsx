@@ -9,8 +9,8 @@ import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Layers, CheckCircle, XCircle } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, clearScheduleLogs, getScheduleHistory, getActiveScheduleProgress, type PublishSchedule, type ScheduleHistoryItem, type ScheduleLogDetail, type ActiveScheduleProgress } from '@/api/productPublish'
-import { clearOfflineScheduleLogs, type OfflineLogDetail } from '@/api/offlineSchedules'
+import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, clearScheduleLogs, getScheduleHistory, batchDeleteScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type ScheduleHistoryItem, type ScheduleLogDetail, type ActiveScheduleProgress } from '@/api/productPublish'
+import { clearOfflineScheduleLogs, getOfflineSchedules, type OfflineLogDetail } from '@/api/offlineSchedules'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { ScheduleFormModal } from './ScheduleFormModal'
@@ -180,6 +180,9 @@ export function ScheduledPublish() {
   const [clearingLogs, setClearingLogs] = useState(false)
   const [clearDays, setClearDays] = useState(10) // 保留天数，0=清空全部，默认10天
   const [expandedLogKeys, setExpandedLogKeys] = useState<Set<string>>(new Set())
+  const [selectedLogKeys, setSelectedLogKeys] = useState<string[]>([])
+  const [batchDeleteLogsConfirm, setBatchDeleteLogsConfirm] = useState(false)
+  const [batchDeletingLogs, setBatchDeletingLogs] = useState(false)
 
   /** 展开/收起执行记录明细（key = 类别-记录ID，两张表ID可能重复） */
   const toggleLogExpand = (key: string) => {
@@ -189,6 +192,48 @@ export function ScheduledPublish() {
       else next.add(key)
       return next
     })
+  }
+
+  /** 全选/取消全选当前页执行记录 */
+  const handleSelectAllLogs = () => {
+    if (historyItems.length === 0) return
+    const keys = historyItems.map(l => `${l.rule_type}-${l.log_id}`)
+    const allSelected = keys.every(k => selectedLogKeys.includes(k))
+    if (allSelected) {
+      setSelectedLogKeys(prev => prev.filter(k => !keys.includes(k)))
+    } else {
+      setSelectedLogKeys(prev => [...new Set([...prev, ...keys])])
+    }
+  }
+
+  const toggleSelectLog = (key: string) => {
+    setSelectedLogKeys(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+  }
+
+  /** 批量删除选中的执行记录（跨发布/下架两张表） */
+  const handleBatchDeleteLogs = async () => {
+    if (selectedLogKeys.length === 0) return
+    setBatchDeletingLogs(true)
+    try {
+      const items = selectedLogKeys.map(k => {
+        const idx = k.indexOf('-')
+        return { rule_type: k.slice(0, idx), log_id: Number(k.slice(idx + 1)) }
+      })
+      const res = await batchDeleteScheduleLogs(items)
+      if (res.success) {
+        addToast({ type: 'success', message: res.message || '删除成功' })
+        setBatchDeleteLogsConfirm(false)
+        setSelectedLogKeys([])
+        if (historyPage === 1) await loadHistory(1)
+        else setHistoryPage(1)
+      } else {
+        addToast({ type: 'error', message: res.message || '删除失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '删除失败' })
+    } finally {
+      setBatchDeletingLogs(false)
+    }
   }
 
   const loadSchedules = useCallback(async (p = page, size = pageSize) => {
@@ -211,6 +256,9 @@ export function ScheduledPublish() {
         setHistoryItems(res.data.list)
         setHistoryTotal(res.data.total)
         setHistoryTotalPages(res.data.total_pages)
+        // 清理已不在当前页的选中项
+        const currentKeys = new Set(res.data.list.map(l => `${l.rule_type}-${l.log_id}`))
+        setSelectedLogKeys(prev => prev.filter(k => currentKeys.has(k)))
       }
     } catch { /* ignore */ }
   }, [historyPage])
@@ -219,6 +267,13 @@ export function ScheduledPublish() {
     setLoading(true)
     loadSchedules().finally(() => setLoading(false))
   }, [loadSchedules])
+
+  useEffect(() => {
+    // 启动时拉取下架规则总数（Tab 角标需要；下架规则组件懒挂载，进入该 Tab 后由其继续同步）
+    getOfflineSchedules(1, 20)
+      .then(res => { if (res.success) setOfflineRulesTotal(res.data.total) })
+      .catch(() => { /* ignore */ })
+  }, [])
 
   useEffect(() => {
     if (tab === 'schedule-history') loadHistory()
@@ -254,11 +309,6 @@ export function ScheduledPublish() {
       }
       return next
     })
-  }
-
-  const handleRefresh = () => {
-    loadSchedules(page, pageSize)
-    if (tab === 'schedule-history') loadHistory(historyPage)
   }
 
   /** 全选/取消全选当前页 */
@@ -417,19 +467,6 @@ export function ScheduledPublish() {
           <h1 className="page-title">定时管理</h1>
           <p className="page-description">设置定时规则，到时间自动执行批量发布与自动下架</p>
         </div>
-        <div className="flex gap-2">
-          {selectedIds.length > 0 && (
-            <button className="btn-ios-danger" onClick={() => setBatchDeleteConfirm(true)}>
-              <Trash2 className="w-4 h-4" />批量删除 ({selectedIds.length})
-            </button>
-          )}
-          <button className="btn-ios-secondary" onClick={handleRefresh}>
-            <RefreshCw className="w-4 h-4" />刷新
-          </button>
-          <button className="btn-ios-primary" onClick={() => { setEditTarget(null); setShowForm(true) }}>
-            <Plus className="w-4 h-4" />新建规则
-          </button>
-        </div>
       </div>
 
       {/* Tab 切换 */}
@@ -459,12 +496,33 @@ export function ScheduledPublish() {
 
       {/* Tab 1: 定时规则列表 */}
       {tab === 'publish-rules' && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-          className="vben-card flex flex-col" style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
-          <div className="vben-card-header">
-            <h2 className="vben-card-title"><Clock className="w-4 h-4" />定时规则</h2>
-            <span className="badge-primary">共 {total} 条</span>
+        <div className="space-y-3">
+          {/* 标题栏（与下架规则布局统一） */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="page-description">按时间配置自动触发批量发布</p>
+            </div>
+            <div className="flex gap-2">
+              {selectedIds.length > 0 && (
+                <button className="btn-ios-danger" onClick={() => setBatchDeleteConfirm(true)}>
+                  <Trash2 className="w-4 h-4" />批量删除 ({selectedIds.length})
+                </button>
+              )}
+              <button className="btn-ios-secondary" onClick={() => loadSchedules(page, pageSize)}>
+                <RefreshCw className="w-4 h-4" />刷新
+              </button>
+              <button className="btn-ios-primary" onClick={() => { setEditTarget(null); setShowForm(true) }}>
+                <Plus className="w-4 h-4" />新建规则
+              </button>
+            </div>
           </div>
+
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+            className="vben-card flex flex-col" style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
+            <div className="vben-card-header">
+              <h2 className="vben-card-title"><Clock className="w-4 h-4" />定时规则</h2>
+              <span className="badge-primary">共 {total} 条</span>
+            </div>
           <div className="flex-1 overflow-x-auto overflow-y-auto">
             <table className="table-ios">
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
@@ -567,7 +625,8 @@ export function ScheduledPublish() {
               </div>
             </div>
           )}
-        </motion.div>
+          </motion.div>
+        </div>
       )}
 
       {/* Tab 2: 定时历史（发布与下架合并视图） */}
@@ -577,6 +636,15 @@ export function ScheduledPublish() {
           <div className="vben-card-header">
             <h2 className="vben-card-title"><History className="w-4 h-4" />定时历史</h2>
             <div className="flex items-center gap-2">
+              {selectedLogKeys.length > 0 && (
+                <button
+                  onClick={() => setBatchDeleteLogsConfirm(true)}
+                  className="btn-ios-danger btn-sm"
+                  disabled={batchDeletingLogs}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />批量删除 ({selectedLogKeys.length})
+                </button>
+              )}
               <div className="flex items-center gap-1">
                 <span className="text-sm text-slate-500">保留</span>
                 <input
@@ -608,6 +676,12 @@ export function ScheduledPublish() {
             <table className="table-ios">
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
                 <tr>
+                  <th className="w-10">
+                    <input type="checkbox"
+                      checked={historyItems.length > 0 && historyItems.every(l => selectedLogKeys.includes(`${l.rule_type}-${l.log_id}`))}
+                      onChange={handleSelectAllLogs}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                  </th>
                   <th>类别</th>
                   <th>规则名</th>
                   <th>计划时间</th>
@@ -619,7 +693,7 @@ export function ScheduledPublish() {
               </thead>
               <tbody>
                 {historyItems.length === 0 ? (
-                  <tr><td colSpan={7} className="text-center py-12 text-slate-400">
+                  <tr><td colSpan={8} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2"><History className="w-12 h-12 text-slate-300" />
                       <p>暂无执行记录</p></div>
                   </td></tr>
@@ -628,7 +702,12 @@ export function ScheduledPublish() {
                   const isExpanded = expandedLogKeys.has(rowKey)
                   return (
                     <Fragment key={rowKey}>
-                      <tr className={isExpanded ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
+                      <tr className={isExpanded || selectedLogKeys.includes(rowKey) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
+                        <td>
+                          <input type="checkbox" checked={selectedLogKeys.includes(rowKey)}
+                            onChange={() => toggleSelectLog(rowKey)}
+                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                        </td>
                         <td>
                           <span className={l.rule_type === 'offline' ? 'badge-warning' : 'badge-info'}>
                             {l.rule_type === 'offline' ? '下架' : '发布'}
@@ -671,7 +750,7 @@ export function ScheduledPublish() {
                       </tr>
                       {isExpanded && l.detail_json && (
                         <tr>
-                          <td colSpan={7} className="bg-slate-50 dark:bg-slate-800/60 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
+                          <td colSpan={8} className="bg-slate-50 dark:bg-slate-800/60 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
                             {l.rule_type === 'offline'
                               ? <OfflineLogDetailPanel detail={l.detail_json as OfflineLogDetail} />
                               : <LogDetailPanel detail={l.detail_json as ScheduleLogDetail} />}
@@ -874,6 +953,18 @@ export function ScheduledPublish() {
         loading={clearingLogs}
         onConfirm={handleClearLogs}
         onCancel={() => setShowClearLogsConfirm(false)}
+      />
+
+      {/* 批量删除执行记录确认 */}
+      <ConfirmModal
+        isOpen={batchDeleteLogsConfirm}
+        title="确认批量删除"
+        message={`确认删除选中的 ${selectedLogKeys.length} 条执行记录？此操作不可撤销。`}
+        confirmText={`删除 ${selectedLogKeys.length} 条`}
+        type="danger"
+        loading={batchDeletingLogs}
+        onConfirm={handleBatchDeleteLogs}
+        onCancel={() => setBatchDeleteLogsConfirm(false)}
       />
     </div>
   )

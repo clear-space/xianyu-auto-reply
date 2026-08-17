@@ -119,6 +119,16 @@ class UpdateScheduleRequest(BaseModel):
     enabled: Optional[bool] = None
 
 
+class BatchDeleteLogItem(BaseModel):
+    """待删除的执行记录（类别 + 记录ID，发布/下架两张表ID可能重复）"""
+    rule_type: str = Field(..., description="规则类别：publish-发布, offline-下架")
+    log_id: int = Field(..., description="执行记录ID")
+
+
+class BatchDeleteScheduleLogsRequest(BaseModel):
+    items: List[BatchDeleteLogItem] = Field(..., min_length=1, description="待删除的执行记录列表")
+
+
 # ==================== 规则 CRUD ====================
 
 @router.post("", response_model=ApiResponse)
@@ -685,6 +695,65 @@ async def list_unified_schedule_history(
             "total_pages": (total + page_size - 1) // page_size if total else 0,
         },
     )
+
+
+@router.post("/logs/batch-delete", response_model=ApiResponse)
+async def batch_delete_schedule_logs(
+    req: BatchDeleteScheduleLogsRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """批量删除定时历史执行记录（发布与下架两类，按类别+记录ID定位）"""
+    from loguru import logger
+    from sqlalchemy import delete
+
+    from common.models.offline_schedule import OfflineSchedule
+    from common.models.offline_schedule_log import OfflineScheduleLog
+    from common.models.publish_schedule import PublishSchedule
+    from common.models.publish_schedule_log import PublishScheduleLog
+
+    query_user_id = None if _is_admin(current_user) else current_user.id
+
+    pub_ids = [it.log_id for it in req.items if it.rule_type == "publish"]
+    off_ids = [it.log_id for it in req.items if it.rule_type == "offline"]
+
+    try:
+        deleted = 0
+        if pub_ids:
+            conds = [PublishScheduleLog.id.in_(pub_ids)]
+            if query_user_id is not None:
+                conds.append(
+                    PublishScheduleLog.schedule_id.in_(
+                        select(PublishSchedule.id).where(PublishSchedule.user_id == query_user_id)
+                    )
+                )
+            result = await session.execute(delete(PublishScheduleLog).where(*conds))
+            deleted += result.rowcount or 0
+        if off_ids:
+            conds = [OfflineScheduleLog.id.in_(off_ids)]
+            if query_user_id is not None:
+                conds.append(
+                    OfflineScheduleLog.schedule_id.in_(
+                        select(OfflineSchedule.id).where(OfflineSchedule.user_id == query_user_id)
+                    )
+                )
+            result = await session.execute(delete(OfflineScheduleLog).where(*conds))
+            deleted += result.rowcount or 0
+
+        await session.commit()
+        logger.info(
+            f"[定时历史] 用户 {current_user.id} 批量删除 {deleted} 条执行记录"
+            f"（发布 {len(pub_ids)} 条，下架 {len(off_ids)} 条）"
+        )
+        return ApiResponse(
+            success=True,
+            message=f"已删除 {deleted} 条执行记录",
+            data={"deleted_count": deleted},
+        )
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"[定时历史] 批量删除执行记录失败: {e}")
+        return ApiResponse(success=False, message=f"批量删除失败: {str(e)}")
 
 
 @router.delete("/logs/clear", response_model=ApiResponse)
