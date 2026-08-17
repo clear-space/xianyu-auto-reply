@@ -130,8 +130,10 @@ async def trigger_task(task_code: str):
         操作结果
     """
     try:
-        # 验证任务代码
-        if task_code not in ["redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_refund_orders", "fetch_items", "login_renew", "token_renewal", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower", "db_backup", "delivery_timeout", "listing_monitor", "seller_fill", "dm_send", "auto_order"]:
+        # 验证任务代码：与任务注册表保持一致，新增任务自动生效（避免硬编码白名单遗漏）
+        from app.services.scheduled_task_service import DEFAULT_CONFIGS
+
+        if task_code not in DEFAULT_CONFIGS:
             return {
                 "success": False,
                 "code": 400,
