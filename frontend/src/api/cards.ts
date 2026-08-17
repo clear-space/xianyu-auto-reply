@@ -200,6 +200,24 @@ export const batchClearItemRelations = (itemIds: string[]): Promise<ApiResponse>
   return post(`${CARD_PREFIX}/batch-clear-item-relations`, { item_ids: itemIds })
 }
 
+/** 一键关联卡券结果统计 */
+export interface AutoMatchCardsResult {
+  matched_cards: number
+  matched_pairs: number
+  added: number
+  skipped: number
+  cards_no_number: number
+  cards_no_match: number
+  disabled_cards: number
+  no_number_names: string[]
+  no_match_names: string[]
+}
+
+/** 一键关联卡券：按前缀编号（字母+三位数字）匹配商品标题与卡券名称 */
+export const autoMatchCards = (): Promise<ApiResponse<AutoMatchCardsResult>> => {
+  return post(`${CARD_PREFIX}/auto-match`)
+}
+
 // ========== 卡券导入导出 ==========
 
 /** 导出卡券 Excel 文件（返回 blob）

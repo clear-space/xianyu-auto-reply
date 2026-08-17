@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import random
-import re
 from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
@@ -27,23 +26,17 @@ from common.db.session import async_session_maker
 from common.models.publish_schedule_log import PublishScheduleLog
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
+from common.utils.text_utils import extract_prefix_number as _extract_prefix_number
 from common.utils.time_utils import get_beijing_now
-
-# 素材标题前缀编号：A+数字（如 "A1 手机壳"、标题开头 "A12 ..."）
-_ITEM_NO_RE = re.compile(r"^[Aa]\s*(\d+)")
 
 
 def extract_item_number(title: Optional[str]) -> Optional[int]:
-    """从素材/商品标题提取前缀编号（A+数字），无编号返回 None"""
-    if not title:
-        return None
-    match = _ITEM_NO_RE.match(str(title).strip())
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except ValueError:
-        return None
+    """从素材/商品标题提取前缀编号（字母+三位数字，如 A014），无编号返回 None。
+
+    编号解析统一在 common.utils.text_utils.extract_prefix_number（与一键关联卡券共用）。
+    """
+    key = _extract_prefix_number(title)
+    return key[1] if key else None
 
 
 class ScheduledPublishExecutor:

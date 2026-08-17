@@ -370,6 +370,136 @@ class CardMatcher:
         await self.session.flush()
         return {"success_count": success_count, "fail_count": fail_count}
 
+    async def match_cards_by_prefix_number(self, user_id: int) -> Dict[str, Any]:
+        """一键关联卡券：按前缀编号（字母+三位数字，如 A014）匹配商品标题与卡券名称。
+
+        规则：
+        - 仅处理启用卡券；禁用卡券计入 disabled_cards 跳过
+        - 已存在的 (card_id, item_id) 关联自动跳过（不区分 source/dock_record_id）
+        - 编号相同的卡券与商品全部配对（多对多）
+        - 分批 INSERT IGNORE（500 对/批），单事务，幂等（重复执行 added=0）
+
+        Returns:
+            {"matched_cards", "matched_pairs", "added", "skipped",
+             "cards_no_number", "cards_no_match", "disabled_cards",
+             "no_number_names": [...], "no_match_names": [...]}  # 明细最多 50 条
+        """
+        from common.models.xy_catalog_item import XYCatalogItem
+        from common.utils.text_utils import extract_prefix_number
+
+        stats: Dict[str, Any] = {
+            "matched_cards": 0,
+            "matched_pairs": 0,
+            "added": 0,
+            "skipped": 0,
+            "cards_no_number": 0,
+            "cards_no_match": 0,
+            "disabled_cards": 0,
+            "no_number_names": [],
+            "no_match_names": [],
+        }
+
+        # 1. 查用户全部卡券（启用状态在内存区分）
+        cards = list(
+            (await self.session.execute(
+                select(Card).where(Card.user_id == user_id)
+            )).scalars().all()
+        )
+
+        card_map: Dict[tuple, List[Card]] = {}
+        for card in cards:
+            if not card.enabled:
+                stats["disabled_cards"] += 1
+                continue
+            key = extract_prefix_number(card.name)
+            if key is None:
+                stats["cards_no_number"] += 1
+                if len(stats["no_number_names"]) < 50:
+                    stats["no_number_names"].append(card.name)
+                continue
+            card_map.setdefault(key, []).append(card)
+
+        if not card_map:
+            await self.session.commit()
+            return stats
+
+        # 2. 查用户全部商品，按编号分组
+        item_rows = (
+            await self.session.execute(
+                select(XYCatalogItem.item_id, XYCatalogItem.title).where(
+                    XYCatalogItem.owner_id == user_id
+                )
+            )
+        ).all()
+        item_map: Dict[tuple, List[str]] = {}
+        for item_id, title in item_rows:
+            key = extract_prefix_number(title)
+            if key is not None:
+                item_map.setdefault(key, []).append(item_id)
+
+        # 3. 已存在关联集合（已有关联即跳过，不区分来源）
+        existing_pairs: set = set()
+        if item_map:
+            existing_rows = (
+                await self.session.execute(
+                    select(CardItemRelation.card_id, CardItemRelation.item_id).where(
+                        CardItemRelation.user_id == user_id
+                    )
+                )
+            ).all()
+            existing_pairs = {(card_id, item_id) for card_id, item_id in existing_rows}
+
+        # 4. 配对：编号相同全部配对，已存在跳过
+        pairs: List[tuple] = []
+        for key, cs in card_map.items():
+            item_ids = item_map.get(key)
+            if not item_ids:
+                stats["cards_no_match"] += len(cs)
+                for c in cs:
+                    if len(stats["no_match_names"]) < 50:
+                        stats["no_match_names"].append(c.name)
+                continue
+            stats["matched_cards"] += len(cs)
+            for c in cs:
+                for iid in item_ids:
+                    stats["matched_pairs"] += 1
+                    if (c.id, iid) not in existing_pairs:
+                        pairs.append((c.id, iid))
+
+        stats["skipped"] = stats["matched_pairs"] - len(pairs)
+
+        # 5. 分批 INSERT IGNORE（双保险幂等）
+        batch_size = 500
+        for i in range(0, len(pairs), batch_size):
+            batch = pairs[i:i + batch_size]
+            values_sql = ", ".join(
+                f"(:uid_{j}, :cid_{j}, :iid_{j}, 0, NOW(), NOW())"
+                for j in range(len(batch))
+            )
+            params: Dict[str, Any] = {}
+            for j, (card_id, item_id) in enumerate(batch):
+                params[f"uid_{j}"] = user_id
+                params[f"cid_{j}"] = card_id
+                params[f"iid_{j}"] = item_id
+            result = await self.session.execute(
+                text(f"""
+                    INSERT IGNORE INTO xy_card_item_relations
+                    (user_id, card_id, item_id, dock_record_id, created_at, updated_at)
+                    VALUES {values_sql}
+                """),
+                params,
+            )
+            stats["added"] += result.rowcount or 0
+
+        await self.session.commit()
+        logger.info(
+            f"一键关联卡券: user_id={user_id}, 匹配卡券={stats['matched_cards']}, "
+            f"配对={stats['matched_pairs']}, 新增={stats['added']}, 跳过={stats['skipped']}, "
+            f"无编号={stats['cards_no_number']}, 无匹配={stats['cards_no_match']}, "
+            f"禁用={stats['disabled_cards']}"
+        )
+        return stats
+
     async def delete_relations_by_card_id(self, card_id: int) -> int:
         """
         删除卡券的所有关联记录（级联删除）

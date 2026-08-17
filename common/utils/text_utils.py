@@ -10,6 +10,25 @@
 from __future__ import annotations
 
 import html
+import re
+
+# 商品标题/卡券名称的前缀编号格式：一个字母 + 三位数字（如 A014）
+# (?!\d) 保证数字恰好三位：A0145 这类四位数字整体视为格式不符
+_PREFIX_NUMBER_RE = re.compile(r"^([A-Za-z])(\d{3})(?!\d)")
+
+
+def extract_prefix_number(text: str | None) -> tuple[str, int] | None:
+    """提取文本开头的前缀编号（字母+三位数字，如 "A014 手机壳" → ("A", 14)）。
+
+    供商品标题与卡券名称的编号匹配、定时发布去重共用同一份解析规则。
+    格式不符（无编号/不足三位数字等）返回 None。
+    """
+    if not text:
+        return None
+    match = _PREFIX_NUMBER_RE.match(str(text).strip())
+    if not match:
+        return None
+    return match.group(1).upper(), int(match.group(2))
 
 
 def escape_xss(text: str | None) -> str | None:

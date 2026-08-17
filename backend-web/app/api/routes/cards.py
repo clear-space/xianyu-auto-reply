@@ -675,3 +675,38 @@ async def batch_clear_item_relations(
         message=f"已清空 {len(request.item_ids)} 个商品的卡券关联（共删除 {removed} 条关联记录）",
         data={"removed": removed},
     )
+
+
+@router.post("/auto-match", response_model=ApiResponse)
+async def auto_match_cards_by_prefix_number(
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """一键关联卡券：按前缀编号（字母+三位数字，如 A014）匹配商品标题与卡券名称建立关联。
+
+    幂等操作：已存在的关联自动跳过，重复执行不会产生重复记录。
+    """
+    from loguru import logger
+
+    from common.services.card_matcher import CardMatcher
+
+    matcher = CardMatcher(session)
+    try:
+        stats = await matcher.match_cards_by_prefix_number(current_user.id)
+    except Exception as exc:
+        await session.rollback()
+        logger.error(f"[一键关联卡券] 用户 {current_user.id} 执行失败: {exc}")
+        return ApiResponse(success=False, message=f"一键关联失败: {str(exc)}")
+
+    parts = [f"新增 {stats['added']} 对关联"]
+    if stats["skipped"] > 0:
+        parts.append(f"跳过已存在 {stats['skipped']} 对")
+    if stats["cards_no_number"] > 0:
+        parts.append(f"{stats['cards_no_number']} 张卡券无编号")
+    if stats["cards_no_match"] > 0:
+        parts.append(f"{stats['cards_no_match']} 张卡券未找到同编号商品")
+    if stats["disabled_cards"] > 0:
+        parts.append(f"{stats['disabled_cards']} 张禁用卡券已跳过")
+    message = f"匹配 {stats['matched_cards']} 张卡券、{stats['matched_pairs']} 对：" + "，".join(parts)
+
+    return ApiResponse(success=True, message=message, data=stats)

@@ -1,8 +1,8 @@
 ﻿import { useEffect, useState, useRef } from 'react'
-import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
+import { CheckSquare, Download, Edit2, ExternalLink, Link2, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
-import { batchClearItemRelations } from '@/api/cards'
+import { batchClearItemRelations, autoMatchCards, type AutoMatchCardsResult } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
@@ -16,6 +16,28 @@ type ItemBooleanFilterKey = 'is_polished' | 'is_multi_spec' | 'multi_quantity_de
 
 export function Items() {
   const { addToast } = useUIStore()
+
+  // ==================== 一键关联卡券 ====================
+  const [autoMatching, setAutoMatching] = useState(false)
+  const [autoMatchResult, setAutoMatchResult] = useState<AutoMatchCardsResult | null>(null)
+
+  const handleAutoMatchCards = async () => {
+    if (autoMatching) return
+    setAutoMatching(true)
+    try {
+      const res = await autoMatchCards()
+      if (res.success) {
+        setAutoMatchResult(res.data ?? null)
+        addToast({ type: 'success', message: res.message || '一键关联完成' })
+      } else {
+        addToast({ type: 'error', message: res.message || '一键关联失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '一键关联失败，请重试' })
+    } finally {
+      setAutoMatching(false)
+    }
+  }
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState<Item[]>([])
@@ -1168,6 +1190,15 @@ export function Items() {
           >
             <Plus className="w-3.5 h-3.5" />
             新增AI提示词
+          </button>
+          <button
+            onClick={handleAutoMatchCards}
+            disabled={autoMatching}
+            className="btn-ios-secondary btn-sm whitespace-nowrap"
+            title="按前缀编号（字母+三位数字，如 A014）匹配商品标题与卡券名称，自动建立缺失关联"
+          >
+            {autoMatching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
+            一键关联卡券
           </button>
           <button
             onClick={handleFetchAllItems}
@@ -2571,6 +2602,67 @@ export function Items() {
         onConfirm={handleBatchClearCardRelations}
         onCancel={() => setBatchClearCardRelationsConfirm(false)}
       />
+
+      {/* 一键关联卡券结果弹窗 */}
+      {autoMatchResult && (
+        <div className="modal-overlay" onClick={() => setAutoMatchResult(null)}>
+          <div className="modal-content max-w-lg" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title flex items-center gap-2">
+                <Link2 className="w-5 h-5" />一键关联卡券结果
+              </h2>
+              <button className="modal-close" onClick={() => setAutoMatchResult(null)}><X className="w-5 h-5" /></button>
+            </div>
+            <div className="modal-body space-y-3">
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
+                  <div className="text-lg font-semibold text-blue-600">{autoMatchResult.matched_cards}</div>
+                  <div className="text-xs text-slate-500">匹配卡券</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
+                  <div className="text-lg font-semibold text-green-600">{autoMatchResult.added}</div>
+                  <div className="text-xs text-slate-500">新增关联</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
+                  <div className="text-lg font-semibold text-slate-600">{autoMatchResult.skipped}</div>
+                  <div className="text-xs text-slate-500">跳过已存在</div>
+                </div>
+              </div>
+              <div className="text-sm text-slate-500 space-y-1">
+                <p>同编号配对总数：{autoMatchResult.matched_pairs}</p>
+                {autoMatchResult.cards_no_number > 0 && (
+                  <p className="text-amber-600">{autoMatchResult.cards_no_number} 张卡券无编号</p>
+                )}
+                {autoMatchResult.cards_no_match > 0 && (
+                  <p className="text-amber-600">{autoMatchResult.cards_no_match} 张卡券未找到同编号商品</p>
+                )}
+                {autoMatchResult.disabled_cards > 0 && (
+                  <p>{autoMatchResult.disabled_cards} 张禁用卡券已跳过</p>
+                )}
+              </div>
+              {autoMatchResult.no_match_names.length > 0 && (
+                <div>
+                  <div className="text-sm font-medium mb-1">未匹配到商品的卡券（前50条）：</div>
+                  <div className="max-h-40 overflow-y-auto space-y-0.5 text-xs text-slate-500">
+                    {autoMatchResult.no_match_names.map((n, i) => <p key={i} className="truncate" title={n}>{n}</p>)}
+                  </div>
+                </div>
+              )}
+              {autoMatchResult.no_number_names.length > 0 && (
+                <div>
+                  <div className="text-sm font-medium mb-1">无编号的卡券（前50条）：</div>
+                  <div className="max-h-40 overflow-y-auto space-y-0.5 text-xs text-slate-500">
+                    {autoMatchResult.no_number_names.map((n, i) => <p key={i} className="truncate" title={n}>{n}</p>)}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer flex-shrink-0">
+              <button className="btn-ios-primary" onClick={() => setAutoMatchResult(null)}>关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
