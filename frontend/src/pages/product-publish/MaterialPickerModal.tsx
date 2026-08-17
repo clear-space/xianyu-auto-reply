@@ -3,7 +3,7 @@
  * 使用后端分页展示素材，并提供只读详情与导入操作。
  */
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, Eye, Image, Loader2, Upload, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Eye, Image, Loader2, Upload, X } from 'lucide-react'
 import { getMaterial, getMaterials, type ProductMaterial } from '@/api/productPublish'
 import { useUIStore } from '@/store/uiStore'
 
@@ -25,6 +25,24 @@ function shippingMethodText(material: ProductMaterial): string {
     none: '无需邮寄',
   }
   return labels[material.shipping_method] || '-'
+}
+
+function CollapsibleField({ label, text }: { label: string; text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const collapsible = text.length > 180 || text.includes('\n')
+  return (
+    <div className="sm:col-span-2 lg:col-span-3">
+      <dt className="flex items-center justify-between gap-2 text-slate-400">
+        <span>{label}</span>
+        {collapsible && (
+          <button type="button" className="inline-flex flex-shrink-0 items-center gap-0.5 text-xs text-blue-500 transition-colors hover:text-blue-600" onClick={() => setExpanded((current) => !current)}>
+            {expanded ? <><ChevronUp className="h-3.5 w-3.5" />收起</> : <><ChevronDown className="h-3.5 w-3.5" />展开全文</>}
+          </button>
+        )}
+      </dt>
+      <dd className={`mt-1 whitespace-pre-wrap break-words text-slate-700 dark:text-slate-200 ${expanded ? '' : 'line-clamp-3'}`}>{text}</dd>
+    </div>
+  )
 }
 
 function MaterialDetailModal({ material, onClose }: { material: ProductMaterial; onClose: () => void }) {
@@ -76,8 +94,8 @@ function MaterialDetailModal({ material, onClose }: { material: ProductMaterial;
               <div><dt className="text-slate-400">运费</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{material.postage > 0 ? `¥${material.postage}` : '0 元'}</dd></div>
               <div><dt className="text-slate-400">支持自提</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{material.support_pickup ? '是' : '否'}</dd></div>
               <div><dt className="text-slate-400">更新时间</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{material.updated_at || '-'}</dd></div>
-              <div className="sm:col-span-2 lg:col-span-3"><dt className="text-slate-400">商品描述</dt><dd className="mt-1 whitespace-pre-wrap break-words text-slate-700 dark:text-slate-200">{textValue(material.description)}</dd></div>
-              <div className="sm:col-span-2 lg:col-span-3"><dt className="text-slate-400">内部备注</dt><dd className="mt-1 whitespace-pre-wrap break-words text-slate-700 dark:text-slate-200">{textValue(material.remark)}</dd></div>
+              <CollapsibleField label="商品描述" text={textValue(material.description)} />
+              <CollapsibleField label="内部备注" text={textValue(material.remark)} />
             </dl>
           </section>
 
@@ -212,7 +230,7 @@ export function MaterialPickerModal({ onSelect, onClose }: MaterialPickerModalPr
                   <tr><td colSpan={6} className="py-16 text-center text-slate-400"><Image className="mx-auto mb-2 h-10 w-10 text-slate-300" />素材库为空，请先添加素材</td></tr>
                 ) : materials.map((material) => (
                   <tr key={material.id}>
-                    <td><div className="flex min-w-56 items-center gap-3">{material.images?.[0] ? <img src={material.images[0]} alt="" className="h-12 w-12 flex-shrink-0 rounded-lg object-cover" /> : <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400 dark:bg-slate-700">无图</div>}<div className="min-w-0"><p className="truncate font-medium text-slate-800 dark:text-slate-100" title={material.title}>{material.title}</p><p className="mt-1 truncate text-xs text-slate-400" title={material.description}>{material.description}</p></div></div></td>
+                    <td><div className="flex min-w-56 items-center gap-3">{material.images?.[0] ? <img src={material.images[0]} alt="" className="h-12 w-12 flex-shrink-0 rounded-lg object-cover" /> : <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400 dark:bg-slate-700">无图</div>}<div className="min-w-0 max-w-72"><p className="truncate font-medium text-slate-800 dark:text-slate-100" title={material.title}>{material.title}</p><p className="mt-1 line-clamp-2 break-words text-xs text-slate-400" title={material.description}>{material.description}</p></div></div></td>
                     <td className="whitespace-nowrap font-medium text-amber-600">¥{material.price}</td>
                     <td className="max-w-40"><span className="block truncate" title={material.platform_category_name || material.category || ''}>{material.platform_category_name || material.category || '-'}</span></td>
                     <td>{(material.specifications || []).length ? `${material.specifications.length} 类 / ${(material.sku_rows || []).length} 组合` : '单规格'}</td>
