@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import warnings
 from contextlib import contextmanager
@@ -1846,6 +1847,22 @@ class DatabaseInitializer:
                 INDEX idx_osl_batch (batch_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自动下架执行记录表';
         """,
+
+        # 56. 上架权重算法表
+        "xy_weight_algorithms": """
+            CREATE TABLE IF NOT EXISTS xy_weight_algorithms (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                name VARCHAR(100) NOT NULL COMMENT '算法名称',
+                algorithm_type VARCHAR(32) NOT NULL DEFAULT 'heat_weight' COMMENT '算法类型：heat_weight-热度加权',
+                description VARCHAR(500) COMMENT '算法说明',
+                params JSON NOT NULL COMMENT '权重参数JSON',
+                enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+                is_builtin TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排已售出可调，不可删除/停用，列表置顶）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_wa_enabled (enabled)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='上架权重算法表';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
@@ -1879,10 +1896,15 @@ class DatabaseInitializer:
             ("publish_mode", "VARCHAR(20) NOT NULL DEFAULT 'specified' COMMENT '发布模式：specified-指定发布（全部所选素材），random-随机发布'", "material_ids"),
             ("random_count", "INT DEFAULT NULL COMMENT '随机发布数量（publish_mode=random 时有效）'", "publish_mode"),
             ("deduplicate_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '去重开关（随机模式可用）'", "random_count"),
+            ("weight_algorithm_id", "BIGINT DEFAULT NULL COMMENT '权重算法ID（随机模式加权选料；NULL=系统默认参数）'", "deduplicate_enabled"),
         ],
         "xy_publish_schedule_logs": [
             ("detail_json", "JSON DEFAULT NULL COMMENT '执行明细JSON（成功/失败商品编号明细、补发轮次、账号级错误）'", "error_message"),
             ("schedule_name", "VARCHAR(100) DEFAULT NULL COMMENT '规则名称快照（规则删除后执行记录仍可查看名称）'", "schedule_id"),
+        ],
+        "xy_weight_algorithms": [
+            ("is_builtin", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排已售出可调，不可删除/停用，列表置顶）'", "enabled"),
+            ("algorithm_type", "VARCHAR(32) NOT NULL DEFAULT 'heat_weight' COMMENT '算法类型：heat_weight-热度加权'", "name"),
         ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
@@ -2102,6 +2124,9 @@ class DatabaseInitializer:
                 
                 # 4. 初始化定时任务配置
                 await self.init_scheduled_tasks()
+
+                # 4.5 初始化上架权重算法预设
+                await self.init_weight_algorithms()
 
                 # 5. 初始化随机地址默认数据
                 await self.init_publish_addresses()
@@ -3601,6 +3626,94 @@ class DatabaseInitializer:
                 
         except Exception as e:
             logger.error(f"✗ 初始化系统设置失败: {e}")
+
+    # 预置上架权重算法（按名称幂等插入，用户可自行新建更多）
+    DEFAULT_WEIGHT_ALGORITHMS = (
+        (
+            "热度均衡",
+            "热度加权默认策略：首次发布优先，兼顾复销信号，下架50天恢复",
+            {
+                "first_use_bonus": 50,
+                "recent_order_bonus": 30,
+                "sold_bonus": 25,
+                "offline_recover_per_day": 2,
+                "deleted_recover_per_day": 1,
+                "fail_penalty": 10,
+                "exclude_sold": False,
+                "sample_mode": "weighted",
+            },
+        ),
+        (
+            "激进复销",
+            "复销优先：已售出/有订单的素材大幅加权，恢复更快",
+            {
+                "first_use_bonus": 20,
+                "recent_order_bonus": 50,
+                "sold_bonus": 60,
+                "offline_recover_per_day": 3,
+                "deleted_recover_per_day": 2,
+                "fail_penalty": 10,
+                "exclude_sold": False,
+                "sample_mode": "weighted",
+            },
+        ),
+        (
+            "保守首用",
+            "新素材优先：从未使用过的素材权重最高，下架/删除恢复最慢",
+            {
+                "first_use_bonus": 100,
+                "recent_order_bonus": 10,
+                "sold_bonus": 10,
+                "offline_recover_per_day": 1,
+                "deleted_recover_per_day": 1,
+                "fail_penalty": 20,
+                "exclude_sold": False,
+                "sample_mode": "weighted",
+            },
+        ),
+    )
+
+    async def init_weight_algorithms(self):
+        """初始化上架权重算法预设（按名称幂等，不覆盖用户修改）"""
+        logger.info("初始化上架权重算法预设...")
+        try:
+            async with async_session_maker() as session:
+                # 历史命名迁移：默认均衡 → 热度均衡（热度加权机制定名）
+                result = await session.execute(
+                    text("UPDATE xy_weight_algorithms SET name = '热度均衡' WHERE name = '默认均衡'")
+                )
+                if result.rowcount:
+                    logger.info(f"✓ 权重算法命名迁移：默认均衡 → 热度均衡（{result.rowcount} 条）")
+                for index, (name, description, params) in enumerate(self.DEFAULT_WEIGHT_ALGORITHMS):
+                    is_builtin = index == 0  # 第一个预置（热度均衡）为系统内置
+                    result = await session.execute(
+                        text("SELECT id FROM xy_weight_algorithms WHERE name = :name LIMIT 1"),
+                        {"name": name},
+                    )
+                    if result.fetchone():
+                        if is_builtin:
+                            await session.execute(
+                                text("UPDATE xy_weight_algorithms SET is_builtin = 1, enabled = 1 WHERE name = :name"),
+                                {"name": name},
+                            )
+                        continue
+                    await session.execute(
+                        text("""
+                            INSERT INTO xy_weight_algorithms
+                            (name, algorithm_type, description, params, enabled, is_builtin, created_at, updated_at)
+                            VALUES (:name, 'heat_weight', :description, :params, 1, :is_builtin, NOW(), NOW())
+                        """),
+                        {
+                            "name": name,
+                            "description": description,
+                            "params": json.dumps(params, ensure_ascii=False),
+                            "is_builtin": 1 if is_builtin else 0,
+                        },
+                    )
+                await session.commit()
+                logger.info(f"✓ 上架权重算法预设初始化完成，共 {len(self.DEFAULT_WEIGHT_ALGORITHMS)} 项")
+        except Exception as e:
+            logger.error(f"✗ 初始化上架权重算法预设失败: {e}")
 
     async def init_scheduled_tasks(self):
         """初始化定时任务配置"""

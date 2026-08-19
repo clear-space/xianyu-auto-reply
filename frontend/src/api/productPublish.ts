@@ -547,6 +547,7 @@ export interface PublishSchedule {
   publish_mode: 'specified' | 'random'
   random_count?: number | null
   deduplicate_enabled: boolean
+  weight_algorithm_id?: number | null
   enabled: boolean
   last_triggered_at?: string | null
   next_trigger_at?: string | null
@@ -575,6 +576,7 @@ export interface CreateScheduleParams {
   publish_mode?: 'specified' | 'random'
   random_count?: number | null
   deduplicate_enabled?: boolean
+  weight_algorithm_id?: number | null
 }
 
 /** 更新定时规则参数 */
@@ -587,6 +589,7 @@ export interface UpdateScheduleParams {
   publish_mode?: string
   random_count?: number | null
   deduplicate_enabled?: boolean
+  weight_algorithm_id?: number | null
   enabled?: boolean
 }
 
@@ -615,6 +618,10 @@ export interface ScheduleLogDetail {
   target_ok?: number
   detail_truncated?: boolean
   filtered_count?: number
+  weight_algorithm_id?: number | null
+  weight_algorithm_name?: string
+  /** 选料方式：top-按权重直选；weighted-加权随机 */
+  sample_mode?: string
   rounds?: Array<{
     round: number
     materials: Array<{
@@ -622,6 +629,7 @@ export interface ScheduleLogDetail {
       title?: string
       item_no?: string | null
       result: 'success' | 'failed' | 'account_error'
+      weight?: number
       accounts?: Array<{ account_id: string; status: string; error?: string }>
       /** 明细过大压缩后：仅保留各账号状态计数（accounts 数组被丢弃） */
       account_counts?: { success: number; failed: number; account_error: number }
@@ -736,6 +744,20 @@ export interface ScheduleHistoryResponse {
     total_pages: number
   }
 }
+
+/** 权重算法选项（规则表单下拉） */
+export interface WeightAlgorithmOption {
+  id: number
+  name: string
+  algorithm_type?: string
+  description?: string | null
+  params?: Record<string, unknown>
+  is_builtin?: boolean
+}
+
+/** 启用中的权重算法列表 */
+export const getWeightAlgorithmOptions = (): Promise<ApiResponse<{ list: WeightAlgorithmOption[] }>> =>
+  get(`${SCHEDULE_PREFIX}/weight-algorithms`)
 
 /** 合并查询定时发布与自动下架的执行历史（支持关键词预筛：全局/类别/规则名） */
 export const getScheduleHistory = (

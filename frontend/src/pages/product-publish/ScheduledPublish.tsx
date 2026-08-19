@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, History, Plus, Pencil, Trash2, Play, Power, PowerOff, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Layers, CheckCircle, XCircle, Search, X } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, clearScheduleLogs, getScheduleHistory, batchDeleteScheduleLogs, getActiveScheduleProgress, type PublishSchedule, type ScheduleHistoryItem, type ScheduleLogDetail, type ActiveScheduleProgress } from '@/api/productPublish'
+import { getSchedules, deleteSchedule, toggleSchedule, triggerSchedule, clearScheduleLogs, getScheduleHistory, batchDeleteScheduleLogs, getWeightAlgorithmOptions, getActiveScheduleProgress, type PublishSchedule, type ScheduleHistoryItem, type ScheduleLogDetail, type ActiveScheduleProgress, type WeightAlgorithmOption } from '@/api/productPublish'
 import { clearOfflineScheduleLogs, getOfflineSchedules, type OfflineLogDetail } from '@/api/offlineSchedules'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
@@ -63,6 +63,12 @@ function LogDetailPanel({ detail }: { detail: ScheduleLogDetail }) {
         {detail.random_count != null && <span className="badge-gray">目标 {detail.random_count} 条</span>}
         {detail.deduplicate && <span className="badge-gray">已启用去重</span>}
         {detail.target_ok != null && <span className="badge-gray">素材成功 {detail.target_ok} 条</span>}
+        {detail.weight_algorithm_name && (
+          <span className="badge-gray">算法：{detail.weight_algorithm_name}</span>
+        )}
+        {detail.sample_mode === 'top' && (
+          <span className="badge-gray">按权重直选</span>
+        )}
         {(detail.filtered_count != null ? detail.filtered_count : filtered.length) > 0 && (
           <span className="badge-gray">过滤 {detail.filtered_count ?? filtered.length} 条</span>
         )}
@@ -83,6 +89,7 @@ function LogDetailPanel({ detail }: { detail: ScheduleLogDetail }) {
                 <div key={i} className="flex flex-wrap items-center gap-2">
                   <span className={cfg.cls}>{cfg.label}</span>
                   <span className="font-mono text-slate-500">{m.item_no ?? '无编号'}</span>
+                  {m.weight != null && <span className="badge-info text-xs">权重 {m.weight}</span>}
                   <span className="truncate max-w-[280px] text-slate-700 dark:text-slate-200" title={m.title}>{m.title}</span>
                   {failedAccounts.length > 0 && (
                     <span className="text-xs text-red-500" title={failedAccounts.map(a => a.error).join('；')}>
@@ -151,6 +158,7 @@ export function ScheduledPublish() {
   const [tab, setTab] = useState<Tab>('publish-rules')
   const [loading, setLoading] = useState(true)
   const [offlineRulesTotal, setOfflineRulesTotal] = useState(0)
+  const [weightAlgorithms, setWeightAlgorithms] = useState<WeightAlgorithmOption[]>([])
 
   // 规则列表
   const [schedules, setSchedules] = useState<PublishSchedule[]>([])
@@ -288,6 +296,10 @@ export function ScheduledPublish() {
     // 启动时拉取下架规则总数（Tab 角标需要；下架规则组件懒挂载，进入该 Tab 后由其继续同步）
     getOfflineSchedules(1, 20)
       .then(res => { if (res.success) setOfflineRulesTotal(res.data.total) })
+      .catch(() => { /* ignore */ })
+    // 权重算法名称映射（规则列表展示）
+    getWeightAlgorithmOptions()
+      .then(res => { if (res.success) setWeightAlgorithms(res.data?.list ?? []) })
       .catch(() => { /* ignore */ })
   }, [])
 
@@ -580,6 +592,9 @@ export function ScheduledPublish() {
                       {s.publish_mode === 'random' && (
                         <div className="text-xs text-slate-400 mt-0.5">
                           随机 {s.random_count} 条{s.deduplicate_enabled ? ' · 去重' : ''}
+                          {s.weight_algorithm_id
+                            ? ` · ${weightAlgorithms.find(a => a.id === s.weight_algorithm_id)?.name || `算法#${s.weight_algorithm_id}`}`
+                            : ' · 热度均衡'}
                         </div>
                       )}
                     </td>

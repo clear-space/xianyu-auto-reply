@@ -50,6 +50,9 @@ class PublishSchedule(TimestampMixin, Base):
         Boolean, nullable=False, default=False,
         comment="去重开关（随机模式可用）：发布前刷新账号在售列表，按素材标题前缀编号（A+数字）过滤已存在"
     )
+    weight_algorithm_id: Mapped[int | None] = mapped_column(
+        BigInteger, comment="权重算法ID（随机模式加权选料；NULL=系统默认参数）"
+    )
 
     # 状态
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")

@@ -104,6 +104,7 @@ class CreateScheduleRequest(BaseModel):
     publish_mode: str = Field("specified", description="发布模式：specified-指定发布，random-随机发布")
     random_count: Optional[int] = Field(None, description="随机发布数量（随机模式必填）")
     deduplicate_enabled: bool = Field(False, description="去重开关（仅随机模式可用）")
+    weight_algorithm_id: Optional[int] = Field(None, description="权重算法ID（随机模式加权选料；不传=系统默认）")
 
 
 class UpdateScheduleRequest(BaseModel):
@@ -116,6 +117,7 @@ class UpdateScheduleRequest(BaseModel):
     publish_mode: Optional[str] = None
     random_count: Optional[int] = None
     deduplicate_enabled: Optional[bool] = None
+    weight_algorithm_id: Optional[int] = None
     enabled: Optional[bool] = None
 
 
@@ -175,6 +177,7 @@ async def create_schedule(
             "publish_mode": publish_mode,
             "random_count": random_count,
             "deduplicate_enabled": deduplicate_enabled,
+            "weight_algorithm_id": req.weight_algorithm_id,
         })
         from app.services.publish_schedule_service import _schedule_to_dict
         return ApiResponse(success=True, message="定时规则创建成功", data=_schedule_to_dict(schedule))
@@ -342,6 +345,46 @@ async def get_active_schedule_progress(
     return ApiResponse(success=True, message="查询成功", data={"tasks": tasks})
 
 
+@router.get("/weight-algorithms", response_model=ApiResponse)
+async def list_weight_algorithm_options(
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """启用中的权重算法列表（定时发布规则表单下拉用）
+
+    注意：必须声明在 /{schedule_id} 之前——FastAPI 按声明顺序匹配路径，
+    后声明会被 /{schedule_id} 吞掉（422）。
+    """
+    from common.models.weight_algorithm import WeightAlgorithm
+
+    rows = list(
+        (
+            await session.execute(
+                select(WeightAlgorithm)
+                .where(WeightAlgorithm.enabled == True)
+                .order_by(WeightAlgorithm.is_builtin.desc(), WeightAlgorithm.id)
+            )
+        ).scalars().all()
+    )
+    return ApiResponse(
+        success=True,
+        message="查询成功",
+        data={
+            "list": [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "algorithm_type": a.algorithm_type,
+                    "description": a.description,
+                    "params": a.params or {},
+                    "is_builtin": bool(a.is_builtin),
+                }
+                for a in rows
+            ],
+        },
+    )
+
+
 @router.get("/{schedule_id}", response_model=ApiResponse)
 async def get_schedule(
     schedule_id: int,
@@ -375,6 +418,9 @@ async def update_schedule(
     update_data = {
         k: v for k, v in req.model_dump(exclude={"schedule_config"}).items() if v is not None
     }
+    # 允许显式清除权重算法（None 会被上面的通用过滤丢弃）
+    if "weight_algorithm_id" in req.model_fields_set and req.weight_algorithm_id is None:
+        update_data["weight_algorithm_id"] = None
 
     # 合并更新后的有效值做整体校验
     eff_mode = update_data.get("schedule_mode", current.schedule_mode)
@@ -525,6 +571,7 @@ async def trigger_schedule(
         "publish_mode": schedule.publish_mode or "specified",
         "random_count": schedule.random_count,
         "deduplicate_enabled": bool(schedule.deduplicate_enabled),
+        "weight_algorithm_id": schedule.weight_algorithm_id,
     }
     asyncio.create_task(
         ScheduledPublishExecutor.run(

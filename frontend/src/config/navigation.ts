@@ -32,6 +32,8 @@ import {
   ScrollText,
   Send,
   Settings,
+  Settings2,
+  Scale,
   Shield,
   ShoppingCart,
   Star,
@@ -145,6 +147,15 @@ export const mainNavItems: NavEntry[] = [
 export const adminNavItems: NavEntry[] = [
   { key: 'settings', icon: Settings, label: '系统设置', path: '/settings', adminOnly: true },
   { key: 'admin-users', icon: UserCog, label: '用户管理', path: '/admin/users', adminOnly: true },
+  {
+    key: 'admin-optimization',
+    icon: Settings2,
+    label: '优化算法',
+    adminOnly: true,
+    children: [
+      { key: 'admin-weight-algorithms', icon: Scale, label: '上架权重算法', path: '/admin/weight-algorithms', adminOnly: true },
+    ],
+  },
   {
     key: 'admin-logs',
     icon: ScrollText,

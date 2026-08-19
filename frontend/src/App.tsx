@@ -83,6 +83,7 @@ const DbBackupLogs = React.lazy(() => import('@/pages/admin/DbBackupLogs').then(
 const DbRestore = React.lazy(() => import('@/pages/admin/DbRestore').then(m => ({ default: m.DbRestore })))
 const DataManagement = React.lazy(() => import('@/pages/admin/DataManagement').then(m => ({ default: m.DataManagement })))
 const ScheduledTasks = React.lazy(() => import('@/pages/admin/ScheduledTasks').then(m => ({ default: m.ScheduledTasks })))
+const WeightAlgorithms = React.lazy(() => import('@/pages/admin/WeightAlgorithms').then(m => ({ default: m.WeightAlgorithms })))
 const RedeliveryBatches = React.lazy(() => import('@/pages/redeliveryLogs/RedeliveryBatches').then(m => ({ default: m.RedeliveryBatches })))
 const RedeliveryBatchDetailPage = React.lazy(() => import('@/pages/redeliveryLogs/RedeliveryBatchDetail').then(m => ({ default: m.RedeliveryBatchDetailPage })))
 const RateBatches = React.lazy(() => import('@/pages/rateLogs/RateBatches').then(m => ({ default: m.RateBatches })))
@@ -390,6 +391,7 @@ function App() {
 
             {/* Admin routes */}
             <Route path="admin/users" element={<Users />} />
+            <Route path="admin/weight-algorithms" element={<WeightAlgorithms />} />
             <Route path="admin/logs" element={<Logs />} />
             <Route path="admin/account-login-logs" element={<AccountLoginLogs />} />
             <Route path="admin/db-backup-logs" element={<DbBackupLogs />} />

@@ -26,6 +26,12 @@ from common.db.session import async_session_maker
 from common.models.publish_schedule_log import PublishScheduleLog
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
+from common.services.material_scoring import (
+    DEFAULT_WEIGHT_PARAMS,
+    compute_material_weights,
+    get_weight_algorithm_params,
+)
+from common.services.item_service import _normalize_item_status
 from common.utils.text_utils import extract_prefix_number as _extract_prefix_number
 from common.utils.time_utils import get_beijing_now
 
@@ -68,10 +74,29 @@ class ScheduledPublishExecutor:
             schedule_data.get("deduplicate_enabled") and publish_mode == "random"
         )
 
+        # 权重算法参数（随机模式加权选料；算法停用/缺失自动回退系统默认）
+        weight_algorithm_id = schedule_data.get("weight_algorithm_id")
+        weight_algorithm_name = None
+        weight_params = DEFAULT_WEIGHT_PARAMS
+        if publish_mode == "random":
+            try:
+                weight_params = await get_weight_algorithm_params(weight_algorithm_id)
+                weight_algorithm_name = await ScheduledPublishExecutor._get_algorithm_name(
+                    weight_algorithm_id
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[热度加权] 规则 #{schedule_id} 加载权重算法失败（回退热度均衡）: {exc}"
+                )
+
         # ========== 第 1 阶段：加载素材池 + 去重准备（独立 session） ==========
+        # 硬排已售出（算法开关）不依赖去重开关：关去重时也读本地状态（可能滞后于最近一次同步）
+        need_status_numbers = publish_mode == "random" and bool(
+            weight_params.get("exclude_sold")
+        )
         try:
-            pool, on_sale_numbers = await ScheduledPublishExecutor._prepare(
-                user_id, schedule_data, deduplicate_enabled
+            pool, on_sale_numbers, sold_numbers = await ScheduledPublishExecutor._prepare(
+                user_id, schedule_data, deduplicate_enabled, need_status_numbers
             )
         except Exception as e:
             logger.error(f"[定时发布] 规则 #{schedule_id} 准备阶段失败: {e}")
@@ -81,6 +106,19 @@ class ScheduledPublishExecutor:
                 error_message=f"准备阶段失败: {str(e)[:800]}",
             )
             return
+
+        # 随机模式：计算素材权重（信号来自本地商品状态/订单/发布日志）
+        weights_map: Dict[int, int] = {}
+        if publish_mode == "random":
+            try:
+                scored = await compute_material_weights(
+                    user_id, pool, params=weight_params
+                )
+                weights_map = {m.get("id"): w for m, w in scored}
+            except Exception as exc:
+                logger.warning(
+                    f"[热度加权] 规则 #{schedule_id} 计算素材权重失败（退化为均匀随机）: {exc}"
+                )
 
         if not pool:
             logger.warning(f"[定时发布] 规则 #{schedule_id} 素材池为空（素材失效或全部被去重过滤）")
@@ -134,12 +172,19 @@ class ScheduledPublishExecutor:
                 # 指定发布：第一轮发全部，无补发
                 pick = remaining if round_no == 1 else []
             else:
+                # 随机模式：硬排除已售出（算法参数开关）+ 加权无放回随机
+                if weight_params.get("exclude_sold"):
+                    remaining = [m for m in remaining if m.get("_item_no") not in sold_numbers]
                 deficit = max(random_count - ok_count, 0)
-                pick = (
-                    random.sample(remaining, min(deficit, len(remaining)))
-                    if remaining and deficit > 0
-                    else []
-                )
+                if remaining and deficit > 0:
+                    pick = ScheduledPublishExecutor._weighted_sample(
+                        remaining,
+                        weights_map,
+                        min(deficit, len(remaining)),
+                        sample_mode=weight_params.get("sample_mode"),
+                    )
+                else:
+                    pick = []
 
             if not pick:
                 break
@@ -184,7 +229,9 @@ class ScheduledPublishExecutor:
                     mr.get("account_error_accounts") or 0
                 )
                 round_detail["materials"].append(
-                    ScheduledPublishExecutor._detail_entry(mr)
+                    ScheduledPublishExecutor._detail_entry(
+                        mr, weights_map.get(mr.get("material_id"))
+                    )
                 )
             detail_rounds.append(round_detail)
 
@@ -225,6 +272,10 @@ class ScheduledPublishExecutor:
             "rounds": detail_rounds,
             "filtered": filtered_materials,
         })
+        if publish_mode == "random":
+            detail_json["weight_algorithm_id"] = weight_algorithm_id
+            detail_json["weight_algorithm_name"] = weight_algorithm_name or "热度均衡"
+            detail_json["sample_mode"] = weight_params.get("sample_mode")
 
         if fatal_error:
             await ScheduledPublishExecutor._finalize_log(
@@ -249,13 +300,59 @@ class ScheduledPublishExecutor:
     # ==================== 内部方法 ====================
 
     @staticmethod
+    def _weighted_sample(
+        remaining: List[dict],
+        weights_map: Dict[int, int],
+        k: int,
+        sample_mode: Optional[str] = None,
+    ) -> List[dict]:
+        """按选料方式取 k 条素材（权重缺省按 1 分保底）。
+
+        weighted（默认）：加权无放回随机——权重=概率，高分不保证必选；
+        top：按权重直选——权重降序取前 k（同分保持素材池原顺序）。
+        """
+        pool_list = list(remaining)
+        if sample_mode == "top":
+            pool_list.sort(
+                key=lambda m: weights_map.get(m.get("id"), 1), reverse=True
+            )
+            return pool_list[: min(k, len(pool_list))]
+        picks: List[dict] = []
+        for _ in range(min(k, len(pool_list))):
+            weights = [max(weights_map.get(m.get("id"), 1), 1) for m in pool_list]
+            idx = random.choices(range(len(pool_list)), weights=weights, k=1)[0]
+            picks.append(pool_list.pop(idx))
+        return picks
+
+    @staticmethod
+    async def _get_algorithm_name(algorithm_id: Optional[int]) -> Optional[str]:
+        """取权重算法名称（算法不存在返回 None）"""
+        if algorithm_id is None:
+            return None
+        from common.models.weight_algorithm import WeightAlgorithm
+
+        async with async_session_maker() as session:
+            row = (
+                await session.execute(
+                    select(WeightAlgorithm).where(WeightAlgorithm.id == algorithm_id)
+                )
+            ).scalar_one_or_none()
+            return row.name if row else None
+
+    @staticmethod
     async def _prepare(
-        user_id: int, schedule_data: Dict[str, Any], deduplicate_enabled: bool
-    ) -> tuple[List[dict], Set[int]]:
+        user_id: int,
+        schedule_data: Dict[str, Any],
+        deduplicate_enabled: bool,
+        need_status_numbers: bool = False,
+    ) -> tuple[List[dict], Set[int], Set[int]]:
         """加载素材池，并按需刷新账号在售商品列表做去重准备。
 
+        账号远程刷新（昂贵、易限流）仅去重开关开启时执行；本地状态读取
+        在去重或硬排已售出任一需要时执行（关去重时状态可能滞后于最近一次同步）。
+
         Returns:
-            (素材池 dict 列表, 在售商品编号集合)
+            (素材池 dict 列表, 在售商品编号集合, 已售出商品编号集合)
         """
         from app.services.item_service import ItemService
         from app.services.product_publish_service import ProductMaterialService, _material_to_dict
@@ -271,10 +368,10 @@ class ScheduledPublishExecutor:
                 d["_item_no"] = extract_item_number(d.get("title"))
                 pool.append(d)
 
-            if not deduplicate_enabled:
-                return pool, set()
+            if not deduplicate_enabled and not need_status_numbers:
+                return pool, set(), set()
 
-            # 去重准备：加载规则内账号，逐个刷新在售商品列表（失败不阻断发布，仅降级为不去重）
+            # 加载规则内账号（状态读取需要账号范围；去重开启时逐个远程刷新在售列表）
             account_ids = list(dict.fromkeys(schedule_data.get("account_ids") or []))
             stmt = select(XYAccount).where(
                 XYAccount.owner_id == user_id,
@@ -282,50 +379,61 @@ class ScheduledPublishExecutor:
             )
             accounts = list((await session.execute(stmt)).scalars().all())
 
-            item_svc = ItemService(session)
-            for account in accounts:
-                try:
-                    logger.info(f"[定时发布] 去重准备：刷新账号 {account.account_id} 在售商品列表")
-                    await item_svc.fetch_all_items_from_account(account=account)
-                except Exception as e:
-                    logger.warning(
-                        f"[定时发布] 账号 {account.account_id} 刷新在售商品失败（继续去重）: {e}"
-                    )
+            if deduplicate_enabled:
+                item_svc = ItemService(session)
+                for account in accounts:
+                    try:
+                        logger.info(f"[定时发布] 去重准备：刷新账号 {account.account_id} 在售商品列表")
+                        await item_svc.fetch_all_items_from_account(account=account)
+                    except Exception as e:
+                        logger.warning(
+                            f"[定时发布] 账号 {account.account_id} 刷新在售商品失败（继续去重）: {e}"
+                        )
 
-            # 读取刷新后的在售商品标题编号（union：任一账号在售即视为已存在）
+            # 读取商品标题编号（按状态区分：在售硬排除，已售出供算法开关使用）
             on_sale_numbers: Set[int] = set()
+            sold_numbers: Set[int] = set()
             account_pks = [a.id for a in accounts]
             if account_pks:
-                title_stmt = select(XYCatalogItem.title).where(
+                title_stmt = select(XYCatalogItem.title, XYCatalogItem.metadata_json).where(
                     XYCatalogItem.owner_id == user_id,
                     XYCatalogItem.account_pk.in_(account_pks),
                 )
-                for (title,) in (await session.execute(title_stmt)).all():
+                for title, meta in (await session.execute(title_stmt)).all():
                     num = extract_item_number(title)
-                    if num is not None:
+                    if num is None:
+                        continue
+                    status = _normalize_item_status((meta or {}).get("item_status"))
+                    if status == "on_sale":
                         on_sale_numbers.add(num)
+                    elif status == "sold":
+                        sold_numbers.add(num)
 
             logger.info(
-                f"[定时发布] 去重准备完成：{len(pool)} 条素材，账号在售编号 {len(on_sale_numbers)} 个"
+                f"[定时发布] 状态读取完成：{len(pool)} 条素材，"
+                f"账号在售编号 {len(on_sale_numbers)} 个，已售出编号 {len(sold_numbers)} 个"
             )
-            return pool, on_sale_numbers
+            return pool, on_sale_numbers, sold_numbers
 
     @staticmethod
-    def _detail_entry(mr: dict) -> dict:
-        """将批量发布的素材结果转为执行明细条目"""
+    def _detail_entry(mr: dict, weight: Optional[int] = None) -> dict:
+        """将批量发布的素材结果转为执行明细条目（含权重，便于追溯选料原因）"""
         if mr.get("ok"):
             result = "success"
         elif mr.get("has_valid_account"):
             result = "failed"
         else:
             result = "account_error"
-        return {
+        entry = {
             "material_id": mr.get("material_id"),
             "title": mr.get("title", ""),
             "item_no": f"A{mr['item_no']}" if mr.get("item_no") is not None else None,
             "result": result,
             "accounts": mr.get("accounts") or [],
         }
+        if weight is not None:
+            entry["weight"] = weight
+        return entry
 
     # 素材量过大时，素材×账号明细落库可能超过 MySQL JSON 列/max_allowed_packet 限制，
     # 超出阈值后丢弃账号级明细数组，仅保留每素材的账号结果计数，保证落库体积可控。

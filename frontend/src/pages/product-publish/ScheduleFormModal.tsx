@@ -12,7 +12,7 @@ import { motion } from 'framer-motion'
 import { Clock, X, Loader2, Save, ChevronLeft, ChevronRight, Search, Image } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { getAccountDetails } from '@/api/accounts'
-import { getMaterials, getAllMaterialIds, createSchedule, updateSchedule, type ProductMaterial, type PublishSchedule, type ScheduleConfig, type CreateScheduleParams, type UpdateScheduleParams } from '@/api/productPublish'
+import { getMaterials, getAllMaterialIds, createSchedule, updateSchedule, getWeightAlgorithmOptions, type ProductMaterial, type PublishSchedule, type ScheduleConfig, type CreateScheduleParams, type UpdateScheduleParams, type WeightAlgorithmOption } from '@/api/productPublish'
 
 interface Props {
   initial?: PublishSchedule | null
@@ -27,6 +27,11 @@ type TimeMode = 'fixed' | 'random'
 type PublishMode = 'specified' | 'random'
 
 const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
+
+// 算法类型注册表（新增算法类型时在此登记）
+const ALGORITHM_TYPES: Array<{ value: string; label: string }> = [
+  { value: 'heat_weight', label: '热度加权' },
+]
 const DEFAULT_TIME_RANGE = { start: '09:00', end: '21:00' }
 
 export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props) {
@@ -40,6 +45,9 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
   const [publishMode, setPublishMode] = useState<PublishMode>(initial?.publish_mode || 'specified')
   const [randomCount, setRandomCount] = useState<number>(initial?.random_count || 1)
   const [deduplicate, setDeduplicate] = useState<boolean>(initial?.deduplicate_enabled || false)
+  const [weightAlgorithmId, setWeightAlgorithmId] = useState<number | null>(initial?.weight_algorithm_id ?? null)
+  const [weightAlgorithmType, setWeightAlgorithmType] = useState<string>('heat_weight')
+  const [weightAlgorithms, setWeightAlgorithms] = useState<WeightAlgorithmOption[]>([])
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(initial?.schedule_mode || 'daily')
   const [timeMode, setTimeMode] = useState<TimeMode>(() => {
     if (initial?.schedule_config?.random) return 'random'
@@ -85,6 +93,45 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
     ]).then(([accList]) => {
       setAccounts(accList)
     }).finally(() => setDataLoading(false))
+    // 加载权重算法选项（随机模式下拉）；按"算法类型 → 算法"两级选择
+    const applyOptions = (rawList: WeightAlgorithmOption[]) => {
+      let list = rawList
+      // 规则引用的算法已停用/被删（选项接口只返回启用中的）：补一个占位选项，
+      // 否则受控 select 的 value 匹配不到任何 option 会渲染成空白
+      const referenced = initial?.weight_algorithm_id
+      if (referenced != null && !list.some(a => a.id === referenced)) {
+        list = [...list, {
+          id: referenced,
+          name: `算法#${referenced}（不可用）`,
+          algorithm_type: 'heat_weight',
+          is_builtin: false,
+        }]
+      }
+      setWeightAlgorithms(list)
+      const chosen = referenced != null
+        ? list.find(a => a.id === referenced)
+        : list.find(a => a.is_builtin)
+      if (chosen) {
+        setWeightAlgorithmType(chosen.algorithm_type || 'heat_weight')
+        setWeightAlgorithmId(prev => prev ?? chosen.id)
+      } else if (list[0]) {
+        setWeightAlgorithmType(list[0].algorithm_type || 'heat_weight')
+        setWeightAlgorithmId(prev => prev ?? list[0].id)
+      }
+    }
+    getWeightAlgorithmOptions()
+      .then(res => {
+        if (res.success) {
+          applyOptions(res.data?.list ?? [])
+        } else {
+          applyOptions([])
+          addToast({ type: 'warning', message: `加载权重算法失败：${res.message || '未知错误'}` })
+        }
+      })
+      .catch(() => {
+        applyOptions([])
+        addToast({ type: 'error', message: '加载权重算法失败，请检查后端服务是否已重启' })
+      })
   }, [])
 
   useEffect(() => {
@@ -141,6 +188,7 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
         publish_mode: publishMode,
         random_count: publishMode === 'random' ? randomCount : null,
         deduplicate_enabled: publishMode === 'random' ? deduplicate : false,
+        weight_algorithm_id: publishMode === 'random' ? weightAlgorithmId : null,
       }
 
       if (initial) {
@@ -404,6 +452,43 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
                       启用去重：发布前刷新账号在售商品，素材标题前缀编号（A+数字）已在售的不再发布
                     </span>
                   </label>
+                  <div className="flex items-center gap-2">
+                    <label className="input-label text-sm whitespace-nowrap">算法类型</label>
+                    <select className="input-ios w-32" value={weightAlgorithmType}
+                      onChange={e => {
+                        const t = e.target.value
+                        setWeightAlgorithmType(t)
+                        const firstOfType = weightAlgorithms.find(a => (a.algorithm_type || 'heat_weight') === t && a.is_builtin)
+                          ?? weightAlgorithms.find(a => (a.algorithm_type || 'heat_weight') === t)
+                        setWeightAlgorithmId(firstOfType?.id ?? null)
+                      }}>
+                      {/* 注册表类型 + 数据中出现的类型（防未来新增类型时下拉空白） */}
+                      {Array.from(new Set([
+                        ...ALGORITHM_TYPES.map(t => t.value),
+                        ...weightAlgorithms.map(a => a.algorithm_type || 'heat_weight'),
+                      ])).map(v => (
+                        <option key={v} value={v}>
+                          {ALGORITHM_TYPES.find(t => t.value === v)?.label ?? v}
+                        </option>
+                      ))}
+                    </select>
+                    <select className="input-ios flex-1" value={weightAlgorithmId ?? ''}
+                      onChange={e => setWeightAlgorithmId(e.target.value ? Number(e.target.value) : null)}>
+                      {(() => {
+                        const typedList = weightAlgorithms.filter(a => (a.algorithm_type || 'heat_weight') === weightAlgorithmType)
+                        // 兜底：按类型过滤为空时显示全部，避免下拉空白
+                        const displayList = typedList.length > 0 ? typedList : weightAlgorithms
+                        if (displayList.length === 0) {
+                          return <option value="">暂无算法（请先在「优化算法」中新建）</option>
+                        }
+                        return displayList.map(a => (
+                          <option key={a.id} value={a.id} title={a.description || undefined}>
+                            {a.name}{a.is_builtin ? '（内置）' : ''}
+                          </option>
+                        ))
+                      })()}
+                    </select>
+                  </div>
                 </>
               )}
             </div>

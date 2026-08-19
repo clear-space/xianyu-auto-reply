@@ -85,6 +85,7 @@ async def internal_publish_batch(
             "publish_mode": schedule.publish_mode or "specified",
             "random_count": schedule.random_count,
             "deduplicate_enabled": bool(schedule.deduplicate_enabled),
+            "weight_algorithm_id": schedule.weight_algorithm_id,
         }
         background_tasks.add_task(
             ScheduledPublishExecutor.run,

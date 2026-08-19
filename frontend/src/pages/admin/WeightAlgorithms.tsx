@@ -1,0 +1,645 @@
+/**
+ * 上架权重算法管理页（管理员）
+ *
+ * 功能：
+ * 1. 算法列表（默认折叠，防止算法新建过多占用页面；参数摘要/引用次数/启停）
+ * 2. 新建/编辑算法（7 个权重参数）
+ * 3. 算法说明弹窗（热度加权机制说明）
+ * 4. 删除保护（被定时发布规则引用时后端拒绝）
+ */
+import { useState, useEffect, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Plus, Pencil, Trash2, Power, PowerOff, RefreshCw, Scale, Info, X, Loader2, Save, ChevronDown, ChevronUp, BarChart3 } from 'lucide-react'
+import { useUIStore } from '@/store/uiStore'
+import {
+  getWeightAlgorithms, createWeightAlgorithm, updateWeightAlgorithm,
+  deleteWeightAlgorithm, toggleWeightAlgorithm, getWeightAlgorithmPreview,
+  getWeightAlgorithmReferences,
+  type WeightAlgorithm, type WeightAlgorithmParams, type WeightPreviewEntry,
+  type WeightAlgorithmReference,
+} from '@/api/weightAlgorithms'
+import { PageLoading } from '@/components/common/Loading'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
+
+const PARAM_FIELDS: Array<{
+  key: keyof WeightAlgorithmParams
+  label: string
+  hint: string
+  type: 'number' | 'bool' | 'select'
+  options?: Array<{ value: string; label: string }>
+}> = [
+  { key: 'first_use_bonus', label: '首次使用加成', hint: '从未发布过的素材加分（最高优先级）', type: 'number' },
+  { key: 'recent_order_bonus', label: '近30天有订单加成', hint: '售卖情况好的编号加分', type: 'number' },
+  { key: 'sold_bonus', label: '已售出加成', hint: '复销信号加分', type: 'number' },
+  { key: 'offline_recover_per_day', label: '下架恢复速率', hint: '自动下架后每天恢复的分数（每天）', type: 'number' },
+  { key: 'deleted_recover_per_day', label: '删除恢复速率', hint: '手动删除后每天恢复的分数（更慢）', type: 'number' },
+  { key: 'fail_penalty', label: '失败扣分', hint: '近60天单次发布失败扣分', type: 'number' },
+  { key: 'exclude_sold', label: '硬排已售出', hint: '开启后已售出编号不参与随机', type: 'bool' },
+  {
+    key: 'sample_mode',
+    label: '选料方式',
+    hint: '按权重直选：高分必先选；加权随机：高分仅概率高',
+    type: 'select',
+    options: [
+      { value: 'weighted', label: '加权随机（概率与权重成正比）' },
+      { value: 'top', label: '按权重直选（高分必先选）' },
+    ],
+  },
+]
+
+function paramsSummary(params: WeightAlgorithmParams): string {
+  return `首次+${params.first_use_bonus} 订单+${params.recent_order_bonus} 售出+${params.sold_bonus} 恢复${params.offline_recover_per_day}/${params.deleted_recover_per_day}天${params.exclude_sold ? ' 硬排售出' : ''} · ${params.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
+}
+
+export function WeightAlgorithms() {
+  const { addToast } = useUIStore()
+  const [loading, setLoading] = useState(true)
+  const [algorithms, setAlgorithms] = useState<WeightAlgorithm[]>([])
+  const [showForm, setShowForm] = useState(false)
+  const [editTarget, setEditTarget] = useState<WeightAlgorithm | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<WeightAlgorithm | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
+  const [showList, setShowList] = useState(false) // 算法列表默认折叠
+  const [previewTarget, setPreviewTarget] = useState<WeightAlgorithm | null>(null)
+  const [referencesTarget, setReferencesTarget] = useState<WeightAlgorithm | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await getWeightAlgorithms()
+      if (res.success) {
+        setAlgorithms(res.data?.list ?? [])
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    setLoading(true)
+    load().finally(() => setLoading(false))
+  }, [load])
+
+  const handleToggle = async (a: WeightAlgorithm) => {
+    try {
+      const res = await toggleWeightAlgorithm(a.id)
+      if (res.success) {
+        addToast({ type: 'success', message: res.message || '操作成功' })
+        load()
+      } else {
+        addToast({ type: 'error', message: res.message || '操作失败' })
+      }
+    } catch { addToast({ type: 'error', message: '操作失败' }) }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteConfirm) return
+    setDeleting(true)
+    try {
+      const res = await deleteWeightAlgorithm(deleteConfirm.id)
+      if (res.success) {
+        addToast({ type: 'success', message: '算法已删除' })
+        setDeleteConfirm(null)
+        load()
+      } else {
+        addToast({ type: 'error', message: res.message || '删除失败' })
+        setDeleteConfirm(null)
+      }
+    } catch { addToast({ type: 'error', message: '删除失败' }) }
+    finally { setDeleting(false) }
+  }
+
+  if (loading) return <PageLoading />
+
+  return (
+    <div className="space-y-3 sm:space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="page-title">上架权重算法</h1>
+          <p className="page-description">管理定时上架的选料算法：按使用历史与售卖情况为素材打分，定时发布随机模式引用算法决定选料优先级，支持效果预览与引用查看</p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-ios-secondary" onClick={() => load()}>
+            <RefreshCw className="w-4 h-4" />刷新
+          </button>
+        </div>
+      </div>
+
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="vben-card">
+        <div className="vben-card-header">
+          <div className="flex items-center gap-2 cursor-pointer select-none" onClick={() => setShowList(v => !v)}>
+            {showList
+              ? <ChevronUp className="w-4 h-4 text-slate-400" />
+              : <ChevronDown className="w-4 h-4 text-slate-400" />}
+            <h2 className="vben-card-title"><Scale className="w-4 h-4" />热度加权</h2>
+            <span className="badge-primary">共 {algorithms.length} 个</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="btn-ios-secondary btn-sm" onClick={() => setShowHelp(true)}>
+              <Info className="w-3.5 h-3.5" />算法说明
+            </button>
+            <button className="btn-ios-primary btn-sm" onClick={() => { setEditTarget(null); setShowForm(true) }}>
+              <Plus className="w-4 h-4" />新建算法
+            </button>
+          </div>
+        </div>
+
+        {/* 算法列表（整体折叠，默认折叠） */}
+        <AnimatePresence initial={false}>
+          {showList && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden"
+            >
+              <div className="vben-card-body border-t border-slate-200 dark:border-slate-700">
+                {algorithms.length === 0 ? (
+                  <p className="text-center text-slate-400 py-10">暂无算法，点击「新建算法」开始</p>
+                ) : (
+                  <div className="space-y-2">
+                    {algorithms.map(a => (
+                      <div key={a.id} className="flex flex-col sm:flex-row sm:items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-slate-800 dark:text-slate-100">{a.name}</span>
+                            {a.is_builtin && <span className="badge-primary">内置</span>}
+                            <span className={a.enabled ? 'badge-success' : 'badge-gray'}>{a.enabled ? '启用' : '停用'}</span>
+                            {a.ref_count > 0 && (
+                              <button
+                                className="badge-info cursor-pointer hover:opacity-80"
+                                title="点击查看引用该算法的规则"
+                                onClick={() => setReferencesTarget(a)}
+                              >
+                                被 {a.ref_count} 条规则引用
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1 font-mono">{paramsSummary(a.params)}</p>
+                          {a.description && <p className="text-sm text-slate-500 mt-0.5 truncate">{a.description}</p>}
+                        </div>
+                        {/* 内置算法同样展示三个按钮（保持行统一）：编辑可点击（弹窗内仅「硬排已售出」可调），停用/删除禁用 */}
+                        <div className="flex gap-2 flex-shrink-0">
+                          <button
+                            className="btn-ios-secondary btn-sm"
+                            title="查看算法效果（按当前素材计算权重）"
+                            onClick={() => setPreviewTarget(a)}
+                          >
+                            <BarChart3 className="w-3.5 h-3.5" />效果
+                          </button>
+                          <button
+                            className="btn-ios-secondary btn-sm"
+                            title={a.is_builtin ? '内置算法仅可调整「硬排已售出」' : '编辑'}
+                            onClick={() => { setEditTarget(a); setShowForm(true) }}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />编辑
+                          </button>
+                          <button
+                            className="btn-ios-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={a.is_builtin}
+                            title={a.is_builtin ? '系统内置算法不可停用' : (a.enabled ? '停用' : '启用')}
+                            onClick={() => handleToggle(a)}
+                          >
+                            {a.enabled ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            className="btn-ios-danger btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={a.is_builtin}
+                            title={a.is_builtin ? '系统内置算法不可删除' : '删除'}
+                            onClick={() => setDeleteConfirm(a)}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />删除
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+
+      {/* 算法说明弹窗 */}
+      <AnimatePresence>
+        {showHelp && (
+          <div className="modal-overlay" onClick={() => setShowHelp(false)}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+              className="modal-content max-w-xl max-h-[85vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="modal-header">
+                <h2 className="modal-title flex items-center gap-2">
+                  <Info className="w-5 h-5" />热度加权算法说明
+                </h2>
+                <button className="modal-close" onClick={() => setShowHelp(false)}><X className="w-5 h-5" /></button>
+              </div>
+              <div className="modal-body overflow-y-auto space-y-4 text-sm text-slate-600 dark:text-slate-300">
+                <p>
+                  「热度加权」用于定时发布随机模式：按使用历史与售卖情况为每个素材打分，选料时<b>权重越高越优先</b>，可选「按权重直选」或「加权随机」两种选料方式。素材池永不枯竭（保底 1 分），被下架/删除的素材会随时间逐步恢复权重。
+                </p>
+
+                <div>
+                  <h3 className="text-xs font-semibold text-slate-400 mb-1.5">权重公式</h3>
+                  <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 font-mono text-xs leading-relaxed">
+                    权重 = 100 基础分<br />
+                    &nbsp;&nbsp;+ 首次使用加成（从未发布过）<br />
+                    &nbsp;&nbsp;+ 近30天有订单加成<br />
+                    &nbsp;&nbsp;+ 已售出加成（复销信号）<br />
+                    &nbsp;&nbsp;− 下架恢复惩罚（每天恢复，50 天回满）<br />
+                    &nbsp;&nbsp;− 删除恢复惩罚（每天恢复，100 天回满）<br />
+                    &nbsp;&nbsp;− 失败扣分 × 近60天失败次数<br />
+                    &nbsp;&nbsp;保底 1 分
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-xs font-semibold text-slate-400 mb-1.5">参数说明</h3>
+                  <div className="space-y-1.5">
+                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">首次使用加成</span>从未出现在商品记录/发布日志/订单任何一处的素材加分（最高优先级）</p>
+                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">近30天订单加成</span>近期有订单的编号优先</p>
+                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">已售出加成</span>卖掉的款式重新上架是合理的复销行为</p>
+                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">下架/删除恢复速率</span>退场素材每天恢复的分数，控制「多久后可以重新被选中」</p>
+                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">失败扣分</span>减少容易发布失败的素材被选中的概率</p>
+                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">硬排已售出</span>开启后已售出编号完全不参与随机（硬排除）</p>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-xs font-semibold text-slate-400 mb-1.5">选料方式</h3>
+                  <div className="space-y-1.5">
+                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">加权随机</span>被选中概率与权重成正比：权重高 = 概率高，不保证必选</p>
+                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">按权重直选</span>按权重从高到低依次选取，高分必先选；补发轮同样按权重顺序</p>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-xs font-semibold text-slate-400 mb-1.5">执行顺序</h3>
+                  <p className="text-xs leading-relaxed">
+                    先硬过滤（去重：编号已在规则账号在售的素材 → 可选：硬排已售出），再对剩余素材按选料方式选取。
+                  </p>
+                </div>
+
+                <p className="text-xs text-slate-400 border-t border-slate-200 dark:border-slate-700 pt-2.5">
+                  规则在随机模式下选择算法；未选择时使用系统默认参数（热度均衡）。算法被停用后，引用它的规则自动回退默认参数；内置算法仅「硬排已售出」可调。
+                </p>
+              </div>
+              <div className="modal-footer flex-shrink-0">
+                <button className="btn-ios-primary" onClick={() => setShowHelp(false)}>知道了</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* 新建/编辑弹窗 */}
+      <AnimatePresence>
+        {showForm && (
+          <WeightAlgorithmFormModal
+            initial={editTarget}
+            onClose={() => { setShowForm(false); setEditTarget(null) }}
+            onSaved={() => { setShowForm(false); setEditTarget(null); load() }}
+          />
+        )}
+      </AnimatePresence>
+
+      <ConfirmModal
+        isOpen={!!deleteConfirm}
+        title="确认删除"
+        message={`确认删除权重算法「${deleteConfirm?.name ?? ''}」？被定时发布规则引用的算法无法删除。`}
+        confirmText="删除"
+        type="danger"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteConfirm(null)}
+      />
+
+      {/* 算法效果预览 */}
+      {previewTarget && (
+        <WeightAlgorithmPreviewModal
+          initial={previewTarget}
+          onClose={() => setPreviewTarget(null)}
+        />
+      )}
+
+      {/* 引用规则列表 */}
+      {referencesTarget && (
+        <WeightAlgorithmReferencesModal
+          initial={referencesTarget}
+          onClose={() => setReferencesTarget(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
+  initial: WeightAlgorithm | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const { addToast } = useUIStore()
+  // 内置算法：仅「硬排已售出」开关可调，其余字段与参数只读
+  const isBuiltin = !!initial?.is_builtin
+  const [loading, setLoading] = useState(false)
+  const [name, setName] = useState(initial?.name || '')
+  const [algorithmType, setAlgorithmType] = useState(initial?.algorithm_type || 'heat_weight')
+  const [description, setDescription] = useState(initial?.description || '')
+  const [params, setParams] = useState<WeightAlgorithmParams>(() => ({
+    first_use_bonus: initial?.params.first_use_bonus ?? 50,
+    recent_order_bonus: initial?.params.recent_order_bonus ?? 30,
+    sold_bonus: initial?.params.sold_bonus ?? 25,
+    offline_recover_per_day: initial?.params.offline_recover_per_day ?? 2,
+    deleted_recover_per_day: initial?.params.deleted_recover_per_day ?? 1,
+    fail_penalty: initial?.params.fail_penalty ?? 10,
+    exclude_sold: initial?.params.exclude_sold ?? false,
+    sample_mode: initial?.params.sample_mode ?? 'weighted',
+  }))
+
+  const handleSave = async () => {
+    if (!name.trim()) { addToast({ type: 'warning', message: '请输入算法名称' }); return }
+    setLoading(true)
+    try {
+      const payload = { name: name.trim(), algorithm_type: algorithmType, description: description.trim() || undefined, params }
+      const res = initial
+        ? await updateWeightAlgorithm(initial.id, payload)
+        : await createWeightAlgorithm(payload)
+      if (res.success) {
+        addToast({ type: 'success', message: initial ? '算法已更新' : '算法创建成功' })
+        onSaved()
+      } else {
+        addToast({ type: 'error', message: res.message || '保存失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '操作失败，请重试' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+        className="modal-content max-w-2xl max-h-[90vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2 className="modal-title flex items-center gap-2">
+            <Scale className="w-5 h-5" />{initial ? '编辑权重算法' : '新建权重算法'}
+          </h2>
+          <button className="modal-close" onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+        <div className="modal-body overflow-y-auto space-y-4">
+          {isBuiltin && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 rounded-lg bg-amber-50 dark:bg-amber-900/20 px-3 py-2">
+              系统内置算法：仅「硬排已售出」开关可调整，其余参数只读。
+            </p>
+          )}
+          <div className="input-group">
+            <label className="input-label">算法类型</label>
+            <select className="input-ios" value={algorithmType} disabled={isBuiltin}
+              onChange={e => setAlgorithmType(e.target.value)}>
+              <option value="heat_weight">热度加权</option>
+            </select>
+          </div>
+          <div className="input-group">
+            <label className="input-label">算法名称 <span className="text-red-500">*</span></label>
+            <input className="input-ios" placeholder="如：热度均衡" value={name}
+              onChange={e => setName(e.target.value)} maxLength={100} disabled={isBuiltin} />
+          </div>
+          <div className="input-group">
+            <label className="input-label">算法说明</label>
+            <input className="input-ios" placeholder="一句话描述策略（可选）" value={description}
+              onChange={e => setDescription(e.target.value)} maxLength={500} disabled={isBuiltin} />
+          </div>
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h3 className="vben-card-title text-sm">权重参数</h3>
+            </div>
+            <div className="vben-card-body grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {PARAM_FIELDS.map(f => (
+                <div key={f.key} className="input-group">
+                  <label className="input-label">{f.label}</label>
+                  {f.type === 'select' ? (
+                    <select className="input-ios" value={params[f.key] as string}
+                      disabled={isBuiltin && f.key !== 'exclude_sold'}
+                      onChange={e => setParams(p => ({ ...p, [f.key]: e.target.value }))}>
+                      {(f.options ?? []).map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  ) : f.type === 'bool' ? (
+                    <label className="switch-ios mt-1">
+                      <input type="checkbox" checked={params[f.key] as boolean}
+                        disabled={isBuiltin && f.key !== 'exclude_sold'}
+                        onChange={e => setParams(p => ({ ...p, [f.key]: e.target.checked }))} />
+                      <span className="switch-slider"></span>
+                    </label>
+                  ) : (
+                    <input type="number" className="input-ios" value={params[f.key] as number}
+                      disabled={isBuiltin && f.key !== 'exclude_sold'}
+                      onChange={e => setParams(p => ({ ...p, [f.key]: Number(e.target.value) || 0 }))} />
+                  )}
+                  <p className="text-xs text-slate-400 mt-0.5">{f.hint}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer flex-shrink-0">
+          <button className="btn-ios-secondary" onClick={onClose}>取消</button>
+          <button className="btn-ios-primary" disabled={loading} onClick={handleSave}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {initial ? '保存修改' : '创建算法'}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
+function WeightAlgorithmPreviewModal({ initial, onClose }: {
+  initial: WeightAlgorithm
+  onClose: () => void
+}) {
+  const { addToast } = useUIStore()
+  const [loading, setLoading] = useState(true)
+  const [entries, setEntries] = useState<WeightPreviewEntry[]>([])
+  const [total, setTotal] = useState(0)
+  const [emptyMessage, setEmptyMessage] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    getWeightAlgorithmPreview(initial.id)
+      .then(res => {
+        if (cancelled) return
+        if (res.success) {
+          setEntries(res.data?.list ?? [])
+          setTotal(res.data?.total ?? 0)
+          setEmptyMessage(res.message || '')
+        } else {
+          addToast({ type: 'error', message: res.message || '预览失败' })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) addToast({ type: 'error', message: '预览失败，请稍后重试' })
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [initial.id, addToast])
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+        className="modal-content max-w-2xl max-h-[85vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2 className="modal-title flex items-center gap-2 flex-wrap">
+            <BarChart3 className="w-5 h-5" />{initial.name} · 效果预览
+            <span className="badge-gray text-xs">
+              {initial.params.sample_mode === 'top' ? '按权重直选' : '加权随机'}
+            </span>
+          </h2>
+          <button className="modal-close" onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+        <div className="modal-body overflow-y-auto space-y-3 text-sm text-slate-600 dark:text-slate-300">
+          {(() => {
+            const filteredCount = entries.filter(e => e.on_sale_filtered).length
+            return (
+              <p className="text-xs text-slate-400">
+                对当前账号全部 {total} 条素材计算权重，降序排列；权重越高越容易被随机选中。
+                {filteredCount > 0 && (
+                  <>其中 <b>{filteredCount}</b> 条编号本地状态为在售，执行去重时会被硬过滤（行标灰）。</>
+                )}
+                每行下方为该素材的逐项分值构成。
+              </p>
+            )
+          })()}
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+            </div>
+          ) : entries.length === 0 ? (
+            <p className="text-center text-slate-400 py-10">{emptyMessage || '当前账号暂无素材，无法预览'}</p>
+          ) : (
+            <div className="space-y-1.5">
+              {entries.map((e, i) => {
+                const p = e.parts
+                const fmt = (v: number) => (v > 0 ? `+${v}` : String(v))
+                return (
+                  <div key={e.material_id} className={`p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 ${e.on_sale_filtered ? 'opacity-60' : ''}`}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-slate-400 w-6 text-right font-mono shrink-0">{i + 1}</span>
+                      <span className="badge-primary font-mono shrink-0">{e.item_no != null ? `A${e.item_no}` : '无编号'}</span>
+                      <span className="flex-1 min-w-[120px] truncate text-slate-700 dark:text-slate-200" title={e.title}>{e.title}</span>
+                      <span className="badge-info font-mono shrink-0">权重 {e.weight}</span>
+                      {e.on_sale_filtered && <span className="badge-gray shrink-0">在售（去重过滤）</span>}
+                      <span className="flex gap-1 flex-wrap shrink-0">
+                        {e.signals.first_use && <span className="badge-success">首次使用</span>}
+                        {e.signals.recent_order && <span className="badge-info">近30天订单</span>}
+                        {e.signals.sold && <span className="badge-primary">已售出</span>}
+                        {e.signals.offline_days != null && <span className="badge-gray">下架{e.signals.offline_days}天</span>}
+                        {e.signals.deleted_days != null && <span className="badge-gray">删除{e.signals.deleted_days}天</span>}
+                        {e.signals.fail_count > 0 && <span className="badge-gray">失败×{e.signals.fail_count}</span>}
+                      </span>
+                    </div>
+                    {/* 逐项分值构成 */}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5 pl-8 font-mono text-xs text-slate-500 dark:text-slate-400">
+                      <span>基础 {p.base}</span>
+                      <span>首次使用 {fmt(p.first_use_bonus)}</span>
+                      <span>近30天订单 {fmt(p.recent_order_bonus)}</span>
+                      <span>已售出 {fmt(p.sold_bonus)}</span>
+                      <span>下架 {fmt(p.offline_penalty)}</span>
+                      <span>删除 {fmt(p.deleted_penalty)}</span>
+                      <span>失败 {fmt(p.fail_penalty)}</span>
+                      <span className="text-slate-700 dark:text-slate-200 font-semibold">= 合计 {e.weight}{e.clamped ? '（保底1）' : ''}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer flex-shrink-0">
+          <button className="btn-ios-primary" onClick={onClose}>关闭</button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
+function WeightAlgorithmReferencesModal({ initial, onClose }: {
+  initial: WeightAlgorithm
+  onClose: () => void
+}) {
+  const { addToast } = useUIStore()
+  const [loading, setLoading] = useState(true)
+  const [references, setReferences] = useState<WeightAlgorithmReference[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    getWeightAlgorithmReferences(initial.id)
+      .then(res => {
+        if (cancelled) return
+        if (res.success) {
+          setReferences(res.data?.list ?? [])
+        } else {
+          addToast({ type: 'error', message: res.message || '查询失败' })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) addToast({ type: 'error', message: '查询失败，请稍后重试' })
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [initial.id, addToast])
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+        className="modal-content max-w-xl max-h-[80vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2 className="modal-title flex items-center gap-2">
+            <Scale className="w-5 h-5" />引用「{initial.name}」的规则
+          </h2>
+          <button className="modal-close" onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+        <div className="modal-body overflow-y-auto space-y-1.5 text-sm text-slate-600 dark:text-slate-300">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+            </div>
+          ) : references.length === 0 ? (
+            <p className="text-center text-slate-400 py-10">暂无规则引用该算法</p>
+          ) : (
+            references.map(r => (
+              <div key={r.id} className="flex flex-wrap items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
+                <span className="flex-1 min-w-[120px] font-medium text-slate-800 dark:text-slate-100">{r.name}</span>
+                <span className="badge-gray">#{r.id}</span>
+                <span className={r.publish_mode === 'random' ? 'badge-primary' : 'badge-gray'}>
+                  {r.publish_mode === 'random' ? `随机 ${r.random_count ?? 0} 条` : '指定发布'}
+                </span>
+                <span className={r.enabled ? 'badge-success' : 'badge-gray'}>{r.enabled ? '启用' : '停用'}</span>
+                {r.next_trigger_at && (
+                  <span className="text-xs text-slate-400 font-mono">下次触发 {r.next_trigger_at}</span>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+        <div className="modal-footer flex-shrink-0">
+          <button className="btn-ios-primary" onClick={onClose}>关闭</button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
+export default WeightAlgorithms

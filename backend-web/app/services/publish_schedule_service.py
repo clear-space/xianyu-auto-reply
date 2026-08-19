@@ -32,6 +32,7 @@ def _schedule_to_dict(s: PublishSchedule) -> dict:
         "publish_mode": s.publish_mode or "specified",
         "random_count": s.random_count,
         "deduplicate_enabled": bool(s.deduplicate_enabled),
+        "weight_algorithm_id": s.weight_algorithm_id,
         "enabled": s.enabled,
         "last_triggered_at": safe_isoformat(s.last_triggered_at),
         "next_trigger_at": safe_isoformat(s.next_trigger_at),
@@ -79,6 +80,7 @@ class PublishScheduleService:
             publish_mode=data.get("publish_mode", "specified"),
             random_count=data.get("random_count"),
             deduplicate_enabled=bool(data.get("deduplicate_enabled", False)),
+            weight_algorithm_id=data.get("weight_algorithm_id"),
             enabled=data.get("enabled", True),
         )
         # 计算首次触发时间
@@ -148,6 +150,9 @@ class PublishScheduleService:
         for field in updatable:
             if field in data and data[field] is not None:
                 setattr(schedule, field, data[field])
+        # 允许显式清除权重算法（None 值）
+        if "weight_algorithm_id" in data:
+            schedule.weight_algorithm_id = data["weight_algorithm_id"]
 
         # 指定发布模式下清掉随机配置（None 值不会被上面的通用循环处理）
         if schedule.publish_mode == "specified":
