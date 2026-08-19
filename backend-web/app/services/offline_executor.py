@@ -101,7 +101,6 @@ class OfflineExecutor:
 
             try:
                 async with async_session_maker() as session:
-                    from app.services.item_service import ItemService
                     from common.models.xy_account import XYAccount
                     from common.services.item_offline_service import batch_offline_items_from_xianyu
 
@@ -135,13 +134,15 @@ class OfflineExecutor:
                         str(r.get("item_id")): bool(r.get("success"))
                         for r in (result.get("results") or [])
                     }
-                    item_svc = ItemService(session)
                     for it in items:
                         if ok_map.get(it.item_id, False):
-                            deleted = await item_svc.delete_item(acc_row, it.item_id)
+                            # 下架成功：本地记录保留，标记 offline + offline_at（权重恢复信号来源）
+                            marked = await OfflineExecutor._mark_item_offline(
+                                session, acc_row, it.item_id
+                            )
                             entry["suc_count"] += 1
                             success_total += 1
-                            note = None if deleted else "远程已下架，本地记录已不存在"
+                            note = None if marked else "远程已下架，本地记录已不存在"
                             entry["items"].append(
                                 {"item_id": it.item_id, "result": "success", "note": note}
                             )
@@ -293,6 +294,30 @@ class OfflineExecutor:
 
     # 明细过大时丢弃商品级明细数组，仅保留账号级计数，保证落库体积可控
     _MAX_DETAIL_ITEMS = 500
+
+    @staticmethod
+    async def _mark_item_offline(session, account, item_id: str) -> bool:
+        """下架成功后本地标记 offline + offline_at（保留记录，供权重恢复信号）"""
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from common.models.xy_catalog_item import XYCatalogItem
+        from common.utils.time_utils import get_beijing_now
+
+        stmt = select(XYCatalogItem).where(
+            XYCatalogItem.owner_id == account.owner_id,
+            XYCatalogItem.account_pk == account.id,
+            XYCatalogItem.item_id == item_id,
+        )
+        obj = (await session.execute(stmt)).scalar_one_or_none()
+        if obj is None:
+            return False
+        meta = dict(obj.metadata_json or {})
+        meta["item_status"] = "offline"
+        meta["offline_at"] = get_beijing_now().isoformat()
+        obj.metadata_json = meta
+        flag_modified(obj, "metadata_json")
+        await session.commit()
+        return True
 
     @staticmethod
     def _compact_detail(detail_json: dict) -> dict:

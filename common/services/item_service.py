@@ -745,6 +745,11 @@ class ItemService:
                 if meta.get("item_status") == new_status:
                     continue
                 meta["item_status"] = new_status
+                # 退场状态补 offline_at（权重恢复信号起点）
+                if new_status in ("offline", "deleted", "inactive") and not meta.get("offline_at"):
+                    from common.utils.time_utils import get_beijing_now
+
+                    meta["offline_at"] = get_beijing_now().isoformat()
                 obj.metadata_json = meta
                 flag_modified(obj, "metadata_json")
                 await session.commit()
@@ -1128,10 +1133,13 @@ class ItemService:
         return True
 
     async def delete_item(self, account: XYAccount, item_id: str) -> bool:
-        """删除商品（同时删除关联表记录）"""
+        """删除商品（软标记：item_status=deleted + deleted_at，保留记录供权重恢复信号）。
+
+        商品记录不再物理删除；卡券关联同步解除。
+        """
         from loguru import logger
         from common.services.card_matcher import CardMatcher
-        
+
         stmt = (
             select(XYCatalogItem)
             .where(
@@ -1144,14 +1152,21 @@ class ItemService:
         item = result.scalars().first()
         if not item:
             return False
-        
+
         # 级联删除关联表记录
         matcher = CardMatcher(self.session)
         rel_count = await matcher.delete_relations_by_item_id(item_id)
         if rel_count > 0:
             logger.info(f"删除商品 {item_id} 的 {rel_count} 条卡券关联记录")
-        
-        await self.session.delete(item)
+
+        meta = dict(item.metadata_json or {})
+        meta["item_status"] = "deleted"
+        # 与下架/对账的 offline_at 信号统一用北京时间（权重恢复按天计算，避免时区偏移跨天误差）
+        from common.utils.time_utils import get_beijing_now
+
+        meta["deleted_at"] = get_beijing_now().isoformat()
+        item.metadata_json = meta
+        flag_modified(item, "metadata_json")
         await self.session.commit()
         return True
 

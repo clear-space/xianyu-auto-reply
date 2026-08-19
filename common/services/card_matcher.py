@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.card import Card
 from common.models.card_item_relation import CardItemRelation
+from common.services.item_service import _normalize_item_status
 
 
 from common.utils.time_utils import safe_isoformat
@@ -486,16 +487,18 @@ class CardMatcher:
             await self.session.commit()
             return stats
 
-        # 2. 查用户全部商品，按编号分组
+        # 2. 查用户全部商品，按编号分组（已删除商品不参与关联）
         item_rows = (
             await self.session.execute(
-                select(XYCatalogItem.item_id, XYCatalogItem.title).where(
+                select(XYCatalogItem.item_id, XYCatalogItem.title, XYCatalogItem.metadata_json).where(
                     XYCatalogItem.owner_id == user_id
                 )
             )
         ).all()
         item_map: Dict[tuple, List[str]] = {}
-        for item_id, title in item_rows:
+        for item_id, title, meta in item_rows:
+            if _normalize_item_status((meta or {}).get("item_status")) == "deleted":
+                continue
             key = extract_prefix_number(title)
             if key is not None:
                 item_map.setdefault(key, []).append(item_id)
@@ -557,14 +560,16 @@ class CardMatcher:
 
         item_rows = (
             await self.session.execute(
-                select(XYCatalogItem.item_id, XYCatalogItem.title).where(
+                select(XYCatalogItem.item_id, XYCatalogItem.title, XYCatalogItem.metadata_json).where(
                     XYCatalogItem.owner_id == user_id,
                     XYCatalogItem.item_id.in_(cleaned_ids),
                 )
             )
         ).all()
         item_map: Dict[tuple, List[str]] = {}
-        for item_id, title in item_rows:
+        for item_id, title, meta in item_rows:
+            if _normalize_item_status((meta or {}).get("item_status")) == "deleted":
+                continue
             key = extract_prefix_number(title)
             if key is not None:
                 item_map.setdefault(key, []).append(item_id)
