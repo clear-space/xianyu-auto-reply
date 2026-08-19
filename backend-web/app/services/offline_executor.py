@@ -222,7 +222,7 @@ class OfflineExecutor:
         from common.models.xy_account import XYAccount
         from common.models.xy_catalog_item import XYCatalogItem
         from common.models.xy_order import XYOrder
-        from common.services.item_service import get_item_publish_time
+        from common.services.item_service import _normalize_item_status, get_item_publish_time
 
         async with async_session_maker() as session:
             now = get_beijing_now()
@@ -265,6 +265,13 @@ class OfflineExecutor:
 
                 candidates = []
                 for row in rows:
+                    # 只在售商品参与下架（已售出/已下架/已删除/已失效/未知状态均跳过，
+                    # 否则下架接口对非在售商品必然失败）
+                    status = _normalize_item_status(
+                        (row.metadata_json or {}).get("item_status")
+                    )
+                    if status != "on_sale":
+                        continue
                     publish_at = get_item_publish_time(row.metadata_json, row.created_at)
                     if publish_at is None or publish_at >= offline_cutoff:
                         continue  # 上架未满 X 天
