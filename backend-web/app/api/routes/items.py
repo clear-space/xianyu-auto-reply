@@ -107,18 +107,20 @@ async def list_items_paginated(
     is_polished: bool | None = Query(default=None, description="是否擦亮筛选"),
     is_multi_spec: bool | None = Query(default=None, description="多规格筛选"),
     multi_quantity_delivery: bool | None = Query(default=None, description="多数量发货筛选"),
+    item_status: str | None = Query(default=None, description="商品状态筛选：on_sale/sold/offline/deleted/unknown"),
     current_user: User = Depends(deps.get_current_active_user),
     item_service: ItemService = Depends(deps.get_item_service),
 ):
     """获取商品列表（分页），支持多条件筛选
-    
+
     管理员可查看所有商品。
-    
+
     筛选条件：
     - keyword: 关键字（商品ID、标题、详情）
     - is_polished: 是否擦亮（true/false）
     - is_multi_spec: 多规格（true/false）
     - multi_quantity_delivery: 多数量发货（true/false）
+    - item_status: 商品状态（on_sale/sold/offline/deleted/unknown）
     """
     owner_id, _ = resolve_owner_scope(current_user)
     items, total = await item_service.list_items_paginated(
@@ -130,6 +132,7 @@ async def list_items_paginated(
         is_polished=is_polished,
         is_multi_spec=is_multi_spec,
         multi_quantity_delivery=multi_quantity_delivery,
+        item_status=item_status,
     )
     
     return {

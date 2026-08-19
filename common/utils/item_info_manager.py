@@ -81,8 +81,9 @@ class ItemInfoManager:
             self.session = None
             self._own_session = False
 
-    async def get_item_list_info(self, page_number=1, page_size=20, retry_count=0, 
-                                  update_config_cookies_callback=None, myid=None):
+    async def get_item_list_info(self, page_number=1, page_size=20, retry_count=0,
+                                  update_config_cookies_callback=None, myid=None,
+                                  group_name='在售', group_id=None, need_group_info=False):
         """获取商品列表信息，自动处理token失效的情况
 
         Args:
@@ -91,12 +92,15 @@ class ItemInfoManager:
             retry_count (int): 重试次数，内部使用
             update_config_cookies_callback: 更新Cookie的回调函数
             myid: 用户ID
+            group_name: 分组名（在售/已售出等）
+            group_id: 分组ID（不传时使用历史默认值，兼容旧调用）
+            need_group_info: True 时返回原始分组列表（raw_data.itemGroupList）
 
         Returns:
             dict: 包含商品列表的字典
         """
         from common.utils.xianyu_utils import trans_cookies, generate_sign
-        
+
         if retry_count >= 4:
             logger.error("获取商品信息失败，重试次数过多")
             return {"success": False, "error": "获取商品信息失败，重试次数过多"}
@@ -121,11 +125,11 @@ class ItemInfoManager:
         }
 
         data = {
-            'needGroupInfo': False,
+            'needGroupInfo': need_group_info,
             'pageNumber': page_number,
             'pageSize': page_size,
-            'groupName': '在售',
-            'groupId': '58877261',
+            'groupName': group_name,
+            'groupId': group_id if group_id is not None else '58877261',
             'defaultGroup': True,
             "userId": myid or self.cookie_id
         }

@@ -106,6 +106,7 @@ export interface Item {
   item_id: string
   title?: string
   item_title?: string
+  item_status?: string  // 商品状态：on_sale/sold/offline/deleted/unknown
   desc?: string
   item_description?: string
   item_detail?: string

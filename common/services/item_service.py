@@ -58,6 +58,28 @@ def normalize_publish_time(value) -> str | None:
     return None
 
 
+# 商品状态语义值：列表分组写入 int（0=在售, 1=已售出），对账写入字符串（offline/deleted/inactive/unknown）
+_ITEM_STATUS_INT_MAP = {0: "on_sale", 1: "sold"}
+_VALID_STATUS_STRINGS = ("on_sale", "sold", "offline", "deleted", "inactive", "unknown")
+
+
+def _normalize_item_status(raw) -> str:
+    """把本地存储的商品状态归一化为语义枚举：on_sale/sold/offline/deleted/inactive/unknown"""
+    if isinstance(raw, bool):
+        return "unknown"
+    if isinstance(raw, int):
+        return _ITEM_STATUS_INT_MAP.get(raw, "unknown")
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s in _VALID_STATUS_STRINGS:
+            return s
+        try:
+            return _ITEM_STATUS_INT_MAP.get(int(s), "unknown")
+        except ValueError:
+            return "unknown"
+    return "unknown"
+
+
 def get_item_publish_time(metadata_json: dict | None, created_at) -> datetime | None:
     """取商品上架时间（aware datetime）；metadata 缺失时兜底用本地首次入库时间。
 
@@ -180,6 +202,7 @@ class ItemService:
         is_polished: bool | None = None,
         is_multi_spec: bool | None = None,
         multi_quantity_delivery: bool | None = None,
+        item_status: str | None = None,
     ) -> tuple[list[dict], int]:
         """获取商品列表（分页），支持多条件筛选
         
@@ -251,7 +274,27 @@ class ItemService:
                         XYCatalogItem.metadata_json["multi_quantity_delivery"].is_(None)
                     )
                 )
-        
+
+        # 商品状态筛选（metadata_json.item_status：int 0/1 或字符串 offline/deleted/unknown）
+        if item_status:
+            status_expr = func.json_unquote(
+                func.json_extract(XYCatalogItem.metadata_json, "$.item_status")
+            )
+            if item_status == "unknown":
+                conditions.append(
+                    or_(
+                        XYCatalogItem.metadata_json.is_(None),
+                        status_expr.is_(None),
+                        status_expr == "unknown",
+                    )
+                )
+            elif item_status == "on_sale":
+                conditions.append(status_expr == "0")
+            elif item_status == "sold":
+                conditions.append(status_expr == "1")
+            else:
+                conditions.append(status_expr == item_status)
+
         if conditions:
             base_stmt = base_stmt.where(and_(*conditions))
         
@@ -399,88 +442,166 @@ class ItemService:
         total_saved_count = 0
         fetched_pages = 0
         matched_required_title_keyword = False
+        groups_complete = False  # 两个分组都成功抓完才允许对账（防误标）
         try:
-            page_number = 1
-            while True:
-                if max_pages and page_number > max_pages:
-                    logger.info(f"账号[{account.account_id}]商品同步达到最大页数限制 {max_pages}，停止获取")
-                    break
-
-                logger.info(f"账号[{account.account_id}]商品同步正在获取第 {page_number} 页")
-                result = await manager.get_item_list_info(page_number, page_size, myid=myid)
-
-                if not result or not result.get("success"):
-                    message = ""
-                    if isinstance(result, dict):
-                        message = result.get("message") or result.get("error") or ""
-                    logger.error(f"账号[{account.account_id}]商品同步获取第 {page_number} 页失败: {result}")
-                    return {"success": False, "message": message or f"获取第 {page_number} 页商品失败"}
-
-                items = result.get("items") or []
-                if not items:
-                    logger.info(f"账号[{account.account_id}]商品同步第 {page_number} 页无数据，结束获取")
-                    break
-
-                valid_items, skipped_count = self._collect_valid_item_entries(items)
-                unique_item_ids = list(dict.fromkeys(item_id for item_id, _ in valid_items))
-                existing_map = await self._get_existing_item_map(account, unique_item_ids)
-                page_matches_required_title = (
-                    bool(normalized_required_title_keyword)
-                    and any(
-                        normalized_required_title_keyword in str(item.get("title") or "")
-                        for _, item in valid_items
-                    )
+            # 0. 动态获取商品分组（在售/已售出），分组ID按账号变化，不写死
+            target_groups: list[tuple[str, Any]] = [("在售", None)]
+            try:
+                group_result = await manager.get_item_list_info(
+                    1, 5, myid=myid, need_group_info=True
                 )
-                if page_matches_required_title:
-                    matched_required_title_keyword = True
-                page_all_existing = (
-                    skipped_count == 0
-                    and bool(unique_item_ids)
-                    and len(existing_map) == len(unique_item_ids)
-                )
-
-                try:
-                    saved_count, page_changed_count = await self.save_fetched_items(
-                        account,
-                        items,
+                if group_result and group_result.get("success"):
+                    raw = group_result.get("raw_data") or {}
+                    group_map: dict[str, Any] = {}
+                    for g in (raw.get("itemGroupList") or []):
+                        name = g.get("groupName")
+                        gid = g.get("groupId")
+                        if name in ("在售", "已售出") and gid is not None:
+                            group_map[name] = gid
+                    if group_map:
+                        target_groups = [
+                            (name, group_map.get(name)) for name in ("在售", "已售出")
+                        ]
+                        logger.info(f"账号[{account.account_id}]商品分组: {list(group_map.items())}")
+                    else:
+                        logger.warning(
+                            f"账号[{account.account_id}]未获取到商品分组，仅抓取在售分组（跳过对账）"
+                        )
+                else:
+                    logger.warning(
+                        f"账号[{account.account_id}]获取商品分组失败，仅抓取在售分组（跳过对账）"
                     )
-                except Exception as exc:
-                    await self.session.rollback()
-                    return {"success": False, "message": f"保存商品失败: {exc}"}
-                fetched_items.extend(items)
-                total_saved_count += saved_count
-                fetched_pages = page_number
+            except Exception as exc:
+                logger.warning(f"账号[{account.account_id}]获取商品分组异常（回退仅抓在售）: {exc}")
 
-                logger.info(
-                    f"账号[{account.account_id}]商品同步第{page_number}页完成，本页{len(items)}件，"
-                    f"累计抓取{len(fetched_items)}件，整页已存在={page_all_existing}，"
-                    f"命中目标商品={page_matches_required_title}"
-                )
+            for group_name, group_id in target_groups:
+                group_status = 0 if group_name == "在售" else 1  # 0=在售, 1=已售出
+                page_number = 1
+                while True:
+                    if max_pages and page_number > max_pages:
+                        logger.info(
+                            f"账号[{account.account_id}]商品同步达到最大页数限制 {max_pages}，停止获取"
+                        )
+                        break
 
-                # 仅当本页全部商品已存在且无实际字段变更（如价格/标题变化）时才停止翻页；
-                # 若有商品被更新（如卖家在闲鱼改价），需继续翻页以免遗漏更早商品的变更。
-                if (
-                    stop_when_page_all_existing
-                    and page_all_existing
-                    and page_changed_count == 0
-                    and (
-                        not normalized_required_title_keyword
-                        or matched_required_title_keyword
+                    logger.info(
+                        f"账号[{account.account_id}]正在获取「{group_name}」分组第 {page_number} 页"
                     )
-                ):
-                    logger.info(f"账号[{account.account_id}]商品同步命中整页已存在且无字段变更，停止继续获取后续页面")
-                    break
+                    result = await manager.get_item_list_info(
+                        page_number, page_size, myid=myid,
+                        group_name=group_name, group_id=group_id,
+                    )
 
-                if len(items) < page_size:
-                    logger.info(f"账号[{account.account_id}]商品同步第 {page_number} 页数量少于页大小，结束获取")
-                    break
+                    if not result or not result.get("success"):
+                        message = ""
+                        if isinstance(result, dict):
+                            message = result.get("message") or result.get("error") or ""
+                        logger.error(
+                            f"账号[{account.account_id}]商品同步获取「{group_name}」第 {page_number} 页失败: {result}"
+                        )
+                        return {
+                            "success": False,
+                            "message": message or f"获取第 {page_number} 页商品失败",
+                        }
 
-                page_number += 1
-                await asyncio.sleep(1)
+                    items = result.get("items") or []
+                    if not items:
+                        logger.info(
+                            f"账号[{account.account_id}]「{group_name}」分组第 {page_number} 页无数据，结束该分组"
+                        )
+                        break
+
+                    # 标记分组状态（供状态列判定：0=在售, 1=已售出）
+                    for it in items:
+                        it["item_status"] = group_status
+
+                    valid_items, skipped_count = self._collect_valid_item_entries(items)
+                    unique_item_ids = list(dict.fromkeys(item_id for item_id, _ in valid_items))
+                    existing_map = await self._get_existing_item_map(account, unique_item_ids)
+                    page_matches_required_title = (
+                        bool(normalized_required_title_keyword)
+                        and any(
+                            normalized_required_title_keyword in str(item.get("title") or "")
+                            for _, item in valid_items
+                        )
+                    )
+                    if page_matches_required_title:
+                        matched_required_title_keyword = True
+                    page_all_existing = (
+                        skipped_count == 0
+                        and bool(unique_item_ids)
+                        and len(existing_map) == len(unique_item_ids)
+                    )
+
+                    try:
+                        saved_count, page_changed_count = await self.save_fetched_items(
+                            account,
+                            items,
+                        )
+                    except Exception as exc:
+                        await self.session.rollback()
+                        return {"success": False, "message": f"保存商品失败: {exc}"}
+                    fetched_items.extend(items)
+                    total_saved_count += saved_count
+                    fetched_pages += 1
+
+                    logger.info(
+                        f"账号[{account.account_id}]「{group_name}」第{page_number}页完成，本页{len(items)}件，"
+                        f"累计抓取{len(fetched_items)}件，整页已存在={page_all_existing}，"
+                        f"命中目标商品={page_matches_required_title}"
+                    )
+
+                    # 仅当本页全部商品已存在且无实际字段变更（如价格/标题变化）时才停止翻页；
+                    # 若有商品被更新（如卖家在闲鱼改价），需继续翻页以免遗漏更早商品的变更。
+                    if (
+                        stop_when_page_all_existing
+                        and page_all_existing
+                        and page_changed_count == 0
+                        and (
+                            not normalized_required_title_keyword
+                            or matched_required_title_keyword
+                        )
+                    ):
+                        logger.info(
+                            f"账号[{account.account_id}]「{group_name}」命中整页已存在且无字段变更，停止继续获取后续页面"
+                        )
+                        break
+
+                    if len(items) < page_size:
+                        logger.info(
+                            f"账号[{account.account_id}]「{group_name}」第 {page_number} 页数量少于页大小，结束该分组"
+                        )
+                        break
+
+                    page_number += 1
+                    await asyncio.sleep(1)
+
+            # 两个分组都抓完（未受 max_pages 截断）才认为完整
+            groups_complete = len(target_groups) >= 2 and not (
+                max_pages and fetched_pages >= max_pages
+            )
         except Exception as exc:
             return {"success": False, "message": f"获取商品失败: {exc}"}
         finally:
             await manager.close()
+
+        # 对账：本地存在但本次未返回的商品，通过详情接口判定状态（下架/删除/未知）
+        fetched_ids = {
+            str(it.get("id") or "").strip()
+            for it in fetched_items
+            if str(it.get("id") or "").strip()
+        }
+        on_sale_fetched = sum(
+            1 for it in fetched_items if it.get("item_status") == 0
+        )
+        if groups_complete and fetched_ids and on_sale_fetched > 0:
+            # 抓取到 0 件商品时不做对账（接口抖动/被限流时会误判全部本地商品）
+            try:
+                await self._reconcile_item_statuses(account, fetched_ids)
+            except Exception as exc:
+                logger.warning(
+                    f"账号[{account.account_id}] 商品状态对账失败（不影响商品同步）: {exc}"
+                )
 
         # 新商品入库后自动关联卡券（按前缀编号匹配；失败不影响商品同步主流程）
         try:
@@ -529,6 +650,108 @@ class ItemService:
                     f"[自动关联卡券] 账号 {account.account_id} 本次入库 {len(item_ids)} 件，"
                     f"新增关联 {stats['added']} 对（匹配卡券 {stats['matched_cards']} 张）"
                 )
+
+    async def _reconcile_item_statuses(self, account: XYAccount, fetched_ids: set) -> None:
+        """完整抓取后对账：本地存在但本次未返回的商品，通过详情接口判定状态。
+
+        - 已标记 offline/deleted 的商品不重复判定（下架/删除商品不会再出现在分组列表里）
+        - 节流约 1 秒/个；详情接口临时失败（网络异常等）跳过该商品，防止误标
+        - 判定结果写入 metadata_json.item_status：offline/deleted/unknown（字符串语义值）
+        """
+        from common.db.session import async_session_maker
+        from common.services.xianyu_detail_client import XianyuItemDetailClient
+
+        async with async_session_maker() as session:
+            local_rows = list(
+                (
+                    await session.execute(
+                        select(XYCatalogItem).where(
+                            XYCatalogItem.owner_id == account.owner_id,
+                            XYCatalogItem.account_pk == account.id,
+                        )
+                    )
+                ).scalars().all()
+            )
+
+        pending = [
+            row
+            for row in local_rows
+            if row.item_id not in fetched_ids
+            and (row.metadata_json or {}).get("item_status")
+            not in ("offline", "deleted", "inactive")
+        ]
+        if not pending:
+            return
+
+        logger.info(
+            f"[商品状态对账] 账号 {account.account_id}：{len(pending)} 个本地商品未在列表中，逐个判定状态"
+        )
+
+        client = XianyuItemDetailClient(
+            account.account_id, account.cookie, owner_id=account.owner_id
+        )
+
+        # 限流哨兵：详情接口的 FAIL_SYS_USER_VALIDATE 既可能是商品级（久置失效），
+        # 也可能是请求级（账号被限流时对一切商品都返回）。先探测一个确定在售的商品，
+        # 若在售商品也被拒绝，说明当前会话不可用，放弃本轮对账，防止整批误标。
+        canary_id = next(iter(fetched_ids), None)
+        if canary_id:
+            try:
+                canary = await client.get_detail(canary_id)
+            except Exception as exc:
+                logger.warning(
+                    f"[商品状态对账] 哨兵探测异常，放弃本轮对账: {exc}"
+                )
+                return
+            if not canary.get("success"):
+                logger.warning(
+                    f"[商品状态对账] 详情接口当前不可用（在售商品 {canary_id} 返回 "
+                    f"{str(canary.get('error'))[:60]}），疑似限流，放弃本轮对账"
+                )
+                return
+
+        async with async_session_maker() as session:
+            for row in pending:
+                try:
+                    detail = await client.get_detail(row.item_id)
+                    error_text = str(detail.get("error") or "")
+                    if detail.get("success"):
+                        item_do = (detail.get("detail") or {}).get("itemDO") or {}
+                        status = item_do.get("itemStatus")
+                        # -2=已下架（主动下架）；其他非预期值一律标未知
+                        new_status = "offline" if status == -2 else "unknown"
+                    elif "DEL_NOT_FOUND" in error_text:
+                        new_status = "deleted"
+                    elif "USER_VALIDATE" in error_text:
+                        # 哨兵已验证会话可用，此错误为商品级：久置的下架/删除无法再区分，标记失效
+                        new_status = "inactive"
+                    else:
+                        # 临时失败（网络异常/超时）：跳过，下一轮再判定
+                        continue
+                except Exception as exc:
+                    logger.warning(
+                        f"[商品状态对账] 商品 {row.item_id} 详情判定异常: {exc}"
+                    )
+                    continue
+
+                obj = (
+                    await session.execute(
+                        select(XYCatalogItem).where(XYCatalogItem.id == row.id)
+                    )
+                ).scalar_one_or_none()
+                if obj is None:
+                    continue
+                meta = dict(obj.metadata_json or {})
+                if meta.get("item_status") == new_status:
+                    continue
+                meta["item_status"] = new_status
+                obj.metadata_json = meta
+                flag_modified(obj, "metadata_json")
+                await session.commit()
+                logger.info(
+                    f"[商品状态对账] 商品 {row.item_id} 状态标记为 {new_status}"
+                )
+                await asyncio.sleep(1.5)
 
     async def fetch_all_items_from_accounts(
         self,
@@ -701,6 +924,14 @@ class ItemService:
             new_title = item.get("title", "")
             new_price = item.get("price_text", "")
             normalized_pt = normalize_publish_time(item.get("publish_time"))
+            raw_status = item.get("item_status")
+            if raw_status is not None and str(raw_status) not in ("", "None"):
+                try:
+                    normalized_status = int(raw_status)
+                except (ValueError, TypeError):
+                    normalized_status = None
+            else:
+                normalized_status = None
             changed = False
             if existing_item.title != new_title:
                 existing_item.title = new_title
@@ -716,10 +947,23 @@ class ItemService:
             if normalized_pt and metadata_json.get("publish_time") != normalized_pt:
                 metadata_json["publish_time"] = normalized_pt
                 changed = True
+            # 刷新商品状态（0=在售, 1=已售出；对账写入的 offline/deleted/unknown 仅在列表返回时被覆盖）
+            if (
+                normalized_status is not None
+                and metadata_json.get("item_status") != normalized_status
+            ):
+                metadata_json["item_status"] = normalized_status
+                changed = True
             if changed:
                 existing_item.metadata_json = metadata_json
                 flag_modified(existing_item, "metadata_json")
             return changed
+
+        raw_status = item.get("item_status")
+        try:
+            normalized_status = int(raw_status) if raw_status is not None and str(raw_status) not in ("", "None") else None
+        except (ValueError, TypeError):
+            normalized_status = None
 
         new_item = XYCatalogItem(
             owner_id=account.owner_id,
@@ -732,6 +976,7 @@ class ItemService:
                 "description": "",
                 "category": category,
                 "publish_time": normalize_publish_time(item.get("publish_time")),
+                "item_status": normalized_status,
                 "detail": json.dumps(item, ensure_ascii=False),
             },
             created_at=datetime.now(timezone.utc),
@@ -982,6 +1227,7 @@ class ItemService:
             "item_id": item.item_id,
             "title": item.title,
             "item_title": item.title,
+            "item_status": _normalize_item_status(metadata.get("item_status")),
             "item_description": metadata.get("description"),
             "item_detail": metadata.get("detail"),
             "item_category": metadata.get("category"),

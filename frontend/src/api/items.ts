@@ -28,6 +28,7 @@ export interface ItemFilterParams {
   is_polished?: boolean | null      // 是否擦亮
   is_multi_spec?: boolean | null    // 多规格
   multi_quantity_delivery?: boolean | null  // 多数量发货
+  item_status?: string | null       // 商品状态：on_sale/sold/offline/deleted/unknown
 }
 
 // 获取商品列表（分页）
@@ -64,6 +65,9 @@ export const getItemsPaginated = async (
     }
     if (filters.multi_quantity_delivery !== null && filters.multi_quantity_delivery !== undefined) {
       params.append('multi_quantity_delivery', String(filters.multi_quantity_delivery))
+    }
+    if (filters.item_status) {
+      params.append('item_status', filters.item_status)
     }
   }
   

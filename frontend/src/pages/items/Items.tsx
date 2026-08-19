@@ -13,6 +13,15 @@ import type { Account, Item } from '@/types'
 
 type ItemBooleanFilterKey = 'is_polished' | 'is_multi_spec' | 'multi_quantity_delivery'
 
+const ITEM_STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
+  on_sale: { label: '在售', cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
+  sold: { label: '已售出', cls: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
+  offline: { label: '已下架', cls: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' },
+  deleted: { label: '已删除', cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
+  inactive: { label: '已失效', cls: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400' },
+  unknown: { label: '未知', cls: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400' },
+}
+
 
 export function Items() {
   const { addToast } = useUIStore()
@@ -61,6 +70,7 @@ export function Items() {
     is_polished: null,
     is_multi_spec: null,
     multi_quantity_delivery: null,
+    item_status: null,
   })
 
   // 编辑弹窗状态
@@ -192,6 +202,13 @@ export function Items() {
     setFilters(newFilters)
     loadItems(1, pagination.pageSize, newFilters)
   }
+
+  /** 商品状态筛选变更 */
+  const handleStatusFilterChange = (value: string) => {
+    const newFilters = { ...filters, item_status: value || null }
+    setFilters(newFilters)
+    loadItems(1, pagination.pageSize, newFilters)
+  }
   
   // 重置筛选条件
   const handleResetFilters = () => {
@@ -199,6 +216,7 @@ export function Items() {
       is_polished: null,
       is_multi_spec: null,
       multi_quantity_delivery: null,
+      item_status: null,
     }
     setFilters(emptyFilters)
     skipNextSearchEffectRef.current = !!searchKeyword.trim()
@@ -1291,6 +1309,22 @@ export function Items() {
                 <option value="false">未擦亮</option>
               </select>
             </div>
+            <div className="input-group min-w-[120px]">
+              <label className="input-label">状态</label>
+              <select
+                value={filters.item_status ?? ''}
+                onChange={(e) => handleStatusFilterChange(e.target.value)}
+                className="input-ios"
+              >
+                <option value="">全部</option>
+                <option value="on_sale">在售</option>
+                <option value="sold">已售出</option>
+                <option value="offline">已下架</option>
+                <option value="deleted">已删除</option>
+                <option value="inactive">已失效</option>
+                <option value="unknown">未知</option>
+              </select>
+            </div>
             <div className="input-group min-w-[140px]">
               <label className="input-label">多规格</label>
               <select
@@ -1369,6 +1403,7 @@ export function Items() {
                   <th className="min-w-[150px]">账号ID</th>
                   <th className="min-w-[160px]">商品ID</th>
                   <th className="min-w-[260px]">商品标题</th>
+                  <th className="min-w-[90px] text-center">状态</th>
                   <th className="min-w-[80px]">价格</th>
                   <th className="min-w-[100px] text-center">是否擦亮</th>
                   <th className="min-w-[100px] text-center">多规格</th>
@@ -1438,6 +1473,16 @@ export function Items() {
                           {item.item_detail || item.desc}
                         </div>
                       )}
+                    </td>
+                    <td className="text-center">
+                      {(() => {
+                        const cfg = ITEM_STATUS_CONFIG[item.item_status || 'unknown'] || ITEM_STATUS_CONFIG.unknown
+                        return (
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${cfg.cls}`}>
+                            {cfg.label}
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className="text-amber-600 font-medium">
                       {item.item_price || (item.price ? `¥${item.price}` : '-')}
