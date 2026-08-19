@@ -206,6 +206,7 @@ class ScheduledPublishTaskService:
             schedule.next_trigger_at = _compute_next_trigger(
                 schedule.schedule_mode, schedule.schedule_config,
                 after=get_beijing_now(),
+                force_next_day=True,  # 触发后推进：随机模式固定到明天，防止同窗口重复触发
             )
             logger.info(
                 f"【{self.task_name}】规则 #{schedule.id} "

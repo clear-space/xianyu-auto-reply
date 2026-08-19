@@ -320,7 +320,8 @@ class PublishScheduleService:
             schedule.next_trigger_at = None
         else:
             schedule.next_trigger_at = _compute_next_trigger(
-                schedule.schedule_mode, schedule.schedule_config
+                schedule.schedule_mode, schedule.schedule_config,
+                force_next_day=True,  # 触发后推进：随机模式固定到明天，防止同窗口重复触发
             )
 
         await self.session.commit()

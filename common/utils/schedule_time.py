@@ -105,13 +105,18 @@ def _pick_trigger_time(config: dict) -> time:
     return _first_time_point(config)
 
 
-def _next_daily(config: dict, now: datetime, today) -> Optional[datetime]:
+def _next_daily(config: dict, now: datetime, today, force_next_day: bool = False) -> Optional[datetime]:
     """计算每天的 next_trigger_at"""
     use_random = config.get("random", False)
     time_range = config.get("time_range")
     times = config.get("times", [])
 
     if use_random and time_range:
+        if force_next_day:
+            # 触发后推进：当天随机窗口已消费，固定随机到明天（否则会随机到"今天稍后"导致同窗口重复触发）
+            return datetime.combine(
+                today + timedelta(days=1), _pick_trigger_time(config)
+            ).replace(tzinfo=BEIJING_TZ)
         # 时间段随机：每次计算都随机一个时间点
         candidate = datetime.combine(today, _pick_trigger_time(config)).replace(tzinfo=BEIJING_TZ)
         if candidate <= now:
@@ -138,7 +143,7 @@ def _next_daily(config: dict, now: datetime, today) -> Optional[datetime]:
     return candidate
 
 
-def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
+def _next_weekly(config: dict, now: datetime, today, force_next_day: bool = False) -> Optional[datetime]:
     """计算每周的 next_trigger_at"""
     days = config.get("days", [])
     if not days:
@@ -158,6 +163,8 @@ def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
         # 如果就是今天，检查时间是否已过
         if offset == 0:
             if use_random and time_range:
+                if force_next_day:
+                    continue  # 触发后推进：今天随机窗口已消费，跳到下一个匹配日
                 trigger_time = _pick_trigger_time(config)
                 candidate = datetime.combine(candidate_date, trigger_time).replace(tzinfo=BEIJING_TZ)
                 if candidate > now:
@@ -183,7 +190,8 @@ def _next_weekly(config: dict, now: datetime, today) -> Optional[datetime]:
 
 
 def compute_next_trigger(
-    schedule_mode: str, schedule_config: dict, after: datetime = None
+    schedule_mode: str, schedule_config: dict, after: datetime = None,
+    force_next_day: bool = False,
 ) -> Optional[datetime]:
     """
     根据调度配置计算下一次触发时间。
@@ -197,6 +205,8 @@ def compute_next_trigger(
         schedule_mode: once / daily / weekly
         schedule_config: 时间配置 JSON
         after: 计算此时间之后的下一次触发，默认当前时间
+        force_next_day: 触发后的推进场景传 True——随机模式固定随机到明天，
+            避免随机到"今天稍后"导致同一窗口内重复触发
 
     Returns:
         下次触发的 datetime（北京时间），如无法计算（如 once 已过期）返回 None
@@ -221,10 +231,10 @@ def compute_next_trigger(
         return dt
 
     if schedule_mode == "daily":
-        return _next_daily(schedule_config, now, today)
+        return _next_daily(schedule_config, now, today, force_next_day)
 
     if schedule_mode == "weekly":
-        return _next_weekly(schedule_config, now, today)
+        return _next_weekly(schedule_config, now, today, force_next_day)
 
     return None
 
