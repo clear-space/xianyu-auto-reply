@@ -1857,7 +1857,7 @@ class DatabaseInitializer:
                 description VARCHAR(500) COMMENT '算法说明',
                 params JSON NOT NULL COMMENT '权重参数JSON',
                 enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
-                is_builtin TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排已售出可调，不可删除/停用，列表置顶）',
+                is_builtin TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排已售出与选料方式可调，不可删除/停用，列表置顶）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_wa_enabled (enabled)
@@ -1903,7 +1903,7 @@ class DatabaseInitializer:
             ("schedule_name", "VARCHAR(100) DEFAULT NULL COMMENT '规则名称快照（规则删除后执行记录仍可查看名称）'", "schedule_id"),
         ],
         "xy_weight_algorithms": [
-            ("is_builtin", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排已售出可调，不可删除/停用，列表置顶）'", "enabled"),
+            ("is_builtin", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排已售出与选料方式可调，不可删除/停用，列表置顶）'", "enabled"),
             ("algorithm_type", "VARCHAR(32) NOT NULL DEFAULT 'heat_weight' COMMENT '算法类型：heat_weight-热度加权'", "name"),
         ],
         "xy_token_cache": [

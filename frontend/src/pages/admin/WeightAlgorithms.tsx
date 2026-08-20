@@ -188,7 +188,7 @@ export function WeightAlgorithms() {
                           </button>
                           <button
                             className="btn-ios-secondary btn-sm"
-                            title={a.is_builtin ? '内置算法仅可调整「硬排已售出」' : '编辑'}
+                            title={a.is_builtin ? '内置算法仅可调整「硬排已售出」与「选料方式」' : '编辑'}
                             onClick={() => { setEditTarget(a); setShowForm(true) }}
                           >
                             <Pencil className="w-3.5 h-3.5" />编辑
@@ -282,7 +282,7 @@ export function WeightAlgorithms() {
                 </div>
 
                 <p className="text-xs text-slate-400 border-t border-slate-200 dark:border-slate-700 pt-2.5">
-                  规则在随机模式下选择算法；未选择时使用系统默认参数（热度均衡）。算法被停用后，引用它的规则自动回退默认参数；内置算法仅「硬排已售出」可调。
+                  规则在随机模式下选择算法；未选择时使用系统默认参数（热度均衡）。算法被停用后，引用它的规则自动回退默认参数；内置算法仅「硬排已售出」与「选料方式」可调。
                 </p>
               </div>
               <div className="modal-footer flex-shrink-0">
@@ -340,7 +340,7 @@ function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
   onSaved: () => void
 }) {
   const { addToast } = useUIStore()
-  // 内置算法：仅「硬排已售出」开关可调，其余字段与参数只读
+  // 内置算法：仅「硬排已售出」与「选料方式」可调，其余字段与参数只读
   const isBuiltin = !!initial?.is_builtin
   const [loading, setLoading] = useState(false)
   const [name, setName] = useState(initial?.name || '')
@@ -394,7 +394,7 @@ function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
         <div className="modal-body overflow-y-auto space-y-4">
           {isBuiltin && (
             <p className="text-xs text-amber-600 dark:text-amber-400 rounded-lg bg-amber-50 dark:bg-amber-900/20 px-3 py-2">
-              系统内置算法：仅「硬排已售出」开关可调整，其余参数只读。
+              系统内置算法：仅「硬排已售出」与「选料方式」可调整，其余参数只读。
             </p>
           )}
           <div className="input-group">
@@ -424,7 +424,7 @@ function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
                   <label className="input-label">{f.label}</label>
                   {f.type === 'select' ? (
                     <select className="input-ios" value={params[f.key] as string}
-                      disabled={isBuiltin && f.key !== 'exclude_sold'}
+                      disabled={isBuiltin && f.key !== 'exclude_sold' && f.key !== 'sample_mode'}
                       onChange={e => setParams(p => ({ ...p, [f.key]: e.target.value }))}>
                       {(f.options ?? []).map(o => (
                         <option key={o.value} value={o.value}>{o.label}</option>
@@ -433,13 +433,13 @@ function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
                   ) : f.type === 'bool' ? (
                     <label className="switch-ios mt-1">
                       <input type="checkbox" checked={params[f.key] as boolean}
-                        disabled={isBuiltin && f.key !== 'exclude_sold'}
+                        disabled={isBuiltin && f.key !== 'exclude_sold' && f.key !== 'sample_mode'}
                         onChange={e => setParams(p => ({ ...p, [f.key]: e.target.checked }))} />
                       <span className="switch-slider"></span>
                     </label>
                   ) : (
                     <input type="number" className="input-ios" value={params[f.key] as number}
-                      disabled={isBuiltin && f.key !== 'exclude_sold'}
+                      disabled={isBuiltin && f.key !== 'exclude_sold' && f.key !== 'sample_mode'}
                       onChange={e => setParams(p => ({ ...p, [f.key]: Number(e.target.value) || 0 }))} />
                   )}
                   <p className="text-xs text-slate-400 mt-0.5">{f.hint}</p>

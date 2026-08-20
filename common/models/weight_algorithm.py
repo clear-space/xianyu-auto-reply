@@ -40,5 +40,5 @@ class WeightAlgorithm(TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")
     is_builtin: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False,
-        comment="是否系统内置（内置算法仅硬排已售出可调，不可删除/停用，列表置顶）",
+        comment="是否系统内置（内置算法仅硬排已售出与选料方式可调，不可删除/停用，列表置顶）",
     )

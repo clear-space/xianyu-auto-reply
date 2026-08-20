@@ -131,18 +131,18 @@ async def update_weight_algorithm(
     if algo is None:
         return ApiResponse(success=False, message="算法不存在")
     if algo.is_builtin:
-        # 内置算法：仅允许调整「硬排已售出」开关，其余字段与参数保持只读（静默忽略）
+        # 内置算法：仅允许调整「硬排已售出」与「选料方式」，其余字段与参数保持只读（静默忽略）
         if payload.params is not None:
+            normalized = normalize_weight_params(payload.params)
             merged = dict(algo.params or {})
-            merged["exclude_sold"] = bool(
-                normalize_weight_params(payload.params).get("exclude_sold", False)
-            )
+            merged["exclude_sold"] = bool(normalized.get("exclude_sold", False))
+            merged["sample_mode"] = normalized.get("sample_mode", "weighted")
             algo.params = merged
             await session.commit()
             await session.refresh(algo)
         return ApiResponse(
             success=True,
-            message="内置算法已更新（仅「硬排已售出」生效，其余参数只读）",
+            message="内置算法已更新（仅「硬排已售出」与「选料方式」生效，其余参数只读）",
             data=_to_dict(algo),
         )
 
