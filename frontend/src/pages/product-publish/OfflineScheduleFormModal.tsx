@@ -9,8 +9,9 @@
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { X, Loader2, Save, PackageX } from 'lucide-react'
+import { X, Loader2, Save, PackageX, FileText, CalendarClock, SlidersHorizontal, Users, Info } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
+import { SegmentedControl } from '@/components/common/SegmentedControl'
 import { getAccountDetails } from '@/api/accounts'
 import {
   createOfflineSchedule, updateOfflineSchedule,
@@ -160,47 +161,45 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
         </div>
         <div className="modal-body overflow-y-auto space-y-4">
 
-          {/* 规则名称 */}
-          <div className="input-group">
-            <label className="input-label">规则名称 <span className="text-red-500">*</span></label>
-            <input className="input-ios" placeholder="如：清理长期无单商品" value={name}
-              onChange={e => setName(e.target.value)} maxLength={100} />
-          </div>
-
-          {/* 重复模式 */}
-          <div className="input-group">
-            <label className="input-label">重复模式</label>
-            <div className="flex gap-2 mt-1">
-              {([
-                { key: 'daily', label: '每天' },
-                { key: 'weekly', label: '每周' },
-              ] as { key: ScheduleMode; label: string }[]).map(m => (
-                <button key={m.key} type="button" onClick={() => setScheduleMode(m.key)}
-                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
-                    scheduleMode === m.key
-                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600'
-                      : 'border-slate-300 dark:border-slate-600 text-slate-600 hover:border-blue-400'
-                  }`}>{m.label}</button>
-              ))}
+          {/* 基本信息 */}
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h3 className="vben-card-title text-sm"><FileText className="w-4 h-4" />基本信息</h3>
+            </div>
+            <div className="vben-card-body space-y-3">
+              <div className="input-group">
+                <label className="input-label">规则名称 <span className="text-red-500">*</span></label>
+                <input className="input-ios" placeholder="如：清理长期无单商品" value={name}
+                  onChange={e => setName(e.target.value)} maxLength={100} />
+              </div>
+              <div className="input-group">
+                <label className="input-label">重复模式</label>
+                <SegmentedControl<ScheduleMode>
+                  options={[
+                    { value: 'daily', label: '每天' },
+                    { value: 'weekly', label: '每周' },
+                  ]}
+                  value={scheduleMode}
+                  onChange={setScheduleMode}
+                />
+              </div>
             </div>
           </div>
 
-          {/* 时间配置 */}
+          {/* 执行时间 */}
           <div className="vben-card">
+            <div className="vben-card-header">
+              <h3 className="vben-card-title text-sm"><CalendarClock className="w-4 h-4" />执行时间</h3>
+            </div>
             <div className="vben-card-body space-y-3">
-              <div className="flex gap-2">
-                {([
-                  { key: 'fixed', label: '指定时间点' },
-                  { key: 'random', label: '时间段随机' },
-                ] as { key: TimeMode; label: string }[]).map(m => (
-                  <button key={m.key} type="button" onClick={() => setTimeMode(m.key)}
-                    className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${
-                      timeMode === m.key
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600'
-                        : 'border-slate-300 dark:border-slate-600 text-slate-600 hover:border-blue-400'
-                    }`}>{m.label}</button>
-                ))}
-              </div>
+              <SegmentedControl<TimeMode>
+                options={[
+                  { value: 'fixed', label: '指定时间点' },
+                  { value: 'random', label: '时间段随机' },
+                ]}
+                value={timeMode}
+                onChange={setTimeMode}
+              />
 
               {timeMode === 'fixed' ? (
                 <div>
@@ -259,7 +258,7 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
           {/* 筛选参数 */}
           <div className="vben-card">
             <div className="vben-card-header">
-              <h3 className="vben-card-title text-sm">筛选参数</h3>
+              <h3 className="vben-card-title text-sm"><SlidersHorizontal className="w-4 h-4" />筛选参数</h3>
             </div>
             <div className="vben-card-body space-y-3">
               <div className="grid grid-cols-3 gap-3">
@@ -288,9 +287,9 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
                   </div>
                 </div>
               </div>
-              <p className="text-xs text-slate-400">
-                条件：商品上架超过 {offlineDays} 天{noOrderDays > 0 ? ` 且最近 ${noOrderDays} 天内无订单` : '（不检查订单）'}，
-                上架最久的优先下架，每个账号最多下架 {maxCount} 个
+              <p className="flex items-start gap-1.5 text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg px-3 py-2">
+                <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                <span>条件：商品上架超过 {offlineDays} 天{noOrderDays > 0 ? ` 且最近 ${noOrderDays} 天内无订单` : '（不检查订单）'}，上架最久的优先下架，每个账号最多下架 {maxCount} 个</span>
               </p>
             </div>
           </div>
@@ -298,10 +297,13 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
           {/* 选择账号 */}
           <div className="vben-card">
             <div className="vben-card-header">
-              <h3 className="vben-card-title text-sm">选择账号（仅下架这些账号的商品）</h3>
-              <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllAccounts}>
-                {selectedAccounts.size === accounts.length && accounts.length > 0 ? '取消全选' : '全选'}
-              </button>
+              <h3 className="vben-card-title text-sm"><Users className="w-4 h-4" />选择账号（仅下架这些账号的商品）</h3>
+              <div className="flex items-center gap-2">
+                <span className="badge-primary text-xs">已选 {selectedAccounts.size} / {accounts.length}</span>
+                <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllAccounts}>
+                  {selectedAccounts.size === accounts.length && accounts.length > 0 ? '取消全选' : '全选'}
+                </button>
+              </div>
             </div>
             <div className="vben-card-body">
               {accounts.length === 0 ? (

@@ -9,8 +9,9 @@
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Clock, X, Loader2, Save, ChevronLeft, ChevronRight, Search, Image } from 'lucide-react'
+import { Clock, X, Loader2, Save, ChevronLeft, ChevronRight, Search, Image, FileText, CalendarClock, SlidersHorizontal, Users } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
+import { SegmentedControl } from '@/components/common/SegmentedControl'
 import { getAccountDetails } from '@/api/accounts'
 import { getMaterials, getAllMaterialIds, createSchedule, updateSchedule, getWeightAlgorithmOptions, type ProductMaterial, type PublishSchedule, type ScheduleConfig, type CreateScheduleParams, type UpdateScheduleParams, type WeightAlgorithmOption } from '@/api/productPublish'
 
@@ -305,34 +306,37 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
         </div>
         <div className="modal-body overflow-y-auto space-y-4">
 
-          {/* 规则名称 */}
-          <div className="input-group">
-            <label className="input-label">规则名称 <span className="text-red-500">*</span></label>
-            <input className="input-ios" placeholder="如：晚间随机发布" value={name}
-              onChange={e => setName(e.target.value)} maxLength={100} />
-          </div>
-
-          {/* 重复模式 */}
-          <div className="input-group">
-            <label className="input-label">重复模式</label>
-            <div className="flex gap-2 mt-1">
-              {([
-                { key: 'once', label: '仅一次' },
-                { key: 'daily', label: '每天' },
-                { key: 'weekly', label: '每周' },
-              ] as { key: ScheduleMode; label: string }[]).map(m => (
-                <button key={m.key} type="button" onClick={() => setScheduleMode(m.key)}
-                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
-                    scheduleMode === m.key
-                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600'
-                      : 'border-slate-300 dark:border-slate-600 text-slate-600 hover:border-blue-400'
-                  }`}>{m.label}</button>
-              ))}
+          {/* 基本信息 */}
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h3 className="vben-card-title text-sm"><FileText className="w-4 h-4" />基本信息</h3>
+            </div>
+            <div className="vben-card-body space-y-3">
+              <div className="input-group">
+                <label className="input-label">规则名称 <span className="text-red-500">*</span></label>
+                <input className="input-ios" placeholder="如：晚间随机发布" value={name}
+                  onChange={e => setName(e.target.value)} maxLength={100} />
+              </div>
+              <div className="input-group">
+                <label className="input-label">重复模式</label>
+                <SegmentedControl<ScheduleMode>
+                  options={[
+                    { value: 'once', label: '仅一次' },
+                    { value: 'daily', label: '每天' },
+                    { value: 'weekly', label: '每周' },
+                  ]}
+                  value={scheduleMode}
+                  onChange={setScheduleMode}
+                />
+              </div>
             </div>
           </div>
 
-          {/* 时间配置 */}
+          {/* 执行时间 */}
           <div className="vben-card">
+            <div className="vben-card-header">
+              <h3 className="vben-card-title text-sm"><CalendarClock className="w-4 h-4" />执行时间</h3>
+            </div>
             <div className="vben-card-body space-y-3">
 
               {scheduleMode === 'once' ? (
@@ -344,19 +348,14 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
               ) : (
                 <>
                   {/* 时间模式 */}
-                  <div className="flex gap-2">
-                    {([
-                      { key: 'fixed', label: '指定时间点' },
-                      { key: 'random', label: '时间段随机' },
-                    ] as { key: TimeMode; label: string }[]).map(m => (
-                      <button key={m.key} type="button" onClick={() => setTimeMode(m.key)}
-                        className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${
-                          timeMode === m.key
-                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600'
-                            : 'border-slate-300 dark:border-slate-600 text-slate-600 hover:border-blue-400'
-                        }`}>{m.label}</button>
-                    ))}
-                  </div>
+                  <SegmentedControl<TimeMode>
+                    options={[
+                      { value: 'fixed', label: '指定时间点' },
+                      { value: 'random', label: '时间段随机' },
+                    ]}
+                    value={timeMode}
+                    onChange={setTimeMode}
+                  />
 
                   {timeMode === 'fixed' ? (
                     <div>
@@ -414,28 +413,20 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
             </div>
           </div>
 
-          {/* 发布模式 */}
+          {/* 发布策略 */}
           <div className="vben-card">
             <div className="vben-card-header">
-              <h3 className="vben-card-title text-sm">发布模式</h3>
+              <h3 className="vben-card-title text-sm"><SlidersHorizontal className="w-4 h-4" />发布策略</h3>
             </div>
             <div className="vben-card-body space-y-3">
-              <div className="flex gap-2">
-                {([
-                  { key: 'specified', label: '指定发布', desc: '发布全部所选素材' },
-                  { key: 'random', label: '随机发布', desc: '每次触发从素材池随机选 N 条' },
-                ] as { key: PublishMode; label: string; desc: string }[]).map(m => (
-                  <button key={m.key} type="button" onClick={() => setPublishMode(m.key)}
-                    className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${
-                      publishMode === m.key
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600'
-                        : 'border-slate-300 dark:border-slate-600 text-slate-600 hover:border-blue-400'
-                    }`}>
-                    <div className="font-medium">{m.label}</div>
-                    <div className="text-xs opacity-70">{m.desc}</div>
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl<PublishMode>
+                options={[
+                  { value: 'specified', label: '指定发布', desc: '发布全部所选素材' },
+                  { value: 'random', label: '随机发布', desc: '每次触发随机选 N 条' },
+                ]}
+                value={publishMode}
+                onChange={setPublishMode}
+              />
 
               {publishMode === 'random' && (
                 <>
@@ -497,10 +488,13 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
           {/* 选择账号 */}
           <div className="vben-card">
             <div className="vben-card-header">
-              <h3 className="vben-card-title text-sm">选择账号</h3>
-              <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllAccounts}>
-                {selectedAccounts.size === accounts.length && accounts.length > 0 ? '取消全选' : '全选'}
-              </button>
+              <h3 className="vben-card-title text-sm"><Users className="w-4 h-4" />选择账号</h3>
+              <div className="flex items-center gap-2">
+                <span className="badge-primary text-xs">已选 {selectedAccounts.size} / {accounts.length}</span>
+                <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllAccounts}>
+                  {selectedAccounts.size === accounts.length && accounts.length > 0 ? '取消全选' : '全选'}
+                </button>
+              </div>
             </div>
             <div className="vben-card-body">
               {accounts.length === 0 ? (
