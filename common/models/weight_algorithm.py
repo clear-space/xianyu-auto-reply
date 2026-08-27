@@ -33,12 +33,12 @@ class WeightAlgorithm(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False, comment="算法名称")
     algorithm_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default="heat_weight",
-        comment="算法类型：heat_weight-热度加权（后续可扩展其他类型）",
+        comment="算法类型：heat_weight-热度加权, delist_weight-下架加权",
     )
     description: Mapped[str | None] = mapped_column(String(500), comment="算法说明")
     params: Mapped[dict] = mapped_column(JSON, nullable=False, comment="权重参数JSON")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")
     is_builtin: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False,
-        comment="是否系统内置（内置算法仅硬排已售出与选料方式可调，不可删除/停用，列表置顶）",
+        comment="是否系统内置（内置算法仅硬排开关与选料方式可调，不可删除/停用，列表置顶）",
     )

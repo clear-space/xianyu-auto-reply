@@ -81,7 +81,7 @@ class OfflineTaskService:
                     logger.info(
                         f"【{self.task_name}】触发规则 #{schedule.id}「{schedule.name}」"
                         f", 账号={len(schedule.account_ids)}, "
-                        f"参数={schedule.offline_days}天/{schedule.no_order_days}天/{schedule.max_count}个"
+                        f"上限={schedule.max_count}个, 算法ID={schedule.delist_algorithm_id}"
                     )
                     try:
                         submitted = await self._trigger_schedule(session, schedule, now)

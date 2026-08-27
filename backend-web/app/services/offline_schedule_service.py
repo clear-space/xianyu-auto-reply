@@ -28,9 +28,9 @@ def _schedule_to_dict(s: OfflineSchedule) -> dict:
         "schedule_mode": s.schedule_mode,
         "schedule_config": s.schedule_config or {},
         "account_ids": s.account_ids or [],
-        "offline_days": s.offline_days,
-        "no_order_days": s.no_order_days,
         "max_count": s.max_count,
+        "delist_algorithm_id": s.delist_algorithm_id,
+        "delist_algorithm_name": None,
         "enabled": s.enabled,
         "last_triggered_at": safe_isoformat(s.last_triggered_at),
         "next_trigger_at": safe_isoformat(s.next_trigger_at),
@@ -74,9 +74,8 @@ class OfflineScheduleService:
             schedule_mode=data.get("schedule_mode", "daily"),
             schedule_config=data.get("schedule_config", {}),
             account_ids=data.get("account_ids", []),
-            offline_days=int(data.get("offline_days", 7)),
-            no_order_days=int(data.get("no_order_days", 0)),
             max_count=int(data.get("max_count", 1)),
+            delist_algorithm_id=data.get("delist_algorithm_id"),
             enabled=data.get("enabled", True),
         )
         schedule.next_trigger_at = _compute_next_trigger(
@@ -110,13 +109,43 @@ class OfflineScheduleService:
         )
         rows = (await self.session.execute(stmt)).scalars().all()
 
+        result_list = [_schedule_to_dict(r) for r in rows]
+        await self._attach_algorithm_names(result_list)
         return {
-            "list": [_schedule_to_dict(r) for r in rows],
+            "list": result_list,
             "total": total,
             "page": page,
             "page_size": page_size,
             "total_pages": (total + page_size - 1) // page_size if total else 0,
         }
+
+    async def to_dict(self, schedule: OfflineSchedule) -> dict:
+        """规则转 dict（附下架算法名称，供单条返回）"""
+        result = _schedule_to_dict(schedule)
+        await self._attach_algorithm_names([result])
+        return result
+
+    async def _attach_algorithm_names(self, schedule_dicts: List[dict]) -> None:
+        """批量补全下架算法名称（算法已删除时名称为空）"""
+        from common.models.weight_algorithm import WeightAlgorithm
+
+        ids = {
+            s["delist_algorithm_id"]
+            for s in schedule_dicts
+            if s.get("delist_algorithm_id")
+        }
+        if not ids:
+            return
+        rows = (
+            await self.session.execute(
+                select(WeightAlgorithm.id, WeightAlgorithm.name).where(
+                    WeightAlgorithm.id.in_(ids)
+                )
+            )
+        ).all()
+        name_map = {row[0]: row[1] for row in rows}
+        for s in schedule_dicts:
+            s["delist_algorithm_name"] = name_map.get(s["delist_algorithm_id"])
 
     async def get(self, schedule_id: int, user_id: int = None) -> Optional[OfflineSchedule]:
         conds = [OfflineSchedule.id == schedule_id]
@@ -134,12 +163,15 @@ class OfflineScheduleService:
 
         updatable = [
             "name", "schedule_mode", "schedule_config",
-            "account_ids", "offline_days", "no_order_days", "max_count",
+            "account_ids", "max_count", "delist_algorithm_id",
             "enabled",
         ]
         for field in updatable:
             if field in data and data[field] is not None:
                 setattr(schedule, field, data[field])
+        # 允许显式清除下架算法（None 值不会被上面的通用循环处理）
+        if "delist_algorithm_id" in data:
+            schedule.delist_algorithm_id = data["delist_algorithm_id"]
 
         # 重新计算下次触发时间
         schedule.next_trigger_at = _compute_next_trigger(

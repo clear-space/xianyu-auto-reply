@@ -27,6 +27,7 @@ import {
   Package,
   PackageCheck,
   PackageSearch,
+  PackageX,
   Repeat,
   RotateCcw,
   ScrollText,
@@ -153,7 +154,8 @@ export const adminNavItems: NavEntry[] = [
     label: '优化算法',
     adminOnly: true,
     children: [
-      { key: 'admin-weight-algorithms', icon: Scale, label: '上架权重算法', path: '/admin/weight-algorithms', adminOnly: true },
+      { key: 'admin-heat-weight-algorithms', icon: Scale, label: '上架权重算法', path: '/admin/heat-weight-algorithms', adminOnly: true },
+      { key: 'admin-delist-weight-algorithms', icon: PackageX, label: '下架权重算法', path: '/admin/delist-weight-algorithms', adminOnly: true },
     ],
   },
   {

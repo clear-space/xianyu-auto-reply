@@ -171,7 +171,7 @@ export function OfflineRules({ onTotalChange }: Props) {
       {/* 标题栏 */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <p className="page-description">按上架时长与订单情况自动下架商品</p>
+          <p className="page-description">按下架权重算法为在售商品打分，权重高的优先自动下架</p>
         </div>
         <div className="flex gap-2">
           {selectedIds.length > 0 && (
@@ -206,8 +206,7 @@ export function OfflineRules({ onTotalChange }: Props) {
                 <th>规则名称</th>
                 <th>模式</th>
                 <th>时间配置</th>
-                <th>筛选参数</th>
-                <th>账号</th>
+                <th>账号/素材</th>
                 <th>下次触发</th>
                 <th>状态</th>
                 <th>操作</th>
@@ -215,7 +214,7 @@ export function OfflineRules({ onTotalChange }: Props) {
             </thead>
             <tbody>
               {schedules.length === 0 ? (
-                <tr><td colSpan={9} className="text-center py-12 text-slate-400">
+                <tr><td colSpan={8} className="text-center py-12 text-slate-400">
                   <div className="flex flex-col items-center gap-2"><PackageX className="w-12 h-12 text-slate-300" />
                     <p>暂无下架规则，点击「新建规则」开始</p></div>
                 </td></tr>
@@ -229,12 +228,16 @@ export function OfflineRules({ onTotalChange }: Props) {
                   <td>
                     <span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[160px]" title={s.name}>{s.name}</span>
                   </td>
-                  <td><span className="badge-gray">{MODE_LABELS[s.schedule_mode] || s.schedule_mode}</span></td>
-                  <td className="text-sm text-slate-500">{formatConfig(s)}</td>
-                  <td className="text-sm text-slate-500 whitespace-nowrap">
-                    上架&gt;{s.offline_days}天{s.no_order_days > 0 ? ` · 无单${s.no_order_days}天` : ' · 不查订单'} · 限{s.max_count}个
+                  <td>
+                    <span className="badge-gray">{MODE_LABELS[s.schedule_mode] || s.schedule_mode}</span>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      限 {s.max_count} 个{s.delist_algorithm_id
+                        ? ` · ${s.delist_algorithm_name || `算法#${s.delist_algorithm_id}`}`
+                        : ' · 下架均衡'}
+                    </div>
                   </td>
-                  <td className="text-sm text-slate-500">{(s.account_count ?? s.account_ids.length)} 个</td>
+                  <td className="text-sm text-slate-500">{formatConfig(s)}</td>
+                  <td className="text-sm text-slate-500">{(s.account_count ?? s.account_ids.length)} 账号</td>
                   <td>
                     <span className={`text-sm ${!s.enabled ? 'text-slate-400' : s.next_trigger_at && new Date(s.next_trigger_at).getTime() < Date.now() ? 'text-amber-600 font-medium' : 'text-slate-500'}`}>
                       {s.enabled ? formatNextTrigger(s.next_trigger_at) : '-'}

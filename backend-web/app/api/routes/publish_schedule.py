@@ -347,21 +347,25 @@ async def get_active_schedule_progress(
 
 @router.get("/weight-algorithms", response_model=ApiResponse)
 async def list_weight_algorithm_options(
+    algorithm_type: Optional[str] = Query(None, description="按类型过滤：heat_weight/delist_weight；不传=全部"),
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """启用中的权重算法列表（定时发布规则表单下拉用）
+    """启用中的权重算法列表（定时发布/定时下架规则表单下拉用）
 
     注意：必须声明在 /{schedule_id} 之前——FastAPI 按声明顺序匹配路径，
     后声明会被 /{schedule_id} 吞掉（422）。
     """
     from common.models.weight_algorithm import WeightAlgorithm
 
+    conds = [WeightAlgorithm.enabled == True]
+    if algorithm_type:
+        conds.append(WeightAlgorithm.algorithm_type == algorithm_type)
     rows = list(
         (
             await session.execute(
                 select(WeightAlgorithm)
-                .where(WeightAlgorithm.enabled == True)
+                .where(*conds)
                 .order_by(WeightAlgorithm.is_builtin.desc(), WeightAlgorithm.id)
             )
         ).scalars().all()

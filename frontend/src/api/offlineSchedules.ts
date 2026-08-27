@@ -20,9 +20,9 @@ export interface OfflineSchedule {
   schedule_mode: 'daily' | 'weekly'
   schedule_config: ScheduleConfig
   account_ids: string[]
-  offline_days: number
-  no_order_days: number
   max_count: number
+  delist_algorithm_id?: number | null
+  delist_algorithm_name?: string | null
   enabled: boolean
   last_triggered_at?: string | null
   next_trigger_at?: string | null
@@ -37,9 +37,8 @@ export interface CreateOfflineScheduleParams {
   schedule_mode: 'daily' | 'weekly'
   schedule_config: ScheduleConfig
   account_ids: string[]
-  offline_days: number
-  no_order_days: number
   max_count: number
+  delist_algorithm_id?: number | null
 }
 
 /** 更新下架规则参数 */
@@ -48,9 +47,8 @@ export interface UpdateOfflineScheduleParams {
   schedule_mode?: string
   schedule_config?: ScheduleConfig
   account_ids?: string[]
-  offline_days?: number
-  no_order_days?: number
   max_count?: number
+  delist_algorithm_id?: number | null
   enabled?: boolean
 }
 
@@ -73,9 +71,10 @@ export interface OfflineScheduleLog {
 
 /** 下架执行明细（detail_json） */
 export interface OfflineLogDetail {
-  offline_days?: number
-  no_order_days?: number
   max_count?: number
+  sample_mode?: string
+  algorithm_id?: number | null
+  algorithm_name?: string
   detail_truncated?: boolean
   accounts?: Array<{
     account_id: string
@@ -83,7 +82,7 @@ export interface OfflineLogDetail {
     suc_count: number
     fail_count: number
     error?: string
-    items?: Array<{ item_id: string; result: string; error?: string; note?: string }>
+    items?: Array<{ item_id: string; title?: string; item_no?: string | null; weight?: number; result: string; error?: string; note?: string }>
   }>
   missing_accounts?: string[]
 }

@@ -1933,9 +1933,8 @@ class DatabaseInitializer:
                 schedule_mode VARCHAR(20) NOT NULL DEFAULT 'daily' COMMENT '重复模式：daily-每天, weekly-每周',
                 schedule_config JSON NOT NULL COMMENT '时间配置JSON',
                 account_ids JSON NOT NULL COMMENT '闲鱼账号ID列表（仅下架这些账号的商品）',
-                offline_days INT NOT NULL DEFAULT 7 COMMENT '上架天数阈值X：上架早于X天前的商品才下架',
-                no_order_days INT NOT NULL DEFAULT 0 COMMENT '无订单天数Y：最近Y天内无订单才下架，0=不检查订单',
                 max_count INT NOT NULL DEFAULT 1 COMMENT '下架数量上限Z：每个账号每次触发最多下架Z个商品',
+                delist_algorithm_id BIGINT DEFAULT NULL COMMENT '下架权重算法ID（选品排序；NULL=系统默认参数）',
                 enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
                 last_triggered_at DATETIME COMMENT '上次触发时间',
                 next_trigger_at DATETIME COMMENT '下次触发时间',
@@ -1973,11 +1972,11 @@ class DatabaseInitializer:
             CREATE TABLE IF NOT EXISTS xy_weight_algorithms (
                 id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
                 name VARCHAR(100) NOT NULL COMMENT '算法名称',
-                algorithm_type VARCHAR(32) NOT NULL DEFAULT 'heat_weight' COMMENT '算法类型：heat_weight-热度加权',
+                algorithm_type VARCHAR(32) NOT NULL DEFAULT 'heat_weight' COMMENT '算法类型：heat_weight-热度加权, delist_weight-下架加权',
                 description VARCHAR(500) COMMENT '算法说明',
                 params JSON NOT NULL COMMENT '权重参数JSON',
                 enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
-                is_builtin TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排已售出与选料方式可调，不可删除/停用，列表置顶）',
+                is_builtin TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排开关与选料方式可调，不可删除/停用，列表置顶）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_wa_enabled (enabled)
@@ -1989,10 +1988,9 @@ class DatabaseInitializer:
     COLUMN_MIGRATIONS = {
         # 自动下架规则表：兼容旧实验代码预建的缺列表（逐列存在性检查，缺失才 ALTER）
         "xy_offline_schedules": [
-            ("offline_days", "INT NOT NULL DEFAULT 7 COMMENT '上架天数阈值X：上架早于X天前的商品才下架'", "account_ids"),
-            ("no_order_days", "INT NOT NULL DEFAULT 0 COMMENT '无订单天数Y：最近Y天内无订单才下架，0=不检查订单'", "offline_days"),
-            ("max_count", "INT NOT NULL DEFAULT 1 COMMENT '下架数量上限Z：每个账号每次触发最多下架Z个商品'", "no_order_days"),
-            ("enabled", "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'", "max_count"),
+            ("max_count", "INT NOT NULL DEFAULT 1 COMMENT '下架数量上限Z：每个账号每次触发最多下架Z个商品'", "account_ids"),
+            ("delist_algorithm_id", "BIGINT DEFAULT NULL COMMENT '下架权重算法ID（选品排序；NULL=系统默认参数）'", "max_count"),
+            ("enabled", "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'", "delist_algorithm_id"),
             ("last_triggered_at", "DATETIME COMMENT '上次触发时间'", "enabled"),
             ("next_trigger_at", "DATETIME COMMENT '下次触发时间'", "last_triggered_at"),
             ("created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'", "next_trigger_at"),
@@ -2023,8 +2021,8 @@ class DatabaseInitializer:
             ("schedule_name", "VARCHAR(100) DEFAULT NULL COMMENT '规则名称快照（规则删除后执行记录仍可查看名称）'", "schedule_id"),
         ],
         "xy_weight_algorithms": [
-            ("is_builtin", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排已售出与选料方式可调，不可删除/停用，列表置顶）'", "enabled"),
-            ("algorithm_type", "VARCHAR(32) NOT NULL DEFAULT 'heat_weight' COMMENT '算法类型：heat_weight-热度加权'", "name"),
+            ("is_builtin", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排开关与选料方式可调，不可删除/停用，列表置顶）'", "enabled"),
+            ("algorithm_type", "VARCHAR(32) NOT NULL DEFAULT 'heat_weight' COMMENT '算法类型：heat_weight-热度加权, delist_weight-下架加权'", "name"),
         ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
@@ -2225,6 +2223,12 @@ class DatabaseInitializer:
         ],
     }
 
+    # 字段删除迁移定义：表名 -> [字段名列表]（存在才 DROP，用于下线废弃字段）
+    COLUMN_DROPS = {
+        # 自动下架规则表：旧筛选参数（上架天数X/无订单天数Y）已被下架权重算法取代
+        "xy_offline_schedules": ["offline_days", "no_order_days"],
+    }
+
     async def init_all(self):
         """初始化所有数据库内容"""
         try:
@@ -2249,6 +2253,7 @@ class DatabaseInitializer:
 
                     # 4.5 初始化上架权重算法预设
                     await self.init_weight_algorithms()
+                    await self.init_delist_algorithms()
 
                     # 5. 初始化随机地址默认数据
                     await self.init_publish_addresses()
@@ -2338,10 +2343,31 @@ class DatabaseInitializer:
                     logger.warning(f"✗ 重命名表 {old_name} → {new_name} 失败: {e}")
 
     async def migrate_columns(self):
-        """检查并添加/修改字段"""
+        """检查并添加/修改字段（含废弃字段下线）"""
         logger.info("检查字段迁移...")
-        
+
         async with ddl_connection() as conn:
+            # 废弃字段下线：存在才 DROP
+            for table_name, drop_cols in self.COLUMN_DROPS.items():
+                for col_name in drop_cols:
+                    try:
+                        check_sql = text(f"""
+                            SELECT COUNT(*) FROM information_schema.COLUMNS
+                            WHERE TABLE_SCHEMA = DATABASE()
+                            AND TABLE_NAME = '{table_name}'
+                            AND COLUMN_NAME = '{col_name}'
+                        """)
+                        result = await conn.execute(check_sql)
+                        if result.scalar() > 0:
+                            await conn.execute(
+                                text(f"ALTER TABLE {table_name} DROP COLUMN {col_name}")
+                            )
+                            logger.info(f"✓ 表 {table_name} 删除废弃字段 {col_name}")
+                    except Exception as e:
+                        logger.warning(
+                            f"✗ 表 {table_name} 字段 {col_name} 删除失败: {describe_ddl_error(e)}"
+                        )
+
             for table_name, columns in self.COLUMN_MIGRATIONS.items():
                 for col_name, col_def, after_col in columns:
                     try:
@@ -3838,6 +3864,96 @@ class DatabaseInitializer:
                 logger.info(f"✓ 上架权重算法预设初始化完成，共 {len(self.DEFAULT_WEIGHT_ALGORITHMS)} 项")
         except Exception as e:
             logger.error(f"✗ 初始化上架权重算法预设失败: {e}")
+
+    DEFAULT_DELIST_ALGORITHMS = (
+        (
+            "下架均衡",
+            "下架加权默认策略：上架越久/无单越久越优先下架，保护近期有单与已擦亮商品",
+            {
+                "base_score": 100,
+                "age_points_per_day": 2,
+                "age_cap_days": 100,
+                "no_order_points_per_day": 8,
+                "no_order_cap_days": 30,
+                "recent_order_penalty": 120,
+                "polished_penalty": 60,
+                "min_score": 0,
+                "sample_mode": "top",
+                "exclude_recent_order": False,
+                "exclude_polished": False,
+            },
+        ),
+        (
+            "激进清仓",
+            "加速清理：老化与无单信号大幅加权，低分不下架，订单保护更弱",
+            {
+                "base_score": 50,
+                "age_points_per_day": 5,
+                "age_cap_days": 60,
+                "no_order_points_per_day": 15,
+                "no_order_cap_days": 20,
+                "recent_order_penalty": 60,
+                "polished_penalty": 20,
+                "min_score": 50,
+                "sample_mode": "top",
+                "exclude_recent_order": False,
+                "exclude_polished": False,
+            },
+        ),
+        (
+            "保守保值",
+            "谨慎下架：老化计分缓慢，订单与擦亮保护最强，尽量只下长期无单商品",
+            {
+                "base_score": 100,
+                "age_points_per_day": 1,
+                "age_cap_days": 200,
+                "no_order_points_per_day": 3,
+                "no_order_cap_days": 45,
+                "recent_order_penalty": 200,
+                "polished_penalty": 150,
+                "min_score": 0,
+                "sample_mode": "top",
+                "exclude_recent_order": False,
+                "exclude_polished": False,
+            },
+        ),
+    )
+
+    async def init_delist_algorithms(self):
+        """初始化下架权重算法预设（按名称幂等，不覆盖用户修改）"""
+        logger.info("初始化下架权重算法预设...")
+        try:
+            async with async_session_maker() as session:
+                for index, (name, description, params) in enumerate(self.DEFAULT_DELIST_ALGORITHMS):
+                    is_builtin = index == 0  # 第一个预置（下架均衡）为系统内置
+                    result = await session.execute(
+                        text("SELECT id FROM xy_weight_algorithms WHERE name = :name LIMIT 1"),
+                        {"name": name},
+                    )
+                    if result.fetchone():
+                        if is_builtin:
+                            await session.execute(
+                                text("UPDATE xy_weight_algorithms SET is_builtin = 1, enabled = 1 WHERE name = :name"),
+                                {"name": name},
+                            )
+                        continue
+                    await session.execute(
+                        text("""
+                            INSERT INTO xy_weight_algorithms
+                            (name, algorithm_type, description, params, enabled, is_builtin, created_at, updated_at)
+                            VALUES (:name, 'delist_weight', :description, :params, 1, :is_builtin, NOW(), NOW())
+                        """),
+                        {
+                            "name": name,
+                            "description": description,
+                            "params": json.dumps(params, ensure_ascii=False),
+                            "is_builtin": 1 if is_builtin else 0,
+                        },
+                    )
+                await session.commit()
+                logger.info(f"✓ 下架权重算法预设初始化完成，共 {len(self.DEFAULT_DELIST_ALGORITHMS)} 项")
+        except Exception as e:
+            logger.error(f"✗ 初始化下架权重算法预设失败: {e}")
 
     async def init_scheduled_tasks(self):
         """初始化定时任务配置"""

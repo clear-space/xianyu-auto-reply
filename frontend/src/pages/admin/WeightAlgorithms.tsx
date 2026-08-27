@@ -1,33 +1,46 @@
 /**
- * 上架权重算法管理页（管理员）
+ * 权重算法管理页（管理员）
+ *
+ * 优化算法目录下的两个同级页面共用本实现：
+ * - HeatWeightAlgorithms：上架权重算法（热度加权）
+ * - DelistWeightAlgorithms：下架权重算法（下架加权）
  *
  * 功能：
  * 1. 算法列表（默认折叠，防止算法新建过多占用页面；参数摘要/引用次数/启停）
- * 2. 新建/编辑算法（7 个权重参数）
- * 3. 算法说明弹窗（热度加权机制说明）
- * 4. 删除保护（被定时发布规则引用时后端拒绝）
+ * 2. 新建/编辑算法（参数表单按类型）
+ * 3. 算法说明弹窗（加权机制说明）
+ * 4. 效果预览（上架=素材权重；下架=在售商品权重）
+ * 5. 删除保护（被定时发布/定时下架规则引用时后端拒绝）
  */
 import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Pencil, Trash2, Power, PowerOff, RefreshCw, Scale, Info, X, Loader2, Save, ChevronDown, ChevronUp, BarChart3 } from 'lucide-react'
+import { Plus, Pencil, Trash2, Power, PowerOff, RefreshCw, Scale, Info, X, Loader2, Save, ChevronDown, ChevronUp, BarChart3, PackageX } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   getWeightAlgorithms, createWeightAlgorithm, updateWeightAlgorithm,
   deleteWeightAlgorithm, toggleWeightAlgorithm, getWeightAlgorithmPreview,
   getWeightAlgorithmReferences,
-  type WeightAlgorithm, type WeightAlgorithmParams, type WeightPreviewEntry,
+  type WeightAlgorithm, type WeightAlgorithmParams, type WeightAlgorithmType,
+  type WeightPreviewEntry, type HeatWeightPreviewEntry, type DelistWeightPreviewEntry,
   type WeightAlgorithmReference,
 } from '@/api/weightAlgorithms'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 
-const PARAM_FIELDS: Array<{
-  key: keyof WeightAlgorithmParams
+const TYPE_LABELS: Record<WeightAlgorithmType, string> = {
+  heat_weight: '热度加权',
+  delist_weight: '下架加权',
+}
+
+interface ParamField {
+  key: string
   label: string
   hint: string
   type: 'number' | 'bool' | 'select'
   options?: Array<{ value: string; label: string }>
-}> = [
+}
+
+const HEAT_PARAM_FIELDS: ParamField[] = [
   { key: 'first_use_bonus', label: '首次使用加成', hint: '从未发布过的素材加分（最高优先级）', type: 'number' },
   { key: 'recent_order_bonus', label: '近30天有订单加成', hint: '售卖情况好的编号加分', type: 'number' },
   { key: 'sold_bonus', label: '已售出加成', hint: '复销信号加分', type: 'number' },
@@ -47,11 +60,59 @@ const PARAM_FIELDS: Array<{
   },
 ]
 
-function paramsSummary(params: WeightAlgorithmParams): string {
-  return `首次+${params.first_use_bonus} 订单+${params.recent_order_bonus} 售出+${params.sold_bonus} 恢复${params.offline_recover_per_day}/${params.deleted_recover_per_day}天${params.exclude_sold ? ' 硬排售出' : ''} · ${params.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
+const DELIST_PARAM_FIELDS: ParamField[] = [
+  { key: 'base_score', label: '基础分', hint: '所有在售商品的起始分', type: 'number' },
+  { key: 'age_points_per_day', label: '上架老化加分', hint: '上架每多一天加的分（每天）', type: 'number' },
+  { key: 'age_cap_days', label: '上架计分封顶', hint: '上架天数计分上限（天）', type: 'number' },
+  { key: 'no_order_points_per_day', label: '无订单加分', hint: '无订单每多一天加的分（每天；无订单记录按上架天数计）', type: 'number' },
+  { key: 'no_order_cap_days', label: '无单计分封顶', hint: '无订单天数计分上限（天）', type: 'number' },
+  { key: 'recent_order_penalty', label: '近期订单扣分', hint: '近30天有订单的一次性扣分（保护）', type: 'number' },
+  { key: 'polished_penalty', label: '擦亮扣分', hint: '已擦亮商品的扣分（保护近期活跃商品）', type: 'number' },
+  { key: 'min_score', label: '下架分数线', hint: '权重低于该值不参与下架；0=不启用', type: 'number' },
+  {
+    key: 'sample_mode',
+    label: '选取方式',
+    hint: '按权重直选：高分必先下；加权随机：高分仅概率高',
+    type: 'select',
+    options: [
+      { value: 'top', label: '按权重直选（高分必先下）' },
+      { value: 'weighted', label: '加权随机（概率与权重成正比）' },
+    ],
+  },
+  { key: 'exclude_recent_order', label: '硬排近期有单', hint: '开启后近30天有订单的商品不参与下架', type: 'bool' },
+  { key: 'exclude_polished', label: '硬排已擦亮', hint: '开启后已擦亮的商品不参与下架', type: 'bool' },
+]
+
+/** 内置算法各类型可调参数键（其余参数只读） */
+const BUILTIN_EDITABLE_KEYS: Record<WeightAlgorithmType, string[]> = {
+  heat_weight: ['exclude_sold', 'sample_mode'],
+  delist_weight: ['exclude_recent_order', 'exclude_polished', 'sample_mode'],
 }
 
-export function WeightAlgorithms() {
+function defaultParamsFor(type: WeightAlgorithmType): Record<string, any> {
+  if (type === 'delist_weight') {
+    return {
+      base_score: 100, age_points_per_day: 2, age_cap_days: 100,
+      no_order_points_per_day: 8, no_order_cap_days: 30,
+      recent_order_penalty: 120, polished_penalty: 60, min_score: 0,
+      sample_mode: 'top', exclude_recent_order: false, exclude_polished: false,
+    }
+  }
+  return {
+    first_use_bonus: 50, recent_order_bonus: 30, sold_bonus: 25,
+    offline_recover_per_day: 2, deleted_recover_per_day: 1, fail_penalty: 10,
+    exclude_sold: false, sample_mode: 'weighted',
+  }
+}
+
+function paramsSummary(type: WeightAlgorithmType, p: any): string {
+  if (type === 'delist_weight') {
+    return `老化+${p.age_points_per_day}/天(封顶${p.age_cap_days}) 无单+${p.no_order_points_per_day}/天(封顶${p.no_order_cap_days}) 有单-${p.recent_order_penalty} 擦亮-${p.polished_penalty}${p.min_score > 0 ? ` 线${p.min_score}` : ''}${p.exclude_recent_order ? ' 硬排有单' : ''}${p.exclude_polished ? ' 硬排擦亮' : ''} · ${p.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
+  }
+  return `首次+${p.first_use_bonus} 订单+${p.recent_order_bonus} 售出+${p.sold_bonus} 恢复${p.offline_recover_per_day}/${p.deleted_recover_per_day}天${p.exclude_sold ? ' 硬排售出' : ''} · ${p.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
+}
+
+function WeightAlgorithmsPage({ algorithmType }: { algorithmType: WeightAlgorithmType }) {
   const { addToast } = useUIStore()
   const [loading, setLoading] = useState(true)
   const [algorithms, setAlgorithms] = useState<WeightAlgorithm[]>([])
@@ -77,6 +138,8 @@ export function WeightAlgorithms() {
     setLoading(true)
     load().finally(() => setLoading(false))
   }, [load])
+
+  const filtered = algorithms.filter(a => a.algorithm_type === algorithmType)
 
   const handleToggle = async (a: WeightAlgorithm) => {
     try {
@@ -113,8 +176,12 @@ export function WeightAlgorithms() {
     <div className="space-y-3 sm:space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="page-title">上架权重算法</h1>
-          <p className="page-description">管理定时上架的选料算法：按使用历史与售卖情况为素材打分，定时发布随机模式引用算法决定选料优先级，支持效果预览与引用查看</p>
+          <h1 className="page-title">{algorithmType === 'heat_weight' ? '上架权重算法' : '下架权重算法'}</h1>
+          <p className="page-description">
+            {algorithmType === 'heat_weight'
+              ? '管理定时发布随机模式的选料算法：按使用历史与售卖情况为素材打分，支持效果预览与引用查看'
+              : '管理定时下架的选品算法：按上架天数、订单与擦亮情况为在售商品打分，支持效果预览与引用查看'}
+          </p>
         </div>
         <div className="flex gap-2">
           <button className="btn-ios-secondary" onClick={() => load()}>
@@ -129,8 +196,13 @@ export function WeightAlgorithms() {
             {showList
               ? <ChevronUp className="w-4 h-4 text-slate-400" />
               : <ChevronDown className="w-4 h-4 text-slate-400" />}
-            <h2 className="vben-card-title"><Scale className="w-4 h-4" />热度加权</h2>
-            <span className="badge-primary">共 {algorithms.length} 个</span>
+            <h2 className="vben-card-title">
+              {algorithmType === 'heat_weight'
+                ? <Scale className="w-4 h-4" />
+                : <PackageX className="w-4 h-4" />}
+              {TYPE_LABELS[algorithmType]}
+            </h2>
+            <span className="badge-primary">共 {filtered.length} 个</span>
           </div>
           <div className="flex items-center gap-2">
             <button className="btn-ios-secondary btn-sm" onClick={() => setShowHelp(true)}>
@@ -153,11 +225,11 @@ export function WeightAlgorithms() {
               className="overflow-hidden"
             >
               <div className="vben-card-body border-t border-slate-200 dark:border-slate-700">
-                {algorithms.length === 0 ? (
+                {filtered.length === 0 ? (
                   <p className="text-center text-slate-400 py-10">暂无算法，点击「新建算法」开始</p>
                 ) : (
                   <div className="space-y-2">
-                    {algorithms.map(a => (
+                    {filtered.map(a => (
                       <div key={a.id} className="flex flex-col sm:flex-row sm:items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -174,21 +246,21 @@ export function WeightAlgorithms() {
                               </button>
                             )}
                           </div>
-                          <p className="text-xs text-slate-500 mt-1 font-mono">{paramsSummary(a.params)}</p>
+                          <p className="text-xs text-slate-500 mt-1 font-mono">{paramsSummary(a.algorithm_type, a.params)}</p>
                           {a.description && <p className="text-sm text-slate-500 mt-0.5 truncate">{a.description}</p>}
                         </div>
-                        {/* 内置算法同样展示三个按钮（保持行统一）：编辑可点击（弹窗内仅「硬排已售出」可调），停用/删除禁用 */}
+                        {/* 内置算法同样展示三个按钮（保持行统一）：编辑可点击（弹窗内仅硬排开关/选取方式可调），停用/删除禁用 */}
                         <div className="flex gap-2 flex-shrink-0">
                           <button
                             className="btn-ios-secondary btn-sm"
-                            title="查看算法效果（按当前素材计算权重）"
+                            title="查看算法效果（按当前数据计算权重）"
                             onClick={() => setPreviewTarget(a)}
                           >
                             <BarChart3 className="w-3.5 h-3.5" />效果
                           </button>
                           <button
                             className="btn-ios-secondary btn-sm"
-                            title={a.is_builtin ? '内置算法仅可调整「硬排已售出」与「选料方式」' : '编辑'}
+                            title={a.is_builtin ? '内置算法仅可调整硬排开关与选取方式' : '编辑'}
                             onClick={() => { setEditTarget(a); setShowForm(true) }}
                           >
                             <Pencil className="w-3.5 h-3.5" />编辑
@@ -220,7 +292,7 @@ export function WeightAlgorithms() {
         </AnimatePresence>
       </motion.div>
 
-      {/* 算法说明弹窗 */}
+      {/* 算法说明弹窗（按类型） */}
       <AnimatePresence>
         {showHelp && (
           <div className="modal-overlay" onClick={() => setShowHelp(false)}>
@@ -231,58 +303,107 @@ export function WeightAlgorithms() {
             >
               <div className="modal-header">
                 <h2 className="modal-title flex items-center gap-2">
-                  <Info className="w-5 h-5" />热度加权算法说明
+                  <Info className="w-5 h-5" />{TYPE_LABELS[algorithmType]}算法说明
                 </h2>
                 <button className="modal-close" onClick={() => setShowHelp(false)}><X className="w-5 h-5" /></button>
               </div>
               <div className="modal-body overflow-y-auto space-y-4 text-sm text-slate-600 dark:text-slate-300">
-                <p>
-                  「热度加权」用于定时发布随机模式：按使用历史与售卖情况为每个素材打分，选料时<b>权重越高越优先</b>，可选「按权重直选」或「加权随机」两种选料方式。素材池永不枯竭（保底 1 分），被下架/删除的素材会随时间逐步恢复权重。
-                </p>
+                {algorithmType === 'heat_weight' ? (
+                  <>
+                    <p>
+                      「热度加权」用于定时发布随机模式：按使用历史与售卖情况为每个素材打分，选料时<b>权重越高越优先</b>，可选「按权重直选」或「加权随机」两种选料方式。素材池永不枯竭（保底 1 分），被下架/删除的素材会随时间逐步恢复权重。
+                    </p>
 
-                <div>
-                  <h3 className="text-xs font-semibold text-slate-400 mb-1.5">权重公式</h3>
-                  <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 font-mono text-xs leading-relaxed">
-                    权重 = 100 基础分<br />
-                    &nbsp;&nbsp;+ 首次使用加成（从未发布过）<br />
-                    &nbsp;&nbsp;+ 近30天有订单加成<br />
-                    &nbsp;&nbsp;+ 已售出加成（复销信号）<br />
-                    &nbsp;&nbsp;− 下架恢复惩罚（每天恢复，50 天回满）<br />
-                    &nbsp;&nbsp;− 删除恢复惩罚（每天恢复，100 天回满）<br />
-                    &nbsp;&nbsp;− 失败扣分 × 近60天失败次数<br />
-                    &nbsp;&nbsp;保底 1 分
-                  </div>
-                </div>
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 mb-1.5">权重公式</h3>
+                      <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 font-mono text-xs leading-relaxed">
+                        权重 = 100 基础分<br />
+                        &nbsp;&nbsp;+ 首次使用加成（从未发布过）<br />
+                        &nbsp;&nbsp;+ 近30天有订单加成<br />
+                        &nbsp;&nbsp;+ 已售出加成（复销信号）<br />
+                        &nbsp;&nbsp;− 下架恢复惩罚（每天恢复，50 天回满）<br />
+                        &nbsp;&nbsp;− 删除恢复惩罚（每天恢复，100 天回满）<br />
+                        &nbsp;&nbsp;− 失败扣分 × 近60天失败次数<br />
+                        &nbsp;&nbsp;保底 1 分
+                      </div>
+                    </div>
 
-                <div>
-                  <h3 className="text-xs font-semibold text-slate-400 mb-1.5">参数说明</h3>
-                  <div className="space-y-1.5">
-                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">首次使用加成</span>从未出现在商品记录/发布日志/订单任何一处的素材加分（最高优先级）</p>
-                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">近30天订单加成</span>近期有订单的编号优先</p>
-                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">已售出加成</span>卖掉的款式重新上架是合理的复销行为</p>
-                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">下架/删除恢复速率</span>退场素材每天恢复的分数，控制「多久后可以重新被选中」</p>
-                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">失败扣分</span>减少容易发布失败的素材被选中的概率</p>
-                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">硬排已售出</span>开启后已售出编号完全不参与随机（硬排除）</p>
-                  </div>
-                </div>
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 mb-1.5">参数说明</h3>
+                      <div className="space-y-1.5">
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">首次使用加成</span>从未出现在商品记录/发布日志/订单任何一处的素材加分（最高优先级）</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">近30天订单加成</span>近期有订单的编号优先</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">已售出加成</span>卖掉的款式重新上架是合理的复销行为</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">下架/删除恢复速率</span>退场素材每天恢复的分数，控制「多久后可以重新被选中」</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">失败扣分</span>减少容易发布失败的素材被选中的概率</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">硬排已售出</span>开启后已售出编号完全不参与随机（硬排除）</p>
+                      </div>
+                    </div>
 
-                <div>
-                  <h3 className="text-xs font-semibold text-slate-400 mb-1.5">选料方式</h3>
-                  <div className="space-y-1.5">
-                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">加权随机</span>被选中概率与权重成正比：权重高 = 概率高，不保证必选</p>
-                    <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">按权重直选</span>按权重从高到低依次选取，高分必先选；补发轮同样按权重顺序</p>
-                  </div>
-                </div>
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 mb-1.5">选料方式</h3>
+                      <div className="space-y-1.5">
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">加权随机</span>被选中概率与权重成正比：权重高 = 概率高，不保证必选</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">按权重直选</span>按权重从高到低依次选取，高分必先选；补发轮同样按权重顺序</p>
+                      </div>
+                    </div>
 
-                <div>
-                  <h3 className="text-xs font-semibold text-slate-400 mb-1.5">执行顺序</h3>
-                  <p className="text-xs leading-relaxed">
-                    先硬过滤（去重：编号已在规则账号在售的素材 → 可选：硬排已售出），再对剩余素材按选料方式选取。
-                  </p>
-                </div>
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 mb-1.5">执行顺序</h3>
+                      <p className="text-xs leading-relaxed">
+                        先硬过滤（去重：编号已在规则账号在售的素材 → 可选：硬排已售出），再对剩余素材按选料方式选取。
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p>
+                      「下架加权」用于定时下架：按上架天数、订单与擦亮情况为每个在售商品打分，选品时<b>权重越高越先下架</b>，可选「按权重直选」或「加权随机」两种选取方式。仅「在售」状态商品参与（非在售下架接口必然失败）。
+                    </p>
+
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 mb-1.5">权重公式</h3>
+                      <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 font-mono text-xs leading-relaxed">
+                        权重 = 基础分<br />
+                        &nbsp;&nbsp;+ min(上架天数, 封顶) × 上架老化加分/天<br />
+                        &nbsp;&nbsp;+ min(无订单天数, 封顶) × 无订单加分/天<br />
+                        &nbsp;&nbsp;− 近期订单扣分（近30天有订单）<br />
+                        &nbsp;&nbsp;− 擦亮扣分（已擦亮）<br />
+                        &nbsp;&nbsp;下限 0 分（0 = 不参与下架）
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 mb-1.5">参数说明</h3>
+                      <div className="space-y-1.5">
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">上架老化加分</span>上架越久越该下，每天累计，封顶后不再增长</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">无订单加分</span>无订单越久越该下（无订单天数 = 最近订单距今；从未有单按上架天数计）</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">近期订单扣分</span>近30天有订单的商品一次性扣分（保护近期有单商品）</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">擦亮扣分</span>已擦亮 = 近期主动操作，扣分保护</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">下架分数线</span>权重低于该值的商品不参与下架；0 = 不启用</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">硬排近期有单/已擦亮</span>开启后对应商品完全不参与下架（硬排除）</p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 mb-1.5">选取方式</h3>
+                      <div className="space-y-1.5">
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">按权重直选</span>按权重从高到低依次选取，高分必先下</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">加权随机</span>被选中概率与权重成正比：权重高 = 概率高，不保证必下</p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 mb-1.5">执行顺序</h3>
+                      <p className="text-xs leading-relaxed">
+                        仅规则内账号的在售商品参与；先硬排（可选：硬排近期有单/已擦亮），再按选取方式每账号取不超过上限 Z 个。
+                      </p>
+                    </div>
+                  </>
+                )}
 
                 <p className="text-xs text-slate-400 border-t border-slate-200 dark:border-slate-700 pt-2.5">
-                  规则在随机模式下选择算法；未选择时使用系统默认参数（热度均衡）。算法被停用后，引用它的规则自动回退默认参数；内置算法仅「硬排已售出」与「选料方式」可调。
+                  规则未选择算法时使用系统默认参数。算法被停用后，引用它的规则自动回退默认参数；内置算法仅硬排开关与选取方式可调。
                 </p>
               </div>
               <div className="modal-footer flex-shrink-0">
@@ -298,6 +419,7 @@ export function WeightAlgorithms() {
         {showForm && (
           <WeightAlgorithmFormModal
             initial={editTarget}
+            defaultType={algorithmType}
             onClose={() => { setShowForm(false); setEditTarget(null) }}
             onSaved={() => { setShowForm(false); setEditTarget(null); load() }}
           />
@@ -307,7 +429,7 @@ export function WeightAlgorithms() {
       <ConfirmModal
         isOpen={!!deleteConfirm}
         title="确认删除"
-        message={`确认删除权重算法「${deleteConfirm?.name ?? ''}」？被定时发布规则引用的算法无法删除。`}
+        message={`确认删除权重算法「${deleteConfirm?.name ?? ''}」？被定时发布/定时下架规则引用的算法无法删除。`}
         confirmText="删除"
         type="danger"
         loading={deleting}
@@ -334,34 +456,37 @@ export function WeightAlgorithms() {
   )
 }
 
-function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
+function WeightAlgorithmFormModal({ initial, defaultType, onClose, onSaved }: {
   initial: WeightAlgorithm | null
+  defaultType: WeightAlgorithmType
   onClose: () => void
   onSaved: () => void
 }) {
   const { addToast } = useUIStore()
-  // 内置算法：仅「硬排已售出」与「选料方式」可调，其余字段与参数只读
+  // 内置算法：仅硬排开关与选取方式可调，其余字段与参数只读
   const isBuiltin = !!initial?.is_builtin
+  // 算法类型由页面入口决定（编辑时以算法实际类型为准）
+  const algorithmType: WeightAlgorithmType = initial?.algorithm_type || defaultType
   const [loading, setLoading] = useState(false)
   const [name, setName] = useState(initial?.name || '')
-  const [algorithmType, setAlgorithmType] = useState(initial?.algorithm_type || 'heat_weight')
   const [description, setDescription] = useState(initial?.description || '')
-  const [params, setParams] = useState<WeightAlgorithmParams>(() => ({
-    first_use_bonus: initial?.params.first_use_bonus ?? 50,
-    recent_order_bonus: initial?.params.recent_order_bonus ?? 30,
-    sold_bonus: initial?.params.sold_bonus ?? 25,
-    offline_recover_per_day: initial?.params.offline_recover_per_day ?? 2,
-    deleted_recover_per_day: initial?.params.deleted_recover_per_day ?? 1,
-    fail_penalty: initial?.params.fail_penalty ?? 10,
-    exclude_sold: initial?.params.exclude_sold ?? false,
-    sample_mode: initial?.params.sample_mode ?? 'weighted',
+  const [params, setParams] = useState<Record<string, any>>(() => ({
+    ...(initial?.params ?? defaultParamsFor(algorithmType)),
   }))
+
+  const isBuiltinEditable = (key: string) =>
+    isBuiltin && !BUILTIN_EDITABLE_KEYS[algorithmType].includes(key)
 
   const handleSave = async () => {
     if (!name.trim()) { addToast({ type: 'warning', message: '请输入算法名称' }); return }
     setLoading(true)
     try {
-      const payload = { name: name.trim(), algorithm_type: algorithmType, description: description.trim() || undefined, params }
+      const payload = {
+        name: name.trim(),
+        algorithm_type: algorithmType,
+        description: description.trim() || undefined,
+        params: params as WeightAlgorithmParams,
+      }
       const res = initial
         ? await updateWeightAlgorithm(initial.id, payload)
         : await createWeightAlgorithm(payload)
@@ -378,6 +503,8 @@ function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
     }
   }
 
+  const fields = algorithmType === 'delist_weight' ? DELIST_PARAM_FIELDS : HEAT_PARAM_FIELDS
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <motion.div
@@ -387,26 +514,20 @@ function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
       >
         <div className="modal-header">
           <h2 className="modal-title flex items-center gap-2">
-            <Scale className="w-5 h-5" />{initial ? '编辑权重算法' : '新建权重算法'}
+            {algorithmType === 'heat_weight' ? <Scale className="w-5 h-5" /> : <PackageX className="w-5 h-5" />}
+            {initial ? '编辑权重算法' : '新建权重算法'}
           </h2>
           <button className="modal-close" onClick={onClose}><X className="w-5 h-5" /></button>
         </div>
         <div className="modal-body overflow-y-auto space-y-4">
           {isBuiltin && (
             <p className="text-xs text-amber-600 dark:text-amber-400 rounded-lg bg-amber-50 dark:bg-amber-900/20 px-3 py-2">
-              系统内置算法：仅「硬排已售出」与「选料方式」可调整，其余参数只读。
+              系统内置算法：仅硬排开关与选取方式可调整，其余参数只读。
             </p>
           )}
           <div className="input-group">
-            <label className="input-label">算法类型</label>
-            <select className="input-ios" value={algorithmType} disabled={isBuiltin}
-              onChange={e => setAlgorithmType(e.target.value)}>
-              <option value="heat_weight">热度加权</option>
-            </select>
-          </div>
-          <div className="input-group">
             <label className="input-label">算法名称 <span className="text-red-500">*</span></label>
-            <input className="input-ios" placeholder="如：热度均衡" value={name}
+            <input className="input-ios" placeholder={algorithmType === 'delist_weight' ? '如：下架均衡' : '如：热度均衡'} value={name}
               onChange={e => setName(e.target.value)} maxLength={100} disabled={isBuiltin} />
           </div>
           <div className="input-group">
@@ -419,12 +540,12 @@ function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
               <h3 className="vben-card-title text-sm">权重参数</h3>
             </div>
             <div className="vben-card-body grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {PARAM_FIELDS.map(f => (
+              {fields.map(f => (
                 <div key={f.key} className="input-group">
                   <label className="input-label">{f.label}</label>
                   {f.type === 'select' ? (
                     <select className="input-ios" value={params[f.key] as string}
-                      disabled={isBuiltin && f.key !== 'exclude_sold' && f.key !== 'sample_mode'}
+                      disabled={isBuiltinEditable(f.key)}
                       onChange={e => setParams(p => ({ ...p, [f.key]: e.target.value }))}>
                       {(f.options ?? []).map(o => (
                         <option key={o.value} value={o.value}>{o.label}</option>
@@ -433,13 +554,13 @@ function WeightAlgorithmFormModal({ initial, onClose, onSaved }: {
                   ) : f.type === 'bool' ? (
                     <label className="switch-ios mt-1">
                       <input type="checkbox" checked={params[f.key] as boolean}
-                        disabled={isBuiltin && f.key !== 'exclude_sold' && f.key !== 'sample_mode'}
+                        disabled={isBuiltinEditable(f.key)}
                         onChange={e => setParams(p => ({ ...p, [f.key]: e.target.checked }))} />
                       <span className="switch-slider"></span>
                     </label>
                   ) : (
                     <input type="number" className="input-ios" value={params[f.key] as number}
-                      disabled={isBuiltin && f.key !== 'exclude_sold' && f.key !== 'sample_mode'}
+                      disabled={isBuiltinEditable(f.key)}
                       onChange={e => setParams(p => ({ ...p, [f.key]: Number(e.target.value) || 0 }))} />
                   )}
                   <p className="text-xs text-slate-400 mt-0.5">{f.hint}</p>
@@ -470,6 +591,8 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
   const [total, setTotal] = useState(0)
   const [emptyMessage, setEmptyMessage] = useState('')
 
+  const isDelist = initial.algorithm_type === 'delist_weight'
+
   useEffect(() => {
     let cancelled = false
     getWeightAlgorithmPreview(initial.id)
@@ -499,7 +622,8 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
       >
         <div className="modal-header">
           <h2 className="modal-title flex items-center gap-2 flex-wrap">
-            <BarChart3 className="w-5 h-5" />{initial.name} · 效果预览
+            {isDelist ? <PackageX className="w-5 h-5" /> : <BarChart3 className="w-5 h-5" />}
+            {initial.name} · 效果预览
             <span className="badge-gray text-xs">
               {initial.params.sample_mode === 'top' ? '按权重直选' : '加权随机'}
             </span>
@@ -507,8 +631,14 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
           <button className="modal-close" onClick={onClose}><X className="w-5 h-5" /></button>
         </div>
         <div className="modal-body overflow-y-auto space-y-3 text-sm text-slate-600 dark:text-slate-300">
-          {(() => {
-            const filteredCount = entries.filter(e => e.on_sale_filtered).length
+          {isDelist ? (
+            <p className="text-xs text-slate-400">
+              对当前账号全部 {total} 条在售商品计算下架权重，降序排列；权重越高越先被下架。
+              每行下方为该商品的逐项分值构成。
+            </p>
+          ) : (() => {
+            const filteredCount = entries
+              .filter(e => 'on_sale_filtered' in e && e.on_sale_filtered).length
             return (
               <p className="text-xs text-slate-400">
                 对当前账号全部 {total} 条素材计算权重，降序排列；权重越高越容易被随机选中。
@@ -524,10 +654,44 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
               <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
             </div>
           ) : entries.length === 0 ? (
-            <p className="text-center text-slate-400 py-10">{emptyMessage || '当前账号暂无素材，无法预览'}</p>
+            <p className="text-center text-slate-400 py-10">{emptyMessage || '暂无数据，无法预览'}</p>
+          ) : isDelist ? (
+            <div className="space-y-1.5">
+              {entries.map((raw, i) => {
+                const e = raw as DelistWeightPreviewEntry
+                const p = e.parts
+                const fmt = (v: number) => (v > 0 ? `+${v}` : String(v))
+                return (
+                  <div key={e.item_id} className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-slate-400 w-6 text-right font-mono shrink-0">{i + 1}</span>
+                      {e.account_id && <span className="badge-gray font-mono shrink-0">{e.account_id}</span>}
+                      <span className="flex-1 min-w-[120px] truncate text-slate-700 dark:text-slate-200" title={e.title}>{e.title}</span>
+                      <span className="badge-info font-mono shrink-0">权重 {e.weight}</span>
+                      <span className="flex gap-1 flex-wrap shrink-0">
+                        <span className="badge-gray">上架{e.signals.age_days}天</span>
+                        <span className="badge-gray">无单{e.signals.no_order_days}天</span>
+                        {e.signals.recent_order && <span className="badge-success">近30天有单</span>}
+                        {e.signals.polished && <span className="badge-primary">已擦亮</span>}
+                      </span>
+                    </div>
+                    {/* 逐项分值构成 */}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5 pl-8 font-mono text-xs text-slate-500 dark:text-slate-400">
+                      <span>基础 {p.base}</span>
+                      <span>老化 {fmt(p.age_points)}</span>
+                      <span>无单 {fmt(p.no_order_points)}</span>
+                      <span>有单 {fmt(p.recent_order_penalty)}</span>
+                      <span>擦亮 {fmt(p.polished_penalty)}</span>
+                      <span className="text-slate-700 dark:text-slate-200 font-semibold">= 合计 {e.weight}{e.clamped ? '（保底0）' : ''}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           ) : (
             <div className="space-y-1.5">
-              {entries.map((e, i) => {
+              {entries.map((raw, i) => {
+                const e = raw as HeatWeightPreviewEntry
                 const p = e.parts
                 const fmt = (v: number) => (v > 0 ? `+${v}` : String(v))
                 return (
@@ -579,6 +743,7 @@ function WeightAlgorithmReferencesModal({ initial, onClose }: {
   const { addToast } = useUIStore()
   const [loading, setLoading] = useState(true)
   const [references, setReferences] = useState<WeightAlgorithmReference[]>([])
+  const isDelist = initial.algorithm_type === 'delist_weight'
 
   useEffect(() => {
     let cancelled = false
@@ -607,7 +772,8 @@ function WeightAlgorithmReferencesModal({ initial, onClose }: {
       >
         <div className="modal-header">
           <h2 className="modal-title flex items-center gap-2">
-            <Scale className="w-5 h-5" />引用「{initial.name}」的规则
+            {isDelist ? <PackageX className="w-5 h-5" /> : <Scale className="w-5 h-5" />}
+            引用「{initial.name}」的规则
           </h2>
           <button className="modal-close" onClick={onClose}><X className="w-5 h-5" /></button>
         </div>
@@ -623,9 +789,13 @@ function WeightAlgorithmReferencesModal({ initial, onClose }: {
               <div key={r.id} className="flex flex-wrap items-center gap-2 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
                 <span className="flex-1 min-w-[120px] font-medium text-slate-800 dark:text-slate-100">{r.name}</span>
                 <span className="badge-gray">#{r.id}</span>
-                <span className={r.publish_mode === 'random' ? 'badge-primary' : 'badge-gray'}>
-                  {r.publish_mode === 'random' ? `随机 ${r.random_count ?? 0} 条` : '指定发布'}
-                </span>
+                {isDelist ? (
+                  <span className="badge-primary">每次最多 {r.max_count ?? 0} 个</span>
+                ) : (
+                  <span className={r.publish_mode === 'random' ? 'badge-primary' : 'badge-gray'}>
+                    {r.publish_mode === 'random' ? `随机 ${r.random_count ?? 0} 条` : '指定发布'}
+                  </span>
+                )}
                 <span className={r.enabled ? 'badge-success' : 'badge-gray'}>{r.enabled ? '启用' : '停用'}</span>
                 {r.next_trigger_at && (
                   <span className="text-xs text-slate-400 font-mono">下次触发 {r.next_trigger_at}</span>
@@ -642,4 +812,14 @@ function WeightAlgorithmReferencesModal({ initial, onClose }: {
   )
 }
 
-export default WeightAlgorithms
+/** 上架权重算法页（优化算法 → 上架权重算法） */
+export function HeatWeightAlgorithms() {
+  return <WeightAlgorithmsPage algorithmType="heat_weight" />
+}
+
+/** 下架权重算法页（优化算法 → 下架权重算法） */
+export function DelistWeightAlgorithms() {
+  return <WeightAlgorithmsPage algorithmType="delist_weight" />
+}
+
+export default HeatWeightAlgorithms

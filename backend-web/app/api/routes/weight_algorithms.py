@@ -1,10 +1,10 @@
 """
-上架权重算法管理路由（管理员）
+权重算法管理路由（管理员）
 
 功能：
-1. 权重算法 CRUD（管理员集中定义调参规则）
-2. 引用计数与删除保护（被定时发布规则引用的算法禁止删除）
-3. 定时发布规则表单通过 /product-publish/schedules/weight-algorithms 读取启用中的算法
+1. 权重算法 CRUD（管理员集中定义调参规则，上架热度加权 / 下架加权两种类型）
+2. 引用计数与删除保护（被定时发布/定时下架规则引用的算法禁止删除）
+3. 规则表单通过接口读取启用中的算法
 """
 from __future__ import annotations
 
@@ -16,14 +16,32 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from common.models.offline_schedule import OfflineSchedule
 from common.models.publish_schedule import PublishSchedule
 from common.models.user import User
 from common.models.weight_algorithm import WeightAlgorithm
 from common.schemas.common import ApiResponse
+from common.services.delist_scoring import DEFAULT_DELIST_PARAMS, normalize_delist_params
 from common.services.material_scoring import DEFAULT_WEIGHT_PARAMS, normalize_weight_params
 from common.utils.time_utils import safe_isoformat
 
-router = APIRouter(tags=["上架权重算法"])
+router = APIRouter(tags=["权重算法"])
+
+# 算法类型合法值
+ALGORITHM_TYPES = ("heat_weight", "delist_weight")
+
+# 内置算法各类型可调参数键（其余参数只读）
+_BUILTIN_EDITABLE_KEYS = {
+    "heat_weight": ("exclude_sold", "sample_mode"),
+    "delist_weight": ("exclude_recent_order", "exclude_polished", "sample_mode"),
+}
+
+
+def _normalize_params_by_type(algorithm_type: str, raw: Optional[dict]) -> dict:
+    """按算法类型归一化参数（白名单合并 + 非法值回退默认）"""
+    if algorithm_type == "delist_weight":
+        return normalize_delist_params(raw)
+    return normalize_weight_params(raw)
 
 
 def _to_dict(algo: WeightAlgorithm, ref_count: int = 0) -> dict:
@@ -32,7 +50,7 @@ def _to_dict(algo: WeightAlgorithm, ref_count: int = 0) -> dict:
         "name": algo.name,
         "algorithm_type": algo.algorithm_type,
         "description": algo.description,
-        "params": normalize_weight_params(algo.params),
+        "params": _normalize_params_by_type(algo.algorithm_type, algo.params),
         "enabled": bool(algo.enabled),
         "is_builtin": bool(algo.is_builtin),
         "ref_count": ref_count,
@@ -43,7 +61,7 @@ def _to_dict(algo: WeightAlgorithm, ref_count: int = 0) -> dict:
 
 class WeightAlgorithmCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="算法名称")
-    algorithm_type: str = Field("heat_weight", max_length=32, description="算法类型：heat_weight-热度加权")
+    algorithm_type: str = Field("heat_weight", max_length=32, description="算法类型：heat_weight-热度加权, delist_weight-下架加权")
     description: Optional[str] = Field(None, max_length=500, description="算法说明")
     params: Dict[str, Any] = Field(..., description="权重参数")
 
@@ -77,12 +95,21 @@ async def list_weight_algorithms(
         .group_by(PublishSchedule.weight_algorithm_id)
     )
     ref_map = {row[0]: row[1] for row in (await session.execute(ref_stmt)).all()}
+    # 下架规则引用合并（上架/下架算法同表存储，引用计数统一）
+    delist_ref_stmt = (
+        select(OfflineSchedule.delist_algorithm_id, func.count())
+        .where(OfflineSchedule.delist_algorithm_id.isnot(None))
+        .group_by(OfflineSchedule.delist_algorithm_id)
+    )
+    for row in (await session.execute(delist_ref_stmt)).all():
+        ref_map[row[0]] = ref_map.get(row[0], 0) + row[1]
     return ApiResponse(
         success=True,
         message="查询成功",
         data={
             "list": [_to_dict(a, int(ref_map.get(a.id, 0))) for a in rows],
             "default_params": DEFAULT_WEIGHT_PARAMS,
+            "default_delist_params": DEFAULT_DELIST_PARAMS,
         },
     )
 
@@ -102,11 +129,15 @@ async def create_weight_algorithm(
     if exists:
         return ApiResponse(success=False, message="算法名称已存在")
 
+    algo_type = payload.algorithm_type or "heat_weight"
+    if algo_type not in ALGORITHM_TYPES:
+        return ApiResponse(success=False, message=f"不支持的算法类型: {algo_type}")
+
     algo = WeightAlgorithm(
         name=payload.name.strip(),
-        algorithm_type=payload.algorithm_type or "heat_weight",
+        algorithm_type=algo_type,
         description=payload.description,
-        params=normalize_weight_params(payload.params),
+        params=_normalize_params_by_type(algo_type, payload.params),
         enabled=True,
     )
     session.add(algo)
@@ -131,18 +162,19 @@ async def update_weight_algorithm(
     if algo is None:
         return ApiResponse(success=False, message="算法不存在")
     if algo.is_builtin:
-        # 内置算法：仅允许调整「硬排已售出」与「选料方式」，其余字段与参数保持只读（静默忽略）
+        # 内置算法：仅允许调整硬排开关与选料方式，其余字段与参数保持只读（静默忽略）
         if payload.params is not None:
-            normalized = normalize_weight_params(payload.params)
+            editable = _BUILTIN_EDITABLE_KEYS.get(algo.algorithm_type, ("sample_mode",))
+            normalized = _normalize_params_by_type(algo.algorithm_type, payload.params)
             merged = dict(algo.params or {})
-            merged["exclude_sold"] = bool(normalized.get("exclude_sold", False))
-            merged["sample_mode"] = normalized.get("sample_mode", "weighted")
+            for key in editable:
+                merged[key] = normalized.get(key)
             algo.params = merged
             await session.commit()
             await session.refresh(algo)
         return ApiResponse(
             success=True,
-            message="内置算法已更新（仅「硬排已售出」与「选料方式」生效，其余参数只读）",
+            message="内置算法已更新（仅硬排开关与选料方式生效，其余参数只读）",
             data=_to_dict(algo),
         )
 
@@ -160,11 +192,13 @@ async def update_weight_algorithm(
             return ApiResponse(success=False, message="算法名称已存在")
         algo.name = name
     if payload.algorithm_type is not None:
+        if payload.algorithm_type not in ALGORITHM_TYPES:
+            return ApiResponse(success=False, message=f"不支持的算法类型: {payload.algorithm_type}")
         algo.algorithm_type = payload.algorithm_type
     if payload.description is not None:
         algo.description = payload.description
     if payload.params is not None:
-        algo.params = normalize_weight_params(payload.params)
+        algo.params = _normalize_params_by_type(algo.algorithm_type, payload.params)
     if payload.enabled is not None:
         algo.enabled = payload.enabled
 
@@ -179,7 +213,7 @@ async def delete_weight_algorithm(
     current_user: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
-    """删除权重算法（被定时发布规则引用时禁止删除）"""
+    """删除权重算法（被定时发布/定时下架规则引用时禁止删除）"""
     algo = (
         await session.execute(
             select(WeightAlgorithm).where(WeightAlgorithm.id == algorithm_id)
@@ -197,10 +231,17 @@ async def delete_weight_algorithm(
             .where(PublishSchedule.weight_algorithm_id == algorithm_id)
         )
     ).scalar() or 0
+    ref_count += (
+        await session.execute(
+            select(func.count())
+            .select_from(OfflineSchedule)
+            .where(OfflineSchedule.delist_algorithm_id == algorithm_id)
+        )
+    ).scalar() or 0
     if ref_count > 0:
         return ApiResponse(
             success=False,
-            message=f"该算法被 {ref_count} 条定时发布规则引用，无法删除（可先停用）",
+            message=f"该算法被 {ref_count} 条规则引用，无法删除（可先停用）",
         )
 
     await session.delete(algo)
@@ -214,7 +255,7 @@ async def preview_weight_algorithm(
     current_user: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
-    """预览算法效果：对当前用户全部素材计算权重，附信号明细与逐项分值"""
+    """预览算法效果：热度加权对全部素材、下架加权对全部在售商品计算权重，附信号明细与逐项分值"""
     from app.services.product_publish_service import ProductMaterialService
     from common.services.material_scoring import (
         compute_material_weight_details,
@@ -228,6 +269,75 @@ async def preview_weight_algorithm(
     ).scalar_one_or_none()
     if algo is None:
         return ApiResponse(success=False, message="算法不存在")
+
+    # 下架加权：对当前用户全部在售商品打分（按账号分组，订单信号按账号隔离）
+    if algo.algorithm_type == "delist_weight":
+        from common.models.xy_account import XYAccount
+        from common.models.xy_catalog_item import XYCatalogItem
+        from common.services.delist_scoring import compute_delist_scores
+        from common.services.item_service import _normalize_item_status
+
+        rows = list(
+            (
+                await session.execute(
+                    select(XYCatalogItem).where(XYCatalogItem.owner_id == current_user.id)
+                )
+            ).scalars().all()
+        )
+        on_sale_rows = [
+            r
+            for r in rows
+            if _normalize_item_status((r.metadata_json or {}).get("item_status")) == "on_sale"
+        ]
+        if not on_sale_rows:
+            return ApiResponse(
+                success=True,
+                message="当前账号暂无在售商品，无法预览",
+                data={"algorithm": _to_dict(algo), "total": 0, "list": []},
+            )
+
+        acc_rows = (
+            await session.execute(
+                select(XYAccount).where(XYAccount.owner_id == current_user.id)
+            )
+        ).scalars().all()
+        acc_map = {a.id: a.account_id for a in acc_rows}
+        by_account: Dict[int, list] = {}
+        for r in on_sale_rows:
+            by_account.setdefault(r.account_pk, []).append(r)
+
+        details = []
+        for acc_pk, items in by_account.items():
+            account_id = acc_map.get(acc_pk)
+            if account_id is None:
+                continue
+            scored = await compute_delist_scores(
+                current_user.id, account_id, items, params=algo.params, session=session
+            )
+            details.extend(scored)
+        details.sort(key=lambda d: d["weight"], reverse=True)
+
+        return ApiResponse(
+            success=True,
+            message="预览成功",
+            data={
+                "algorithm": _to_dict(algo),
+                "total": len(on_sale_rows),
+                "list": [
+                    {
+                        "item_id": d["item"].item_id,
+                        "title": d["item"].title or "",
+                        "item_no": extract_prefix_number(d["item"].title),
+                        "account_id": acc_map.get(d["item"].account_pk),
+                        "weight": d["weight"],
+                        "signals": d["signals"],
+                        "parts": d["parts"],
+                        "clamped": d["clamped"],
+                    }
+                    for d in details
+                ],
+            },
+        )
 
     # 加载全部素材（分页取完，预览要真实全量）
     mat_svc = ProductMaterialService(session)
@@ -299,7 +409,7 @@ async def list_weight_algorithm_references(
     current_user: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
-    """查看引用该算法的定时发布规则列表（管理员跨用户视角）"""
+    """查看引用该算法的规则列表（管理员跨用户视角，按算法类型返回发布/下架规则）"""
     algo = (
         await session.execute(
             select(WeightAlgorithm).where(WeightAlgorithm.id == algorithm_id)
@@ -307,6 +417,33 @@ async def list_weight_algorithm_references(
     ).scalar_one_or_none()
     if algo is None:
         return ApiResponse(success=False, message="算法不存在")
+
+    if algo.algorithm_type == "delist_weight":
+        # 下架算法：返回引用它的定时下架规则
+        rows = (
+            await session.execute(
+                select(OfflineSchedule)
+                .where(OfflineSchedule.delist_algorithm_id == algorithm_id)
+                .order_by(OfflineSchedule.id.desc())
+            )
+        ).scalars().all()
+        return ApiResponse(
+            success=True,
+            message="查询成功",
+            data={
+                "list": [
+                    {
+                        "id": r.id,
+                        "name": r.name,
+                        "user_id": r.user_id,
+                        "max_count": r.max_count,
+                        "enabled": bool(r.enabled),
+                        "next_trigger_at": safe_isoformat(r.next_trigger_at),
+                    }
+                    for r in rows
+                ],
+            },
+        )
 
     rows = (
         await session.execute(

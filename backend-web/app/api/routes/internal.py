@@ -189,9 +189,8 @@ async def internal_offline_execute(
     schedule_data = {
         "id": schedule.id,
         "account_ids": list(schedule.account_ids or []),
-        "offline_days": schedule.offline_days,
-        "no_order_days": schedule.no_order_days,
         "max_count": schedule.max_count,
+        "delist_algorithm_id": schedule.delist_algorithm_id,
     }
     background_tasks.add_task(
         OfflineExecutor.run,

@@ -3,8 +3,8 @@
 
 功能：
 1. 定义自动下架规则表结构（xy_offline_schedules）
-2. 存储下架筛选参数（上架天数阈值 X / 无订单天数 Y / 每账号下架上限 Z）
-3. 关联下架账号（仅处理这些账号的商品），到时间自动筛选并批量下架
+2. 存储下架参数（每账号下架上限 Z / 下架权重算法引用），到时间自动按权重选品并批量下架
+3. 关联下架账号（仅处理这些账号的商品）
 4. 时间配置复用定时发布模块（common.utils.schedule_time 统一计算 next_trigger_at）
 """
 from __future__ import annotations
@@ -39,17 +39,13 @@ class OfflineSchedule(TimestampMixin, Base):
 
     # 下架参数
     account_ids: Mapped[list] = mapped_column(JSON, nullable=False, comment="闲鱼账号ID列表（仅下架这些账号的商品）")
-    offline_days: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=7,
-        comment="上架天数阈值X：上架早于X天前的商品才下架"
-    )
-    no_order_days: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0,
-        comment="无订单天数Y：最近Y天内无订单才下架，0=不检查订单"
-    )
     max_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1,
         comment="下架数量上限Z：每个账号每次触发最多下架Z个商品"
+    )
+    delist_algorithm_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True,
+        comment="下架权重算法ID（选品排序；NULL=系统默认参数）",
     )
 
     # 状态

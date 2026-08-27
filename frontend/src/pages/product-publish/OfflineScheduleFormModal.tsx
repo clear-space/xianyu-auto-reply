@@ -4,7 +4,7 @@
  * 功能：
  * 1. 规则名称、重复模式（每天/每周）
  * 2. 时间配置：指定时间点 或 时间段随机（复用定时发布组件逻辑）
- * 3. 筛选参数：上架天数阈值 X / 无订单天数 Y / 每账号下架上限 Z
+ * 3. 筛选参数：每账号下架上限 Z + 下架权重算法（选品排序）
  * 4. 选择账号（仅下架这些账号的商品）
  */
 import { useState, useEffect } from 'react'
@@ -13,6 +13,7 @@ import { X, Loader2, Save, PackageX, FileText, CalendarClock, SlidersHorizontal,
 import { useUIStore } from '@/store/uiStore'
 import { SegmentedControl } from '@/components/common/SegmentedControl'
 import { getAccountDetails } from '@/api/accounts'
+import { getWeightAlgorithmOptions, type WeightAlgorithmOption } from '@/api/weightAlgorithms'
 import {
   createOfflineSchedule, updateOfflineSchedule,
   type OfflineSchedule, type CreateOfflineScheduleParams, type UpdateOfflineScheduleParams,
@@ -35,6 +36,7 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
   const { addToast } = useUIStore()
   const [loading, setLoading] = useState(false)
   const [accounts, setAccounts] = useState<any[]>([])
+  const [algorithms, setAlgorithms] = useState<WeightAlgorithmOption[]>([])
   const [dataLoading, setDataLoading] = useState(true)
 
   const [name, setName] = useState(initial?.name || '')
@@ -49,13 +51,21 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
   const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(
     new Set(initial?.account_ids || [])
   )
-  const [offlineDays, setOfflineDays] = useState<number>(initial?.offline_days || 7)
-  const [noOrderDays, setNoOrderDays] = useState<number>(initial?.no_order_days || 0)
   const [maxCount, setMaxCount] = useState<number>(initial?.max_count || 1)
+  const [delistAlgorithmId, setDelistAlgorithmId] = useState<number | ''>(
+    initial?.delist_algorithm_id ?? ''
+  )
 
   useEffect(() => {
-    getAccountDetails()
-      .then(list => setAccounts(list))
+    // 账号 + 启用中的下架权重算法（下拉用）
+    Promise.all([
+      getAccountDetails(),
+      getWeightAlgorithmOptions('delist_weight'),
+    ])
+      .then(([accList, algoRes]) => {
+        setAccounts(accList)
+        if (algoRes.success) setAlgorithms(algoRes.data?.list ?? [])
+      })
       .catch(() => {})
       .finally(() => setDataLoading(false))
   }, [])
@@ -77,8 +87,6 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
   const handleSave = async () => {
     if (!name.trim()) { addToast({ type: 'warning', message: '请输入规则名称' }); return }
     if (selectedAccounts.size === 0) { addToast({ type: 'warning', message: '请至少选择一个账号' }); return }
-    if (offlineDays < 1) { addToast({ type: 'warning', message: '上架天数阈值至少为 1 天' }); return }
-    if (noOrderDays < 0) { addToast({ type: 'warning', message: '无订单天数不能为负数' }); return }
     if (maxCount < 1) { addToast({ type: 'warning', message: '下架数量上限至少为 1' }); return }
     if (timeMode === 'fixed' && times.filter(t => t.trim()).length === 0) {
       addToast({ type: 'warning', message: '请至少设置一个时间点' }); return
@@ -91,9 +99,8 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
         schedule_mode: scheduleMode,
         schedule_config: buildConfig(),
         account_ids: Array.from(selectedAccounts),
-        offline_days: offlineDays,
-        no_order_days: noOrderDays,
         max_count: maxCount,
+        delist_algorithm_id: delistAlgorithmId === '' ? null : delistAlgorithmId,
       }
 
       if (initial) {
@@ -261,23 +268,7 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
               <h3 className="vben-card-title text-sm"><SlidersHorizontal className="w-4 h-4" />筛选参数</h3>
             </div>
             <div className="vben-card-body space-y-3">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="input-group">
-                  <label className="input-label">上架超过 <span className="text-red-500">*</span></label>
-                  <div className="flex items-center gap-1">
-                    <input type="number" min={1} className="input-ios" value={offlineDays}
-                      onChange={e => setOfflineDays(Math.max(1, parseInt(e.target.value) || 1))} />
-                    <span className="text-sm text-slate-500">天</span>
-                  </div>
-                </div>
-                <div className="input-group">
-                  <label className="input-label">最近无订单</label>
-                  <div className="flex items-center gap-1">
-                    <input type="number" min={0} className="input-ios" value={noOrderDays}
-                      onChange={e => setNoOrderDays(Math.max(0, parseInt(e.target.value) || 0))} />
-                    <span className="text-sm text-slate-500">天</span>
-                  </div>
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="input-group">
                   <label className="input-label">每账号下架上限 <span className="text-red-500">*</span></label>
                   <div className="flex items-center gap-1">
@@ -286,10 +277,20 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
                     <span className="text-sm text-slate-500">个</span>
                   </div>
                 </div>
+                <div className="input-group">
+                  <label className="input-label">下架权重算法</label>
+                  <select className="input-ios" value={delistAlgorithmId}
+                    onChange={e => setDelistAlgorithmId(e.target.value === '' ? '' : Number(e.target.value))}>
+                    <option value="">系统默认参数（下架均衡）</option>
+                    {algorithms.map(a => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <p className="flex items-start gap-1.5 text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg px-3 py-2">
                 <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                <span>条件：商品上架超过 {offlineDays} 天{noOrderDays > 0 ? ` 且最近 ${noOrderDays} 天内无订单` : '（不检查订单）'}，上架最久的优先下架，每个账号最多下架 {maxCount} 个</span>
+                <span>对账号内在售商品按下架权重算法打分（上架越久/无单越久分越高），权重最高的优先下架，每个账号最多下架 {maxCount} 个</span>
               </p>
             </div>
           </div>

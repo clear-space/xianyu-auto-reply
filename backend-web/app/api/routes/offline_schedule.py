@@ -47,9 +47,8 @@ class CreateOfflineScheduleRequest(BaseModel):
     schedule_mode: str = Field("daily", description="重复模式：daily/weekly")
     schedule_config: OfflineScheduleConfig = Field(..., description="时间配置")
     account_ids: List[str] = Field(..., min_length=1, description="闲鱼账号ID列表")
-    offline_days: int = Field(..., ge=1, description="上架天数阈值X：上架早于X天前的商品才下架")
-    no_order_days: int = Field(0, ge=0, description="无订单天数Y：最近Y天内无订单才下架，0=不检查订单")
     max_count: int = Field(..., ge=1, description="下架数量上限Z：每个账号每次最多下架Z个商品")
+    delist_algorithm_id: Optional[int] = Field(None, description="下架权重算法ID（选品排序；不传=系统默认参数）")
 
 
 class UpdateOfflineScheduleRequest(BaseModel):
@@ -58,9 +57,8 @@ class UpdateOfflineScheduleRequest(BaseModel):
     schedule_mode: Optional[str] = None
     schedule_config: Optional[OfflineScheduleConfig] = None
     account_ids: Optional[List[str]] = Field(None, min_length=1)
-    offline_days: Optional[int] = Field(None, ge=1)
-    no_order_days: Optional[int] = Field(None, ge=0)
     max_count: Optional[int] = Field(None, ge=1)
+    delist_algorithm_id: Optional[int] = Field(None, description="下架权重算法ID；传 None 清除回默认参数")
     enabled: Optional[bool] = None
 
 
@@ -92,12 +90,10 @@ async def create_offline_schedule(
             "schedule_mode": req.schedule_mode,
             "schedule_config": config,
             "account_ids": req.account_ids,
-            "offline_days": req.offline_days,
-            "no_order_days": req.no_order_days,
             "max_count": req.max_count,
+            "delist_algorithm_id": req.delist_algorithm_id,
         })
-        from app.services.offline_schedule_service import _schedule_to_dict
-        return ApiResponse(success=True, message="下架规则创建成功", data=_schedule_to_dict(schedule))
+        return ApiResponse(success=True, message="下架规则创建成功", data=await svc.to_dict(schedule))
     except Exception as e:
         await session.rollback()
         return ApiResponse(success=False, message=f"创建失败: {str(e)}")
@@ -131,8 +127,7 @@ async def get_offline_schedule(
     schedule = await svc.get(schedule_id, query_user_id)
     if not schedule:
         return ApiResponse(success=False, message="规则不存在")
-    from app.services.offline_schedule_service import _schedule_to_dict
-    return ApiResponse(success=True, message="查询成功", data=_schedule_to_dict(schedule))
+    return ApiResponse(success=True, message="查询成功", data=await svc.to_dict(schedule))
 
 
 @router.put("/{schedule_id}", response_model=ApiResponse)
@@ -152,6 +147,9 @@ async def update_offline_schedule(
     update_data = {
         k: v for k, v in req.model_dump(exclude={"schedule_config"}).items() if v is not None
     }
+    # 允许显式清除下架算法（None 值）
+    if "delist_algorithm_id" in req.model_fields_set and req.delist_algorithm_id is None:
+        update_data["delist_algorithm_id"] = None
 
     eff_mode = update_data.get("schedule_mode", current.schedule_mode)
     eff_config = (
@@ -160,8 +158,6 @@ async def update_offline_schedule(
         else (current.schedule_config or {})
     )
     eff_account_ids = update_data.get("account_ids") or current.account_ids or []
-    eff_offline_days = update_data.get("offline_days", current.offline_days)
-    eff_no_order_days = update_data.get("no_order_days", current.no_order_days)
     eff_max_count = update_data.get("max_count", current.max_count)
 
     if eff_mode not in _SCHEDULE_MODES:
@@ -170,8 +166,8 @@ async def update_offline_schedule(
         validate_schedule_config(eff_mode, eff_config)
     except ValueError as e:
         return ApiResponse(success=False, message=str(e))
-    if eff_offline_days < 1 or eff_no_order_days < 0 or eff_max_count < 1:
-        return ApiResponse(success=False, message="筛选参数不合法：上架天数≥1、无订单天数≥0、下架上限≥1")
+    if eff_max_count < 1:
+        return ApiResponse(success=False, message="筛选参数不合法：下架上限≥1")
 
     if "account_ids" in update_data:
         error = await _validate_owned_accounts(session, current.user_id, eff_account_ids)
@@ -184,8 +180,7 @@ async def update_offline_schedule(
     schedule = await svc.update(schedule_id, query_user_id, update_data)
     if not schedule:
         return ApiResponse(success=False, message="规则不存在或无权操作")
-    from app.services.offline_schedule_service import _schedule_to_dict
-    return ApiResponse(success=True, message="规则更新成功", data=_schedule_to_dict(schedule))
+    return ApiResponse(success=True, message="规则更新成功", data=await svc.to_dict(schedule))
 
 
 @router.delete("/{schedule_id}", response_model=ApiResponse)
@@ -215,11 +210,10 @@ async def toggle_offline_schedule(
     schedule = await svc.toggle(schedule_id, query_user_id)
     if not schedule:
         return ApiResponse(success=False, message="规则不存在或无权操作")
-    from app.services.offline_schedule_service import _schedule_to_dict
     return ApiResponse(
         success=True,
         message=f"规则已{'启用' if schedule.enabled else '禁用'}",
-        data=_schedule_to_dict(schedule),
+        data=await svc.to_dict(schedule),
     )
 
 
@@ -260,9 +254,8 @@ async def trigger_offline_schedule(
     schedule_data = {
         "id": schedule.id,
         "account_ids": list(schedule.account_ids or []),
-        "offline_days": schedule.offline_days,
-        "no_order_days": schedule.no_order_days,
         "max_count": schedule.max_count,
+        "delist_algorithm_id": schedule.delist_algorithm_id,
     }
     asyncio.create_task(
         OfflineExecutor.run(

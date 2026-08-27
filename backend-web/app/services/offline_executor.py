@@ -2,18 +2,18 @@
 自动下架共享执行器
 
 功能（筛选 / 分组下架 / 删本地 逻辑只维护一份，backend 手动触发与 scheduler 定时触发共用）：
-1. 筛选：仅规则内账号的商品（账号维度过滤）；上架早于 X 天前；最近 Y 天内无订单（Y=0 不检查）
-   - 上架时间取 metadata_json.publish_time，缺失时兜底用本地首次入库时间 created_at
-2. 排序：上架最久优先，每个账号取前 Z 个
+1. 筛选：仅规则内账号的在售商品（账号维度过滤 + 在售状态，非在售下架接口必败）
+2. 选品：下架权重算法打分（上架天数/无订单天数/近30天订单/擦亮信号），
+   按权重降序（top 直选）或加权随机取每个账号前 Z 个
 3. 执行：按账号分组，每个账号一次批量下架 API（mtop batch.offline）；
    账号无 Cookie/不存在 → 跳过并记账号级失败
-4. 成功下架后删除本地商品记录（delete_item 按 owner_id+account 精确删除，自带归属守卫）
+4. 成功下架后本地标记 offline + offline_at（保留记录，供上架权重恢复信号）
 5. 无符合条件的商品：写 total_count=0 的 completed 记录（不静默跳过）
 6. 每次执行后回写执行记录（executed_at + detail_json，明细过大自动压缩）
 """
 from __future__ import annotations
 
-from datetime import timedelta
+import random
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -21,6 +21,7 @@ from sqlalchemy import select
 
 from common.db.session import async_session_maker
 from common.models.offline_schedule_log import OfflineScheduleLog
+from common.services.delist_scoring import DEFAULT_DELIST_PARAMS, get_delist_algorithm_params
 from common.utils.time_utils import get_beijing_now
 
 
@@ -39,20 +40,32 @@ class OfflineExecutor:
 
         Args:
             user_id: 规则所属用户ID
-            schedule_data: 规则快照 dict（id/account_ids/offline_days/no_order_days/max_count）
+            schedule_data: 规则快照 dict（id/account_ids/max_count/delist_algorithm_id）
             batch_id: 本次执行的批次ID
             schedule_log_id: 执行记录ID
         """
         schedule_id = schedule_data.get("id")
         account_ids = list(schedule_data.get("account_ids") or [])
-        offline_days = int(schedule_data.get("offline_days") or 7)
-        no_order_days = int(schedule_data.get("no_order_days") or 0)
         max_count = int(schedule_data.get("max_count") or 1)
+        delist_algorithm_id = schedule_data.get("delist_algorithm_id")
+
+        # 下架权重算法参数（算法停用/缺失自动回退系统默认）
+        delist_algorithm_name = None
+        delist_params = DEFAULT_DELIST_PARAMS
+        try:
+            delist_params = await get_delist_algorithm_params(delist_algorithm_id)
+            delist_algorithm_name = await OfflineExecutor._get_algorithm_name(
+                delist_algorithm_id
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[定时下架] 规则 #{schedule_id} 加载下架权重算法失败（回退下架均衡）: {exc}"
+            )
 
         # ========== 第 1 阶段：筛选目标商品（独立 session） ==========
         try:
             targets, account_map, missing_account_ids = await OfflineExecutor._select_targets(
-                user_id, account_ids, offline_days, no_order_days, max_count
+                user_id, account_ids, max_count, delist_params
             )
         except Exception as e:
             logger.error(f"[定时下架] 规则 #{schedule_id} 筛选阶段失败: {e}")
@@ -61,9 +74,10 @@ class OfflineExecutor:
                 status="failed",
                 error_message=f"筛选阶段失败: {str(e)[:800]}",
                 detail_json={
-                    "offline_days": offline_days,
-                    "no_order_days": no_order_days,
                     "max_count": max_count,
+                    "sample_mode": delist_params.get("sample_mode"),
+                    "algorithm_id": delist_algorithm_id,
+                    "algorithm_name": delist_algorithm_name or "系统默认",
                     "accounts": [],
                     "missing_accounts": [],
                 },
@@ -93,7 +107,7 @@ class OfflineExecutor:
                 entry["status"] = "account_error"
                 entry["error"] = "账号不存在或缺少Cookie，跳过下架"
                 entry["items"] = [
-                    {"item_id": it.item_id, "result": "skipped"} for it in items
+                    OfflineExecutor._detail_item_entry(it, "skipped") for it in items
                 ]
                 failed_total += len(items)
                 detail_accounts.append(entry)
@@ -114,13 +128,13 @@ class OfflineExecutor:
                         entry["status"] = "account_error"
                         entry["error"] = "账号不存在或缺少Cookie，跳过下架"
                         entry["items"] = [
-                            {"item_id": it.item_id, "result": "skipped"} for it in items
+                            OfflineExecutor._detail_item_entry(it, "skipped") for it in items
                         ]
                         failed_total += len(items)
                         detail_accounts.append(entry)
                         continue
 
-                    item_ids = [it.item_id for it in items]
+                    item_ids = [it["item"].item_id for it in items]
                     logger.info(
                         f"[定时下架] 规则 #{schedule_id} 账号 {account_id} 批量下架 {len(item_ids)} 个商品"
                     )
@@ -135,26 +149,27 @@ class OfflineExecutor:
                         for r in (result.get("results") or [])
                     }
                     for it in items:
-                        if ok_map.get(it.item_id, False):
+                        item_id = it["item"].item_id
+                        if ok_map.get(item_id, False):
                             # 下架成功：本地记录保留，标记 offline + offline_at（权重恢复信号来源）
                             marked = await OfflineExecutor._mark_item_offline(
-                                session, acc_row, it.item_id
+                                session, acc_row, item_id
                             )
                             entry["suc_count"] += 1
                             success_total += 1
                             note = None if marked else "远程已下架，本地记录已不存在"
                             entry["items"].append(
-                                {"item_id": it.item_id, "result": "success", "note": note}
+                                OfflineExecutor._detail_item_entry(
+                                    it, "success", note=note
+                                )
                             )
                         else:
                             entry["fail_count"] += 1
                             failed_total += 1
                             entry["items"].append(
-                                {
-                                    "item_id": it.item_id,
-                                    "result": "failed",
-                                    "error": result.get("message") or "下架失败",
-                                }
+                                OfflineExecutor._detail_item_entry(
+                                    it, "failed", error=result.get("message") or "下架失败"
+                                )
                             )
 
                 if entry["fail_count"] > 0:
@@ -163,7 +178,9 @@ class OfflineExecutor:
                 entry["status"] = "failed"
                 entry["error"] = f"下架异常: {str(e)[:300]}"
                 entry["items"] = [
-                    {"item_id": it.item_id, "result": "failed", "error": str(e)[:200]}
+                    OfflineExecutor._detail_item_entry(
+                        it, "failed", error=str(e)[:200]
+                    )
                     for it in items
                 ]
                 failed_total += len(items)
@@ -177,9 +194,10 @@ class OfflineExecutor:
         total_count = sum(len(v) for v in targets.values())
 
         detail_json = OfflineExecutor._compact_detail({
-            "offline_days": offline_days,
-            "no_order_days": no_order_days,
             "max_count": max_count,
+            "sample_mode": delist_params.get("sample_mode"),
+            "algorithm_id": delist_algorithm_id,
+            "algorithm_name": delist_algorithm_name or "系统默认",
             "accounts": detail_accounts,
             "missing_accounts": missing_account_ids,
         })
@@ -211,29 +229,21 @@ class OfflineExecutor:
     async def _select_targets(
         user_id: int,
         account_ids: List[str],
-        offline_days: int,
-        no_order_days: int,
         max_count: int,
+        delist_params: Dict[str, Any],
     ) -> Tuple[Dict[str, list], Dict[str, Any], List[str]]:
-        """筛选每个账号待下架的商品（上架最久优先，每账号最多 max_count 个）。
+        """按算法权重筛选每个账号待下架的商品（权重降序，每账号最多 max_count 个）。
 
         Returns:
-            (account_id -> 商品列表, account_id -> 账号对象, 规则中不存在/无权的账号ID列表)
+            (account_id -> 打分明细列表[{item, weight, signals, parts}], account_id -> 账号对象,
+             规则中不存在/无权的账号ID列表)
         """
         from common.models.xy_account import XYAccount
         from common.models.xy_catalog_item import XYCatalogItem
-        from common.models.xy_order import XYOrder
-        from common.services.item_service import _normalize_item_status, get_item_publish_time
+        from common.services.delist_scoring import compute_delist_scores
+        from common.services.item_service import _normalize_item_status
 
         async with async_session_maker() as session:
-            now = get_beijing_now()
-            offline_cutoff = now - timedelta(days=offline_days)
-            order_cutoff = (
-                now - timedelta(days=no_order_days)
-                if no_order_days and no_order_days > 0
-                else None
-            )
-
             unique_ids = list(dict.fromkeys(account_ids))
             stmt = select(XYAccount).where(
                 XYAccount.owner_id == user_id,
@@ -245,45 +255,48 @@ class OfflineExecutor:
 
             targets: Dict[str, list] = {}
             for account in accounts:
-                recent_ordered: set = set()
-                if order_cutoff is not None:
-                    # 最近 Y 天内有订单的商品（有单就不下架）
-                    order_stmt = select(XYOrder.item_id).where(
-                        XYOrder.owner_id == user_id,
-                        XYOrder.account_id == account.account_id,
-                        XYOrder.created_at >= order_cutoff,
-                        XYOrder.item_id.isnot(None),
-                    )
-                    recent_ordered = set(
-                        (await session.execute(order_stmt)).scalars().all()
-                    )
-
                 item_stmt = select(XYCatalogItem).where(
                     XYCatalogItem.owner_id == user_id,
                     XYCatalogItem.account_pk == account.id,
                 )
                 rows = list((await session.execute(item_stmt)).scalars().all())
 
-                candidates = []
-                for row in rows:
-                    # 只在售商品参与下架（已售出/已下架/已删除/已失效/未知状态均跳过，
-                    # 否则下架接口对非在售商品必然失败）
-                    status = _normalize_item_status(
-                        (row.metadata_json or {}).get("item_status")
-                    )
-                    if status != "on_sale":
-                        continue
-                    publish_at = get_item_publish_time(row.metadata_json, row.created_at)
-                    if publish_at is None or publish_at >= offline_cutoff:
-                        continue  # 上架未满 X 天
-                    if row.item_id in recent_ordered:
-                        continue  # 最近 Y 天内有订单
-                    candidates.append((publish_at, row))
-
-                candidates.sort(key=lambda t: t[0])  # 上架最久优先
-                targets[account.account_id] = [
-                    row for _, row in candidates[:max_count]
+                # 只在售商品参与下架（已售出/已下架/已删除/已失效/未知状态均跳过，
+                # 否则下架接口对非在售商品必然失败）
+                on_sale_rows = [
+                    r
+                    for r in rows
+                    if _normalize_item_status((r.metadata_json or {}).get("item_status"))
+                    == "on_sale"
                 ]
+                if not on_sale_rows:
+                    targets[account.account_id] = []
+                    continue
+
+                scored = await compute_delist_scores(
+                    user_id,
+                    account.account_id,
+                    on_sale_rows,
+                    params=delist_params,
+                    session=session,
+                )
+
+                # 硬排开关 + 得分阈值过滤
+                if delist_params.get("exclude_recent_order"):
+                    scored = [s for s in scored if not s["signals"]["recent_order"]]
+                if delist_params.get("exclude_polished"):
+                    scored = [s for s in scored if not s["signals"]["polished"]]
+                min_score = int(delist_params.get("min_score") or 0)
+                if min_score > 0:
+                    scored = [s for s in scored if s["weight"] >= min_score]
+
+                # 选取：top 按权重直选；weighted 加权无放回随机（权重=概率）
+                if delist_params.get("sample_mode") == "weighted":
+                    targets[account.account_id] = OfflineExecutor._weighted_sample_scored(
+                        scored, max_count
+                    )
+                else:
+                    targets[account.account_id] = scored[:max_count]
 
             logger.info(
                 f"[定时下架] 筛选完成: {len(accounts)} 个账号, "
@@ -291,6 +304,60 @@ class OfflineExecutor:
                 f"缺失账号 {len(missing)} 个"
             )
             return targets, account_map, missing
+
+    @staticmethod
+    def _weighted_sample_scored(
+        scored: List[Dict[str, Any]], k: int
+    ) -> List[Dict[str, Any]]:
+        """加权无放回随机取 k 条（权重=概率，高分不保证必选）"""
+        pool = list(scored)
+        picks: List[Dict[str, Any]] = []
+        for _ in range(min(k, len(pool))):
+            weights = [max(s["weight"], 1) for s in pool]
+            idx = random.choices(range(len(pool)), weights=weights, k=1)[0]
+            picks.append(pool.pop(idx))
+        return picks
+
+    @staticmethod
+    def _detail_item_entry(
+        it: Dict[str, Any],
+        result: str,
+        error: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> dict:
+        """将打分明细转为执行明细条目（含编号/标题/权重，便于追溯选品原因）"""
+        from common.services.material_scoring import extract_prefix_number
+
+        row = it["item"]
+        title = row.title or ""
+        num = extract_prefix_number(title)
+        entry: Dict[str, Any] = {
+            "item_id": row.item_id,
+            "title": title,
+            "item_no": f"A{num}" if num is not None else None,
+            "weight": it["weight"],
+            "result": result,
+        }
+        if error:
+            entry["error"] = error
+        if note:
+            entry["note"] = note
+        return entry
+
+    @staticmethod
+    async def _get_algorithm_name(algorithm_id: Optional[int]) -> Optional[str]:
+        """取下架权重算法名称（算法不存在返回 None）"""
+        if algorithm_id is None:
+            return None
+        from common.models.weight_algorithm import WeightAlgorithm
+
+        async with async_session_maker() as session:
+            row = (
+                await session.execute(
+                    select(WeightAlgorithm).where(WeightAlgorithm.id == algorithm_id)
+                )
+            ).scalar_one_or_none()
+            return row.name if row else None
 
     # 明细过大时丢弃商品级明细数组，仅保留账号级计数，保证落库体积可控
     _MAX_DETAIL_ITEMS = 500

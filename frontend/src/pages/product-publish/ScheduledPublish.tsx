@@ -778,7 +778,7 @@ export function ScheduledPublish() {
                         <td className="text-sm">
                           <span className="text-green-600">{l.success_count} 成功</span>
                           {l.failed_count > 0 && <span className="text-red-500 ml-1">/ {l.failed_count} 失败</span>}
-                          <span className="text-slate-400 ml-1">/ {l.total_count} {l.rule_type === 'offline' ? '候选' : '总'}</span>
+                          <span className="text-slate-400 ml-1">/ {l.total_count} 总</span>
                           {l.error_message && (
                             <div className="text-xs text-red-400 truncate max-w-[200px]" title={l.error_message}>{l.error_message}</div>
                           )}
