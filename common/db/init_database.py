@@ -1285,6 +1285,7 @@ class DatabaseInitializer:
                 order_no VARCHAR(64) NOT NULL COMMENT '充值订单号',
                 user_id BIGINT NOT NULL COMMENT '用户ID',
                 amount VARCHAR(32) NOT NULL COMMENT '充值金额',
+                order_type VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款',
                 status VARCHAR(32) NOT NULL DEFAULT 'pending' COMMENT '订单状态：pending-待支付，paid-已支付，expired-已过期，failed-失败',
                 trade_no VARCHAR(128) DEFAULT NULL COMMENT '支付宝交易号',
                 qr_code VARCHAR(512) DEFAULT NULL COMMENT '支付二维码内容',
@@ -2023,6 +2024,9 @@ class DatabaseInitializer:
         "xy_weight_algorithms": [
             ("is_builtin", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排开关与选料方式可调，不可删除/停用，列表置顶）'", "enabled"),
             ("algorithm_type", "VARCHAR(32) NOT NULL DEFAULT 'heat_weight' COMMENT '算法类型：heat_weight-热度加权, delist_weight-下架加权'", "name"),
+        ],
+        "xy_recharge_orders": [
+            ("order_type", "VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款'", "amount"),
         ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
