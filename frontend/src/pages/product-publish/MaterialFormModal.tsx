@@ -2,8 +2,8 @@
  * 商品素材新建 / 编辑弹窗。
  * 商品发布字段复用 ProductPublishForm，确保素材导入发布页时字段完全一致。
  */
-import React, { useRef, useState } from 'react'
-import { Loader2, Trash2, Upload, X } from 'lucide-react'
+import React, { useState } from 'react'
+import { Loader2, X } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   createMaterial,
@@ -18,6 +18,7 @@ import {
 } from '@/api/productPublish'
 import ProductPublishForm from './ProductPublishForm'
 import ProductVideoUploader from './ProductVideoUploader'
+import { ImageUploadGrid } from './ImageUploadGrid'
 import { buildSkuKey, DEFAULT_PLATFORM_CATEGORIES, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
 
 type MaterialFormState = PublishForm & { images: string[]; remark: string; stock: number }
@@ -139,7 +140,6 @@ function toMaterialPayload(form: MaterialFormState): MaterialCreateParams {
 
 export function MaterialFormModal({ initial, onClose, onSaved, draftSubmit }: Props) {
   const { addToast } = useUIStore()
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const [form, setForm] = useState<MaterialFormState>(() => initialForm(initial))
   // 编辑已有素材时，不能因弹窗初始化的推荐请求清空已保存的平台属性。
   const [categoryLocked, setCategoryLocked] = useState(() => hasSavedPlatformCategory(initial))
@@ -153,8 +153,7 @@ export function MaterialFormModal({ initial, onClose, onSaved, draftSubmit }: Pr
     })
   }
 
-  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || [])
+  const handleUploadFiles = async (files: File[]) => {
     if (!files.length) return
     if (form.images.length + files.length > 9) {
       addToast({ type: 'warning', message: '最多上传9张图片' })
@@ -172,7 +171,6 @@ export function MaterialFormModal({ initial, onClose, onSaved, draftSubmit }: Pr
       addToast({ type: 'error', message: '图片上传失败，请重试' })
     } finally {
       setUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
 
@@ -257,7 +255,7 @@ export function MaterialFormModal({ initial, onClose, onSaved, draftSubmit }: Pr
         <div className="modal-body overflow-y-auto space-y-4">
           <div className="vben-card">
             <div className="vben-card-header"><h2 className="vben-card-title">商品图片与视频</h2><span className="text-xs text-slate-400">{form.images.length}/9 图 · {form.videos.length}/3 视频</span></div>
-            <div className="vben-card-body"><div className="flex flex-wrap gap-2">{form.images.map((url, index) => <div key={`${url}-${index}`} className="relative h-20 w-20 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-600 group"><img src={url} alt="" className="h-full w-full object-cover" />{index === 0 && <span className="absolute bottom-0 left-0 right-0 bg-blue-500/80 py-0.5 text-center text-[10px] text-white">首图</span>}<button type="button" title="移除图片" onClick={() => setForm((current) => ({ ...current, images: current.images.filter((_, itemIndex) => itemIndex !== index) }))} className="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500"><Trash2 className="h-3 w-3" /></button></div>)}{form.images.length < 9 && <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-20 w-20 flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 text-slate-400 transition-colors hover:border-blue-400 hover:text-blue-500 disabled:opacity-50 dark:border-slate-600">{uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}<span className="mt-1 text-xs">{uploading ? '上传中' : '添加图片'}</span></button>}</div><input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleUpload} /><ProductVideoUploader videos={form.videos} onUploadVideo={handleVideoUpload} onChange={(videos) => setForm((current) => ({ ...current, videos }))} /></div>
+            <div className="vben-card-body"><ImageUploadGrid images={form.images} onChange={(images) => setForm((current) => ({ ...current, images }))} onUpload={handleUploadFiles} uploading={uploading} /><ProductVideoUploader videos={form.videos} onUploadVideo={handleVideoUpload} onChange={(videos) => setForm((current) => ({ ...current, videos }))} /></div>
           </div>
 
           <ProductPublishForm
