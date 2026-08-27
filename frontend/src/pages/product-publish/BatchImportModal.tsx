@@ -465,18 +465,18 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     })
   }
 
-  /** 计算最终标题/描述（含统一文字插入与编号插入） */
-  const buildFinalContent = (m: LocalMaterial) => {
-    const title = (codeInsertMode === 'title' || codeInsertMode === 'both') ? `${m.code} ${m.title}` : m.title
+  /** 计算最终标题/描述（含统一文字插入与编号插入；完整修改过的条目同样适用） */
+  const buildFinalContent = (baseTitle: string, baseDescription: string, code: string) => {
+    const title = (codeInsertMode === 'title' || codeInsertMode === 'both') ? `${code} ${baseTitle}` : baseTitle
     // 描述段：统一文字插入在原描述段前/段后（段后紧跟原描述文字），编号始终追加在真正末尾
-    const descriptionParts = [m.description]
+    const descriptionParts = [baseDescription]
     const insertText = unifiedInsertText.trim()
     if (insertText) {
       if (unifiedInsertPosition === 'before') descriptionParts.unshift(insertText)
       else descriptionParts.push(insertText)
     }
     if (codeInsertMode === 'description' || codeInsertMode === 'both') {
-      descriptionParts.push(m.code)
+      descriptionParts.push(code)
     }
     return { title, description: descriptionParts.join('\n\n') }
   }
@@ -618,8 +618,11 @@ export function BatchImportModal({ onClose, onImported }: Props) {
         const batch = batches[b]
         const formData = new FormData()
 
-        // 统一图片插入下的合并方案：每个条目保留的商品图数量与追加的统一图 URL
-        const imagePlans = new Map(batch.map((m) => [m.code, buildImagePlan(m.image_count)]))
+        // 统一图片插入下的合并方案：每个条目保留的商品图数量与追加的统一图 URL（完整修改条目以草稿图片数为基数）
+        const imagePlans = new Map(batch.map((m) => {
+          const draft = editedDrafts[m.code]
+          return [m.code, buildImagePlan(draft ? (draft.images?.length ?? 0) : m.image_count)]
+        }))
 
         // 构建本批元数据数组（不含图片文件本身；图片字段下标使用批内局部索引）
         const metadataList = batch.map((m) => {
@@ -627,14 +630,16 @@ export function BatchImportModal({ onClose, onImported }: Props) {
           const recognized = recognizedCategories[m.code]
           const draft = editedDrafts[m.code]
           if (draft) {
-            // 完整修改过的条目：图片已在服务器（URL 直传），元数据以弹窗编辑结果为准
+            // 完整修改过的条目：图片已在服务器（URL 直传），统一文字/编号/图片插入同样生效
+            const { title, description } = buildFinalContent(draft.title, draft.description, m.code)
+            const imagePlan = imagePlans.get(m.code)!
             return {
               code: m.code,
               folder_name: m.folder_name,
-              title: draft.title,
-              description: draft.description,
+              title: title.slice(0, 30),
+              description: description.slice(0, 1500),
               image_count: 0,
-              images: draft.images || [],
+              images: [...(draft.images || []).slice(0, imagePlan.keepLocal), ...imagePlan.appendUrls],
               price: draft.price,
               original_price: draft.original_price ?? null,
               category: draft.category ?? '',
@@ -661,7 +666,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
               remark: draft.remark ?? null,
             }
           }
-          const { title, description } = buildFinalContent(m)
+          const { title, description } = buildFinalContent(m.title, m.description, m.code)
           const imagePlan = imagePlans.get(m.code)!
           return {
             code: m.code,
@@ -767,21 +772,26 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
     const issueList: { code: string; title: string; issues: string[] }[] = []
     selected.forEach((m) => {
-      if (editedDrafts[m.code]) return // 完整修改已在编辑弹窗中校验
-      const { title, description } = buildFinalContent(m)
+      const draft = editedDrafts[m.code]
+      // 统一文字/编号插入对完整修改条目同样生效，因此也参与长度校验
+      const { title, description } = buildFinalContent(
+        draft ? draft.title : m.title,
+        draft ? draft.description : m.description,
+        m.code,
+      )
       const issues: string[] = []
       if (title.length > 30) issues.push(`标题超过30字（当前${title.length}字，继续导入将截取前30字）`)
       if (description.length > 1500) issues.push(`描述超过1500字（当前${description.length}字，继续导入将截取前1500字）`)
-      if (m.image_count > 9) {
+      if (!draft && m.image_count > 9) {
         if (unifiedImages.length > 0 && unifiedOverflowMode === 'trim_products') {
           issues.push(`图片超过9张（商品图${m.image_count}张+统一图${unifiedImages.length}张，继续导入将保留前${9 - unifiedImages.length}张商品图并插入统一图）`)
         } else {
           issues.push(`图片超过9张（当前${m.image_count}张，继续导入将取前9张）`)
         }
       }
-      if (m.image_count === 0 && unifiedImages.length === 0) issues.push('缺少图片（至少1张，继续导入该条将失败）')
+      if (!draft && m.image_count === 0 && unifiedImages.length === 0) issues.push('缺少图片（至少1张，继续导入该条将失败）')
       if (issues.length > 0) {
-        issueList.push({ code: m.code, title: m.title, issues })
+        issueList.push({ code: m.code, title: draft ? draft.title : m.title, issues })
       }
     })
 
