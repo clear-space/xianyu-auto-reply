@@ -1000,6 +1000,7 @@ async def batch_import_materials_upload(
     接收 multipart/form-data：
     - materials: JSON 字符串，素材元数据数组，每项含 image_count 字段
     - img_{i}_{j}: 第 i 个素材的第 j 张图片文件
+    - append_images: 元数据中的可选字段，统一插入图片 URL 数组，追加在商品图片之后
 
     客户端先解析本地目录结构（txt + 图片），再通过本接口上传到服务器。
     与 /materials/batch-import 不同，本接口直接接收文件而非服务器本地路径。
@@ -1071,6 +1072,11 @@ async def batch_import_materials_upload(
                     f.write(content)
                 saved_urls.append(f"/static/uploads/products/{unique_name}")
                 j += 1
+
+            # 统一图片插入：追加在商品图片之后（前端已按策略裁剪商品图，总数不超过9张）
+            append_images = [str(u) for u in (mat.get("append_images") or []) if str(u).strip()]
+            saved_urls.extend(append_images)
+            saved_urls = saved_urls[:9]
 
             # 构建创建数据
             title = str(mat.get("title", mat.get("folder_name", ""))).strip()

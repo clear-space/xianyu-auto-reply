@@ -17,6 +17,7 @@ import { useUIStore } from '@/store/uiStore'
 import { batchImportMaterialsUpload, recommendPlatformCategory, uploadProductImages, type MaterialCreateParams, type PlatformCategoryCandidate, type ProductMaterial } from '@/api/productPublish'
 import { DEFAULT_PLATFORM_CATEGORIES, preferredCandidate, SHIPPING_OPTIONS, type ShippingMethod } from './publishTypes'
 import { MaterialFormModal } from './MaterialFormModal'
+import { ImageUploadGrid } from './ImageUploadGrid'
 
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '电子资料', '其他闲置']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
@@ -207,6 +208,15 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
   // 编号插入位置：none | title | description | both
   const [codeInsertMode, setCodeInsertMode] = useState<'none' | 'title' | 'description' | 'both'>('both')
+
+  // 统一文字插入：插入到宝贝描述段前/段后（段后 = 原描述文字之后、编号之前，默认段后）
+  const [unifiedInsertText, setUnifiedInsertText] = useState('')
+  const [unifiedInsertPosition, setUnifiedInsertPosition] = useState<'before' | 'after'>('after')
+
+  // 统一图片插入：最多3张，默认插到商品图片后面；超9张时可从后往前删商品图（默认）或按顺序尽量插入统一图
+  const [unifiedImages, setUnifiedImages] = useState<string[]>([])
+  const [unifiedImagesUploading, setUnifiedImagesUploading] = useState(false)
+  const [unifiedOverflowMode, setUnifiedOverflowMode] = useState<'trim_products' | 'skip_unified'>('trim_products')
 
   // 智能识别状态：识别出的平台分类（code → 候选），随导入写入素材
   const [recognizing, setRecognizing] = useState(false)
@@ -455,11 +465,55 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     })
   }
 
-  /** 计算最终标题/描述（含编号插入） */
+  /** 计算最终标题/描述（含统一文字插入与编号插入） */
   const buildFinalContent = (m: LocalMaterial) => {
     const title = (codeInsertMode === 'title' || codeInsertMode === 'both') ? `${m.code} ${m.title}` : m.title
-    const description = (codeInsertMode === 'description' || codeInsertMode === 'both') ? `${m.description}\n\n${m.code}` : m.description
-    return { title, description }
+    // 描述段：统一文字插入在原描述段前/段后（段后紧跟原描述文字），编号始终追加在真正末尾
+    const descriptionParts = [m.description]
+    const insertText = unifiedInsertText.trim()
+    if (insertText) {
+      if (unifiedInsertPosition === 'before') descriptionParts.unshift(insertText)
+      else descriptionParts.push(insertText)
+    }
+    if (codeInsertMode === 'description' || codeInsertMode === 'both') {
+      descriptionParts.push(m.code)
+    }
+    return { title, description: descriptionParts.join('\n\n') }
+  }
+
+  /** 统一图片上传（最多3张，追加到统一图列表末尾） */
+  const handleUnifiedImagesUpload = async (files: File[]) => {
+    if (!files.length) return
+    if (unifiedImages.length + files.length > 3) {
+      addToast({ type: 'warning', message: '统一插入图片最多3张' })
+      return
+    }
+    setUnifiedImagesUploading(true)
+    try {
+      const response = await uploadProductImages(files)
+      if (!response.success || !response.data) {
+        addToast({ type: 'error', message: response.message || '统一图片上传失败' })
+        return
+      }
+      setUnifiedImages(current => [...current, ...response.data!.urls])
+    } catch {
+      addToast({ type: 'error', message: '统一图片上传失败，请重试' })
+    } finally {
+      setUnifiedImagesUploading(false)
+    }
+  }
+
+  /** 计算非草稿条目的图片合并方案：保留商品图数量 + 追加的统一图 URL（总数不超过9张） */
+  const buildImagePlan = (imageCount: number): { keepLocal: number; appendUrls: string[] } => {
+    const localTotal = Math.min(imageCount, 9)
+    if (unifiedImages.length === 0) return { keepLocal: localTotal, appendUrls: [] }
+    if (unifiedOverflowMode === 'trim_products') {
+      // 从后往前删除商品图片多出的图：统一图完整插入
+      return { keepLocal: Math.max(0, 9 - unifiedImages.length), appendUrls: [...unifiedImages] }
+    }
+    // 按顺序尽量插入统一图：商品图保持完整，统一图从第一张开始插到9张为止
+    const room = 9 - localTotal
+    return { keepLocal: localTotal, appendUrls: unifiedImages.slice(0, Math.max(0, room)) }
   }
 
   /** 打开完整修改弹窗：懒上传该条图片后进入编辑素材弹窗（草稿模式，不落库） */
@@ -527,11 +581,11 @@ export function BatchImportModal({ onClose, onImported }: Props) {
   /** 实际执行导入（校验已通过或用户选择继续导入） */
   const doImport = async () => {
     const selected = materials.filter(m => selectedCodes.has(m.code))
-    // 继续导入时：标题截取前30字、描述截取前1500字；无图条目失败；图片取前9张
+    // 继续导入时：标题截取前30字、描述截取前1500字；无图条目失败（已配置统一图除外）；图片按统一图策略裁剪至9张内
     const localFailed: { code: string; reason: string }[] = []
     const validItems = selected.filter((m) => {
       if (editedDrafts[m.code]) return true // 完整修改已在编辑弹窗中校验
-      if (m.image_count === 0) {
+      if (m.image_count === 0 && unifiedImages.length === 0) {
         localFailed.push({ code: m.code, reason: '缺少图片（至少1张）' })
         return false
       }
@@ -563,6 +617,9 @@ export function BatchImportModal({ onClose, onImported }: Props) {
       for (let b = 0; b < batches.length; b++) {
         const batch = batches[b]
         const formData = new FormData()
+
+        // 统一图片插入下的合并方案：每个条目保留的商品图数量与追加的统一图 URL
+        const imagePlans = new Map(batch.map((m) => [m.code, buildImagePlan(m.image_count)]))
 
         // 构建本批元数据数组（不含图片文件本身；图片字段下标使用批内局部索引）
         const metadataList = batch.map((m) => {
@@ -605,12 +662,14 @@ export function BatchImportModal({ onClose, onImported }: Props) {
             }
           }
           const { title, description } = buildFinalContent(m)
+          const imagePlan = imagePlans.get(m.code)!
           return {
             code: m.code,
             folder_name: m.folder_name,
             title: title.slice(0, 30),
             description: description.slice(0, 1500),
-            image_count: Math.min(m.image_count, 9),
+            image_count: imagePlan.keepLocal,
+            ...(imagePlan.appendUrls.length > 0 ? { append_images: imagePlan.appendUrls } : {}),
             price: parseFloat(s.price) || 0,
             original_price: s.original_price ? parseFloat(s.original_price) : null,
             category: s.category,
@@ -635,12 +694,14 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
         formData.append('materials', JSON.stringify(metadataList))
 
-        // 添加图片文件：img_{批内索引}_{图片索引}（完整修改过的条目图片已在服务器，跳过；最多9张在导入时截取）
+        // 添加图片文件：img_{批内索引}_{图片索引}（完整修改过的条目图片已在服务器，跳过；
+        // 保留数量按统一图策略计算，与追加的统一图合计不超过9张）
         batch.forEach((m, i) => {
           if (editedDrafts[m.code]) return
           const imgFiles = materialFilesRef.current.get(m.code)
           if (imgFiles) {
-            imgFiles.slice(0, 9).forEach((file, j) => {
+            const keepLocal = imagePlans.get(m.code)?.keepLocal ?? Math.min(m.image_count, 9)
+            imgFiles.slice(0, keepLocal).forEach((file, j) => {
               formData.append(`img_${i}_${j}`, file, file.name)
             })
           }
@@ -711,8 +772,14 @@ export function BatchImportModal({ onClose, onImported }: Props) {
       const issues: string[] = []
       if (title.length > 30) issues.push(`标题超过30字（当前${title.length}字，继续导入将截取前30字）`)
       if (description.length > 1500) issues.push(`描述超过1500字（当前${description.length}字，继续导入将截取前1500字）`)
-      if (m.image_count > 9) issues.push(`图片超过9张（当前${m.image_count}张，继续导入将取前9张）`)
-      if (m.image_count === 0) issues.push('缺少图片（至少1张，继续导入该条将失败）')
+      if (m.image_count > 9) {
+        if (unifiedImages.length > 0 && unifiedOverflowMode === 'trim_products') {
+          issues.push(`图片超过9张（商品图${m.image_count}张+统一图${unifiedImages.length}张，继续导入将保留前${9 - unifiedImages.length}张商品图并插入统一图）`)
+        } else {
+          issues.push(`图片超过9张（当前${m.image_count}张，继续导入将取前9张）`)
+        }
+      }
+      if (m.image_count === 0 && unifiedImages.length === 0) issues.push('缺少图片（至少1张，继续导入该条将失败）')
       if (issues.length > 0) {
         issueList.push({ code: m.code, title: m.title, issues })
       }
@@ -944,6 +1011,66 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                           disabled={importing}
                         />
                       </div>
+                    </div>
+                    {/* 统一图片插入 */}
+                    <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <label className="input-label text-xs whitespace-nowrap">统一图片插入</label>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400 whitespace-nowrap">超9张处理</span>
+                          <select
+                            className="input-ios text-sm w-72"
+                            value={unifiedOverflowMode}
+                            onChange={e => setUnifiedOverflowMode(e.target.value as 'trim_products' | 'skip_unified')}
+                            disabled={importing}
+                          >
+                            <option value="trim_products">从后往前删除商品图（统一图完整插入）</option>
+                            <option value="skip_unified">按顺序尽量插入统一图（商品图保持完整）</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="mt-2">
+                        <ImageUploadGrid
+                          images={unifiedImages}
+                          onChange={setUnifiedImages}
+                          onUpload={handleUnifiedImagesUpload}
+                          uploading={unifiedImagesUploading}
+                          max={3}
+                          showFirstBadge={false}
+                          hint="统一图片将插入到每件宝贝商品图片的后面（最多3张，超9张按上方策略裁剪）"
+                          disabled={importing}
+                        />
+                      </div>
+                    </div>
+                    {/* 统一文字插入 */}
+                    <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <label className="input-label text-xs whitespace-nowrap">统一文字插入</label>
+                        <select
+                          className="input-ios text-sm w-28"
+                          value={unifiedInsertPosition}
+                          onChange={e => setUnifiedInsertPosition(e.target.value as 'before' | 'after')}
+                          disabled={importing}
+                        >
+                          <option value="after">段后插入</option>
+                          <option value="before">段前插入</option>
+                        </select>
+                      </div>
+                      <textarea
+                        className="input-ios text-sm min-h-24 w-full mt-2"
+                        rows={4}
+                        placeholder="选填：将统一插入到每件宝贝描述的文字（如售后说明），支持多段输入"
+                        value={unifiedInsertText}
+                        onChange={e => setUnifiedInsertText(e.target.value)}
+                        disabled={importing}
+                      />
+                      <p className="text-xs text-slate-400 mt-1">
+                        {unifiedInsertText.trim()
+                          ? unifiedInsertPosition === 'after'
+                            ? '→ 插在原描述段后、编号之前'
+                            : '→ 插在原描述段前'
+                          : '支持多段输入；段前/段后相对原描述文字，编号始终在真正末尾'}
+                      </p>
                     </div>
                     {/* 编号插入位置 */}
                     <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 flex items-center gap-3 flex-wrap">
@@ -1307,7 +1434,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
               </div>
               <div className="modal-body max-h-[60vh] overflow-y-auto">
                 <p className="text-xs text-slate-500 mb-3">
-                  以下 {pendingImportIssues.length} 条素材不符合规则。选择「继续导入」将自动截取标题前30字、描述前1500字、图片前9张；缺少图片的条目将导入失败。
+                  以下 {pendingImportIssues.length} 条素材不符合规则。选择「继续导入」将自动截取标题前30字、描述前1500字、图片{unifiedImages.length > 0 ? '按所选统一图策略裁剪至9张内' : '前9张'}；缺少图片的条目将导入失败。
                 </p>
                 <ul className="space-y-2">
                   {pendingImportIssues.map(item => (
