@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState, useRef } from 'react'
-import { CheckSquare, Download, Edit2, ExternalLink, Link2, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, CheckSquare, Download, Edit2, ExternalLink, Link2, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
 import { batchClearItemRelations, autoMatchCards, type AutoMatchCardsResult } from '@/api/cards'
@@ -12,6 +12,38 @@ import { ConfirmModal } from '@/components/common/ConfirmModal'
 import type { Account, Item } from '@/types'
 
 type ItemBooleanFilterKey = 'is_polished' | 'is_multi_spec' | 'multi_quantity_delivery'
+
+/** 可排序表头 */
+function SortableTh({
+  label,
+  field,
+  sortState,
+  onSort,
+  className = '',
+}: {
+  label: string
+  field: string
+  sortState: { field: string; order: 'asc' | 'desc' }
+  onSort: (field: string) => void
+  className?: string
+}) {
+  const active = sortState.field === field
+  const Icon = !active ? ArrowUpDown : sortState.order === 'desc' ? ArrowDown : ArrowUp
+  return (
+    <th
+      className={`${className} cursor-pointer select-none hover:text-blue-500 transition-colors ${
+        active ? 'text-blue-500' : ''
+      }`}
+      onClick={() => onSort(field)}
+      title={`按${label}排序`}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        <Icon className="w-3.5 h-3.5" />
+      </span>
+    </th>
+  )
+}
 
 const ITEM_STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   on_sale: { label: '在售', cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
@@ -64,6 +96,11 @@ export function Items() {
     totalPages: 0,
   })
   const [itemsLoading, setItemsLoading] = useState(false)
+  // 排序状态（默认按创建时间倒序，与原行为一致）
+  const [sortState, setSortState] = useState<{ field: string; order: 'asc' | 'desc' }>({
+    field: 'created_at',
+    order: 'desc',
+  })
   
   // 筛选状态
   const [filters, setFilters] = useState<ItemFilterParams>({
@@ -150,6 +187,7 @@ export function Items() {
     pageSize: number = pagination.pageSize,
     currentFilters: ItemFilterParams = filters,
     currentKeyword: string = searchKeyword,
+    currentSort: { field: string; order: 'asc' | 'desc' } = sortState,
   ) => {
     if (!_hasHydrated || !isAuthenticated || !token) {
       return
@@ -157,10 +195,17 @@ export function Items() {
     try {
       setItemsLoading(true)
       const trimmedKeyword = currentKeyword.trim()
-      const result = await getItemsPaginated(page, pageSize, selectedAccount || undefined, {
-        ...currentFilters,
-        keyword: trimmedKeyword || null,
-      })
+      const result = await getItemsPaginated(
+        page,
+        pageSize,
+        selectedAccount || undefined,
+        {
+          ...currentFilters,
+          keyword: trimmedKeyword || null,
+        },
+        currentSort.field,
+        currentSort.order,
+      )
       if (result.success) {
         const nextItems = result.data || []
         const visibleIds = new Set(nextItems.map((item) => item.id))
@@ -209,7 +254,16 @@ export function Items() {
     setFilters(newFilters)
     loadItems(1, pagination.pageSize, newFilters)
   }
-  
+
+  /** 排序切换：同字段翻转方向，新字段默认倒序；切换后回到第一页 */
+  const handleSortChange = (field: string) => {
+    const newSort = sortState.field === field
+      ? { field, order: sortState.order === 'desc' ? 'asc' as const : 'desc' as const }
+      : { field, order: 'desc' as const }
+    setSortState(newSort)
+    loadItems(1, pagination.pageSize, filters, searchKeyword, newSort)
+  }
+
   // 重置筛选条件
   const handleResetFilters = () => {
     const emptyFilters: ItemFilterParams = {
@@ -1404,18 +1458,18 @@ export function Items() {
                   <th className="min-w-[160px]">商品ID</th>
                   <th className="min-w-[260px]">商品标题</th>
                   <th className="min-w-[90px] text-center">状态</th>
-                  <th className="min-w-[90px] text-center">上架天数</th>
-                  <th className="min-w-[90px] text-center">曝光(7天)</th>
-                  <th className="min-w-[90px] text-center">浏览(7天)</th>
-                  <th className="min-w-[80px] text-center">想要</th>
-                  <th className="min-w-[80px]">价格</th>
+                  <SortableTh label="上架天数" field="days_on_shelf" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
+                  <SortableTh label="曝光(7天)" field="show_pv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
+                  <SortableTh label="浏览(7天)" field="ipv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
+                  <SortableTh label="想要" field="want_count" sortState={sortState} onSort={handleSortChange} className="min-w-[80px] text-center" />
+                  <SortableTh label="价格" field="price" sortState={sortState} onSort={handleSortChange} className="min-w-[80px]" />
                   <th className="min-w-[100px] text-center">是否擦亮</th>
                   <th className="min-w-[100px] text-center">多规格</th>
                   <th className="min-w-[120px] text-center">多数量发货</th>
                   <th className="min-w-[110px] text-center">关联卡券</th>
                   <th className="min-w-[110px] text-center">默认回复</th>
                   <th className="min-w-[110px] text-center">AI提示词</th>
-                  <th className="min-w-[170px]">创建时间</th>
+                  <SortableTh label="创建时间" field="created_at" sortState={sortState} onSort={handleSortChange} className="min-w-[170px]" />
                   <th className="min-w-[170px]">更新时间</th>
                   <th className="sticky right-0 bg-slate-50 dark:bg-slate-800 min-w-[70px]">操作</th>
               </tr>

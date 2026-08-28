@@ -36,7 +36,9 @@ export const getItemsPaginated = async (
   page: number = 1,
   pageSize: number = 20,
   cookieId?: string,
-  filters?: ItemFilterParams
+  filters?: ItemFilterParams,
+  sortBy?: string,
+  sortOrder?: 'asc' | 'desc'
 ): Promise<{
   success: boolean
   data: Item[]
@@ -48,11 +50,16 @@ export const getItemsPaginated = async (
   const params = new URLSearchParams()
   params.append('page', String(page))
   params.append('page_size', String(pageSize))
-  
+
   if (cookieId) {
     params.append('cookie_id', cookieId)
   }
-  
+
+  if (sortBy) {
+    params.append('sort_by', sortBy)
+    params.append('sort_order', sortOrder || 'desc')
+  }
+
   if (filters) {
     if (filters.keyword && filters.keyword.trim()) {
       params.append('keyword', filters.keyword.trim())

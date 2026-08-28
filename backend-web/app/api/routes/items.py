@@ -135,6 +135,8 @@ async def list_items_paginated(
     is_multi_spec: bool | None = Query(default=None, description="多规格筛选"),
     multi_quantity_delivery: bool | None = Query(default=None, description="多数量发货筛选"),
     item_status: str | None = Query(default=None, description="商品状态筛选：on_sale/sold/offline/deleted/unknown"),
+    sort_by: str | None = Query(default=None, description="排序字段：created_at/updated_at/price/days_on_shelf/show_pv/ipv/want_count/post_dt"),
+    sort_order: str = Query(default="desc", description="排序方向：asc/desc"),
     current_user: User = Depends(deps.get_current_active_user),
     item_service: ItemService = Depends(deps.get_item_service),
     db: AsyncSession = Depends(deps.get_db_session),
@@ -156,6 +158,19 @@ async def list_items_paginated(
     - want_count 累计想要数
     无快照（当天新发布等）时上述字段为 None，由前端显示 --。
     """
+    # 排序字段白名单校验
+    _SORTABLE_FIELDS = {
+        "created_at", "updated_at", "price",
+        "days_on_shelf", "show_pv", "ipv", "want_count", "post_dt",
+    }
+    if sort_by and sort_by not in _SORTABLE_FIELDS:
+        return {
+            "success": False,
+            "message": f"无效的排序字段，支持: {', '.join(sorted(_SORTABLE_FIELDS))}",
+        }
+    if sort_order not in ("asc", "desc"):
+        return {"success": False, "message": "排序方向仅支持 asc/desc"}
+
     owner_id, _ = resolve_owner_scope(current_user)
     items, total = await item_service.list_items_paginated(
         owner_id=owner_id,
@@ -167,6 +182,8 @@ async def list_items_paginated(
         is_multi_spec=is_multi_spec,
         multi_quantity_delivery=multi_quantity_delivery,
         item_status=item_status,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
     # 补充运营指标快照：按当前页 itemId 查最新快照行（零闲鱼请求）

@@ -203,9 +203,11 @@ class ItemService:
         is_multi_spec: bool | None = None,
         multi_quantity_delivery: bool | None = None,
         item_status: str | None = None,
+        sort_by: str | None = None,
+        sort_order: str = "desc",
     ) -> tuple[list[dict], int]:
-        """获取商品列表（分页），支持多条件筛选
-        
+        """获取商品列表（分页），支持多条件筛选与排序
+
         Args:
             owner_id: 用户ID，None表示查询所有用户（管理员）
             account_id: 账号ID（可选）
@@ -213,6 +215,9 @@ class ItemService:
             page_size: 每页数量
             keyword: 关键字（支持商品ID、标题、详情）
             is_polished: 是否擦亮筛选
+            sort_by: 排序字段（created_at/updated_at/price 基础字段；
+                     days_on_shelf/show_pv/ipv/want_count/post_dt 快照字段）
+            sort_order: asc/desc（默认 desc）
             is_multi_spec: 多规格筛选
             multi_quantity_delivery: 多数量发货筛选
             
@@ -309,7 +314,59 @@ class ItemService:
         
         # 分页查询
         offset = (page - 1) * page_size
-        stmt = base_stmt.order_by(XYCatalogItem.created_at.desc()).offset(offset).limit(page_size)
+        # 排序：快照字段需 LEFT JOIN 最新快照行（每商品 stat_date 最大的一行），NULL 排最后
+        from sqlalchemy import Numeric
+        from sqlalchemy.orm import aliased
+
+        from common.models.item_stats_daily import ItemStatsDaily
+
+        sort_desc = (sort_order or "desc").lower() != "asc"
+        order_col = None
+        stats_alias = None
+        if sort_by in ("days_on_shelf", "show_pv", "ipv", "want_count", "post_dt"):
+            stats_col_map = {
+                "days_on_shelf": "days_on_shelf",
+                "show_pv": "show_pv_7d",
+                "ipv": "ipv_7d",
+                "want_count": "want_count",
+                "post_dt": "post_dt",
+            }
+            max_date_subq = (
+                select(ItemStatsDaily.item_id, func.max(ItemStatsDaily.stat_date).label("max_date"))
+                .group_by(ItemStatsDaily.item_id)
+                .subquery()
+            )
+            stats_alias = aliased(ItemStatsDaily)
+            base_stmt = (
+                base_stmt.outerjoin(
+                    max_date_subq, XYCatalogItem.item_id == max_date_subq.c.item_id
+                ).outerjoin(
+                    stats_alias,
+                    and_(
+                        stats_alias.item_id == max_date_subq.c.item_id,
+                        stats_alias.stat_date == max_date_subq.c.max_date,
+                    ),
+                )
+            )
+            order_col = getattr(stats_alias, stats_col_map[sort_by])
+        elif sort_by == "price":
+            # 价格列为字符串且部分数据带货币符号（如 "¥1"），剥离符号后再转数值排序
+            order_col = cast(
+                func.replace(func.replace(XYCatalogItem.price, "¥", ""), "￥", ""),
+                Numeric(12, 2),
+            )
+        elif sort_by in ("created_at", "updated_at"):
+            order_col = getattr(XYCatalogItem, sort_by)
+
+        if order_col is None:
+            order_col = XYCatalogItem.created_at
+
+        order_exprs = []
+        if stats_alias is not None:
+            # MySQL 中 NULL 默认排最前，用 is_(None) 显式把无快照商品排到最后
+            order_exprs.append(order_col.is_(None))
+        order_exprs.append(order_col.desc() if sort_desc else order_col.asc())
+        stmt = base_stmt.order_by(*order_exprs).offset(offset).limit(page_size)
         rows = await self.session.execute(stmt)
         items_data = rows.all()
         
