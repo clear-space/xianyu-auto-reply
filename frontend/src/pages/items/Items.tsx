@@ -1405,6 +1405,9 @@ export function Items() {
                   <th className="min-w-[260px]">商品标题</th>
                   <th className="min-w-[90px] text-center">状态</th>
                   <th className="min-w-[90px] text-center">上架天数</th>
+                  <th className="min-w-[90px] text-center">曝光(7天)</th>
+                  <th className="min-w-[90px] text-center">浏览(7天)</th>
+                  <th className="min-w-[80px] text-center">想要</th>
                   <th className="min-w-[80px]">价格</th>
                   <th className="min-w-[100px] text-center">是否擦亮</th>
                   <th className="min-w-[100px] text-center">多规格</th>
@@ -1420,7 +1423,7 @@ export function Items() {
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={15}>
+                  <td colSpan={18}>
                     <div className="empty-state py-8">
                       <Package className="empty-state-icon" />
                       <p className="text-gray-500">暂无商品数据</p>
@@ -1492,6 +1495,37 @@ export function Items() {
                         >
                           {item.days_on_shelf} 天
                         </span>
+                      ) : (
+                        <span className="text-gray-400">--</span>
+                      )}
+                    </td>
+                    <td className="text-center text-gray-600 dark:text-gray-300">
+                      {item.show_pv != null ? (
+                        <span
+                          title={item.show_uv != null ? `曝光人数 ${item.show_uv}` : undefined}
+                          className={item.show_pv === 0 ? 'text-gray-400' : undefined}
+                        >
+                          {item.show_pv}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">--</span>
+                      )}
+                    </td>
+                    <td className="text-center text-gray-600 dark:text-gray-300">
+                      {item.ipv != null ? (
+                        <span
+                          title={item.ipv_uv != null ? `浏览人数 ${item.ipv_uv}` : undefined}
+                          className={item.ipv === 0 ? 'text-gray-400' : undefined}
+                        >
+                          {item.ipv}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">--</span>
+                      )}
+                    </td>
+                    <td className="text-center text-gray-600 dark:text-gray-300">
+                      {item.want_count != null ? (
+                        <span title="累计想要数，每日凌晨更新">{item.want_count}</span>
                       ) : (
                         <span className="text-gray-400">--</span>
                       )}

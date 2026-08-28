@@ -34,6 +34,7 @@ from app.services.scheduler.api_cookie_renew_task import api_cookie_renew_task_s
 from app.services.scheduler.close_notice_task import close_notice_task_service
 from app.services.scheduler.red_flower_task import RedFlowerTask
 from app.services.scheduler.db_backup_task import db_backup_task_service
+from app.services.scheduler.item_stats_snapshot_task import item_stats_snapshot_task_service
 from app.services.scheduler.delivery_timeout_task import delivery_timeout_task_service
 from app.services.scheduler.listing_monitor_task import listing_monitor_task_service
 from app.services.scheduler.seller_fill_task import seller_fill_task_service
@@ -63,6 +64,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_CLOSE_NOTICE,
     TASK_CODE_RED_FLOWER,
     TASK_CODE_DB_BACKUP,
+    TASK_CODE_ITEM_STATS_SNAPSHOT,
     TASK_CODE_DELIVERY_TIMEOUT,
     TASK_CODE_LISTING_MONITOR,
     TASK_CODE_SELLER_FILL,
@@ -101,6 +103,7 @@ class SchedulerService:
         self._close_notice_task_handle: Optional[asyncio.Task] = None
         self._red_flower_task_handle: Optional[asyncio.Task] = None
         self._db_backup_task_handle: Optional[asyncio.Task] = None
+        self._item_stats_snapshot_task_handle: Optional[asyncio.Task] = None
         self._delivery_timeout_task_handle: Optional[asyncio.Task] = None
         self._listing_monitor_task_handle: Optional[asyncio.Task] = None
         self._seller_fill_task_handle: Optional[asyncio.Task] = None
@@ -128,6 +131,7 @@ class SchedulerService:
         self._close_notice_task = close_notice_task_service
         self._red_flower_task = RedFlowerTask()
         self._db_backup_task = db_backup_task_service
+        self._item_stats_snapshot_task = item_stats_snapshot_task_service
         self._delivery_timeout_task = delivery_timeout_task_service
         self._listing_monitor_task = listing_monitor_task_service
         self._seller_fill_task = seller_fill_task_service
@@ -184,6 +188,7 @@ class SchedulerService:
             TASK_CODE_CLOSE_NOTICE,
             TASK_CODE_RED_FLOWER,
             TASK_CODE_DB_BACKUP,
+            TASK_CODE_ITEM_STATS_SNAPSHOT,
             TASK_CODE_DELIVERY_TIMEOUT,
             TASK_CODE_LISTING_MONITOR,
             TASK_CODE_SELLER_FILL,
@@ -222,6 +227,7 @@ class SchedulerService:
         self._close_notice_task_handle = asyncio.create_task(self._run_close_notice_loop())
         self._red_flower_task_handle = asyncio.create_task(self._run_red_flower_loop())
         self._db_backup_task_handle = asyncio.create_task(self._run_db_backup_loop())
+        self._item_stats_snapshot_task_handle = asyncio.create_task(self._run_item_stats_snapshot_loop())
         self._delivery_timeout_task_handle = asyncio.create_task(self._run_delivery_timeout_loop())
         self._listing_monitor_task_handle = asyncio.create_task(self._run_listing_monitor_loop())
         self._seller_fill_task_handle = asyncio.create_task(self._run_seller_fill_loop())
@@ -292,6 +298,9 @@ class SchedulerService:
         if self._db_backup_task_handle:
             self._db_backup_task_handle.cancel()
             self._db_backup_task_handle = None
+        if self._item_stats_snapshot_task_handle:
+            self._item_stats_snapshot_task_handle.cancel()
+            self._item_stats_snapshot_task_handle = None
         if self._delivery_timeout_task_handle:
             self._delivery_timeout_task_handle.cancel()
             self._delivery_timeout_task_handle = None
@@ -343,6 +352,7 @@ class SchedulerService:
         close_notice_config = ScheduledTaskService.get_cached_config(TASK_CODE_CLOSE_NOTICE)
         red_flower_config = ScheduledTaskService.get_cached_config(TASK_CODE_RED_FLOWER)
         db_backup_config = ScheduledTaskService.get_cached_config(TASK_CODE_DB_BACKUP)
+        item_stats_snapshot_config = ScheduledTaskService.get_cached_config(TASK_CODE_ITEM_STATS_SNAPSHOT)
         delivery_timeout_config = ScheduledTaskService.get_cached_config(TASK_CODE_DELIVERY_TIMEOUT)
         listing_monitor_config = ScheduledTaskService.get_cached_config(TASK_CODE_LISTING_MONITOR)
         seller_fill_config = ScheduledTaskService.get_cached_config(TASK_CODE_SELLER_FILL)
@@ -474,6 +484,13 @@ class SchedulerService:
                     "task_running": (
                         self._db_backup_task_handle is not None
                         and not self._db_backup_task_handle.done()
+                    ),
+                },
+                TASK_CODE_ITEM_STATS_SNAPSHOT: {
+                    "config": item_stats_snapshot_config or {"interval_seconds": 600, "enabled": True},
+                    "task_running": (
+                        self._item_stats_snapshot_task_handle is not None
+                        and not self._item_stats_snapshot_task_handle.done()
                     ),
                 },
                 TASK_CODE_DELIVERY_TIMEOUT: {
@@ -665,6 +682,7 @@ class SchedulerService:
             TASK_CODE_CLOSE_NOTICE,
             TASK_CODE_RED_FLOWER,
             TASK_CODE_DB_BACKUP,
+            TASK_CODE_ITEM_STATS_SNAPSHOT,
             TASK_CODE_DELIVERY_TIMEOUT,
             TASK_CODE_LISTING_MONITOR,
             TASK_CODE_SELLER_FILL,
@@ -1251,6 +1269,48 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 数据库备份任务循环结束")
+
+    async def _run_item_stats_snapshot_loop(self) -> None:
+        """商品指标快照任务执行循环（凌晨3-4点随机执行 + 启动补跑）"""
+        logger.info("[定时任务调度] 商品指标快照任务循环开始")
+
+        # 初始加载配置
+        await self.reload_task_config(TASK_CODE_ITEM_STATS_SNAPSHOT)
+
+        # 启动补跑：当日尚无快照时立即执行一次（保证上线当天即有数据）
+        try:
+            await self._item_stats_snapshot_task.startup_catchup()
+        except asyncio.CancelledError:
+            logger.info("[定时任务调度] 商品指标快照任务被取消")
+            return
+        except Exception as e:
+            logger.error(f"[定时任务调度] 商品指标快照启动补跑异常: {e}")
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_ITEM_STATS_SNAPSHOT)
+            if not config:
+                config = {"interval_seconds": 600, "enabled": True}
+
+            interval = config.get("interval_seconds", 600)
+            enabled = config.get("enabled", True)
+
+            if enabled:
+                try:
+                    await self._item_stats_snapshot_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 商品指标快照任务被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] 商品指标快照任务执行异常: {e}")
+
+            # 等待下一次检查
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 商品指标快照任务等待被取消")
+                break
+
+        logger.info("[定时任务调度] 商品指标快照任务循环结束")
 
     async def _run_delivery_timeout_loop(self) -> None:
         """发货超时检测任务执行循环"""

@@ -125,8 +125,13 @@ export interface Item {
   has_ai_prompt?: boolean          // 是否配置了AI提示词
   created_at?: string
   updated_at?: string
-  days_on_shelf?: number | null    // 上架天数（数据罗盘补充，仅覆盖在售商品，其它为 null）
-  post_dt?: string | null          // 上架日期（yyyyMMdd，数据罗盘补充）
+  days_on_shelf?: number | null    // 上架天数（快照表补充，无快照为 null）
+  post_dt?: string | null          // 上架日期（yyyyMMdd，快照表补充）
+  show_pv?: number | null          // 近7天曝光次数（快照表补充）
+  show_uv?: number | null          // 近7天曝光人数（快照表补充）
+  ipv?: number | null              // 近7天浏览次数（快照表补充）
+  ipv_uv?: number | null           // 近7天浏览人数（快照表补充）
+  want_count?: number | null       // 累计想要数（每日凌晨更新，快照表补充）
 }
 
 // 订单相关类型

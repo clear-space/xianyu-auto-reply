@@ -36,6 +36,7 @@ TASK_CODE_API_COOKIE_RENEW = "api_cookie_renew"
 TASK_CODE_CLOSE_NOTICE = "close_notice"
 TASK_CODE_RED_FLOWER = "red_flower"
 TASK_CODE_DB_BACKUP = "db_backup"
+TASK_CODE_ITEM_STATS_SNAPSHOT = "item_stats_snapshot"
 TASK_CODE_DELIVERY_TIMEOUT = "delivery_timeout"
 TASK_CODE_LISTING_MONITOR = "listing_monitor"
 TASK_CODE_SELLER_FILL = "seller_fill"
@@ -66,6 +67,7 @@ DEFAULT_CONFIGS = {
     TASK_CODE_CLOSE_NOTICE: {"interval_seconds": 600, "enabled": False},
     TASK_CODE_RED_FLOWER: {"interval_seconds": 300, "enabled": True},
     TASK_CODE_DB_BACKUP: {"interval_seconds": 3600, "enabled": True},
+    TASK_CODE_ITEM_STATS_SNAPSHOT: {"interval_seconds": 600, "enabled": True},
     TASK_CODE_DELIVERY_TIMEOUT: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_LISTING_MONITOR: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_SELLER_FILL: {"interval_seconds": 60, "enabled": True},

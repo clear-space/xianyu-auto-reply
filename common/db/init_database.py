@@ -441,6 +441,13 @@ class DatabaseInitializer:
             "定时备份数据库所有表结构与数据到文件",
         ),
         (
+            "item_stats_snapshot",
+            "商品指标快照任务",
+            600,
+            True,
+            "每日凌晨3-4点随机时刻采集在售商品的曝光/浏览/咨询/成交/想要等运营指标并写入快照表，按保留天数自动清理",
+        ),
+        (
             "delivery_timeout",
             "发货超时检测任务",
             60,
@@ -1564,6 +1571,42 @@ class DatabaseInitializer:
                 INDEX idx_arml_order_strategy_id (order_no, reply_strategy, id),
                 INDEX idx_arml_strategy_order_id (reply_strategy, order_no, id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自动回复消息日志表';
+        """,
+
+        "xy_item_stats_daily": """
+            CREATE TABLE IF NOT EXISTS `xy_item_stats_daily` (
+                `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+                `account_id` VARCHAR(80) NOT NULL COMMENT '账号标识',
+                `item_id` VARCHAR(64) NOT NULL COMMENT '闲鱼商品ID',
+                `stat_date` VARCHAR(8) NOT NULL COMMENT '快照日期 yyyyMMdd（采集日期）',
+                `show_pv_1d` INT DEFAULT NULL COMMENT '当日曝光次数（近24小时窗口）',
+                `show_uv_1d` INT DEFAULT NULL COMMENT '当日曝光人数（近24小时窗口）',
+                `ipv_1d` INT DEFAULT NULL COMMENT '当日浏览次数（近24小时窗口）',
+                `ipv_uv_1d` INT DEFAULT NULL COMMENT '当日浏览人数（近24小时窗口）',
+                `chat_uv_1d` INT DEFAULT NULL COMMENT '当日咨询人数（近24小时窗口）',
+                `pay_ord_cnt_1d` INT DEFAULT NULL COMMENT '当日支付笔数（近24小时窗口）',
+                `pay_byr_cnt_1d` INT DEFAULT NULL COMMENT '当日支付买家数（近24小时窗口）',
+                `pay_amt_1d` VARCHAR(32) DEFAULT NULL COMMENT '当日支付金额（近24小时窗口）',
+                `ipv_pay_ucvr_1d` VARCHAR(16) DEFAULT NULL COMMENT '当日浏览支付转化率（近24小时窗口）',
+                `show_pv_7d` INT DEFAULT NULL COMMENT '近7天曝光次数',
+                `show_uv_7d` INT DEFAULT NULL COMMENT '近7天曝光人数',
+                `ipv_7d` INT DEFAULT NULL COMMENT '近7天浏览次数',
+                `ipv_uv_7d` INT DEFAULT NULL COMMENT '近7天浏览人数',
+                `chat_uv_7d` INT DEFAULT NULL COMMENT '近7天咨询人数',
+                `pay_ord_cnt_7d` INT DEFAULT NULL COMMENT '近7天支付笔数',
+                `pay_byr_cnt_7d` INT DEFAULT NULL COMMENT '近7天支付买家数',
+                `pay_amt_7d` VARCHAR(32) DEFAULT NULL COMMENT '近7天支付金额',
+                `ipv_pay_ucvr_7d` VARCHAR(16) DEFAULT NULL COMMENT '近7天浏览支付转化率',
+                `want_count` INT DEFAULT NULL COMMENT '累计想要数（商品详情接口）',
+                `days_on_shelf` INT DEFAULT NULL COMMENT '上架天数（采集时刻）',
+                `post_dt` VARCHAR(8) DEFAULT NULL COMMENT '上架日期 yyyyMMdd',
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `uk_item_stats_acc_item_date` (`account_id`, `item_id`, `stat_date`),
+                INDEX `idx_item_stats_stat_date` (`stat_date`),
+                INDEX `idx_item_stats_item` (`item_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品运营指标每日快照表（凌晨定时采集，按保留天数自动清理）';
         """,
 
         "xy_publish_addresses": """
