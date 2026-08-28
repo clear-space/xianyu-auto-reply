@@ -3,7 +3,8 @@
 
 功能（筛选 / 分组下架 / 删本地 逻辑只维护一份，backend 手动触发与 scheduler 定时触发共用）：
 1. 筛选：仅规则内账号的在售商品（账号维度过滤 + 在售状态，非在售下架接口必败）
-2. 选品：下架权重算法打分（上架天数/无订单天数/近30天订单/擦亮信号），
+2. 选品：下架权重算法打分（真实上架天数、近7天曝光/浏览/咨询/成交/转化率、
+   累计想要、擦亮官方数据归一化加权，无快照商品不参与），
    按权重降序（top 直选）或加权随机取每个账号前 Z 个
 3. 执行：按账号分组，每个账号一次批量下架 API（mtop batch.offline）；
    账号无 Cookie/不存在 → 跳过并记账号级失败
@@ -281,11 +282,9 @@ class OfflineExecutor:
                     session=session,
                 )
 
-                # 硬排开关 + 得分阈值过滤
-                if delist_params.get("exclude_recent_order"):
-                    scored = [s for s in scored if not s["signals"]["recent_order"]]
-                if delist_params.get("exclude_polished"):
-                    scored = [s for s in scored if not s["signals"]["polished"]]
+                # 硬排开关与无数据商品在评分阶段已置权重 0（signals.excluded/no_data），
+                # 此处按权重 > 0 剔除，保证不参与下架；min_score 阈值过滤保持旧语义
+                scored = [s for s in scored if s["weight"] > 0]
                 min_score = int(delist_params.get("min_score") or 0)
                 if min_score > 0:
                     scored = [s for s in scored if s["weight"] >= min_score]

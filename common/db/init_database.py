@@ -445,7 +445,7 @@ class DatabaseInitializer:
             "商品指标快照任务",
             600,
             True,
-            "每日凌晨3-4点随机时刻采集在售商品的曝光/浏览/咨询/成交/想要等运营指标并写入快照表，按保留天数自动清理",
+            "每日凌晨3-4点随机时刻采集在售商品的当日与近7天曝光/浏览/咨询/成交、累计想要等运营指标并写入快照表，按保留天数自动清理",
         ),
         (
             "delivery_timeout",
@@ -2029,7 +2029,7 @@ class DatabaseInitializer:
                 description VARCHAR(500) COMMENT '算法说明',
                 params JSON NOT NULL COMMENT '权重参数JSON',
                 enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
-                is_builtin TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排开关与选料方式可调，不可删除/停用，列表置顶）',
+                is_builtin TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅少量开关可调，其余参数只读，不可删除/停用，列表置顶）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_wa_enabled (enabled)
@@ -2075,7 +2075,7 @@ class DatabaseInitializer:
             ("schedule_name", "VARCHAR(100) DEFAULT NULL COMMENT '规则名称快照（规则删除后执行记录仍可查看名称）'", "schedule_id"),
         ],
         "xy_weight_algorithms": [
-            ("is_builtin", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅硬排开关与选料方式可调，不可删除/停用，列表置顶）'", "enabled"),
+            ("is_builtin", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅少量开关可调，其余参数只读，不可删除/停用，列表置顶）'", "enabled"),
             ("algorithm_type", "VARCHAR(32) NOT NULL DEFAULT 'heat_weight' COMMENT '算法类型：heat_weight-热度加权, delist_weight-下架加权'", "name"),
         ],
         "xy_recharge_orders": [
@@ -3926,56 +3926,113 @@ class DatabaseInitializer:
     DEFAULT_DELIST_ALGORITHMS = (
         (
             "下架均衡",
-            "下架加权默认策略：上架越久/无单越久越优先下架，保护近期有单与已擦亮商品",
+            "下架加权默认策略：基于闲鱼官方数据归一化加权——老化越久/连续无成交越久/近7天曝光浏览咨询成交转化越低越优先下架，保护有成交有流量与已擦亮商品",
             {
                 "base_score": 100,
-                "age_points_per_day": 2,
-                "age_cap_days": 100,
-                "no_order_points_per_day": 8,
-                "no_order_cap_days": 30,
-                "recent_order_penalty": 120,
-                "polished_penalty": 60,
+                "w_age": 80,
+                "w_no_sale": 120,
+                "w_exposure": 100,
+                "w_browse": 40,
+                "w_chat": 30,
+                "w_sale": 100,
+                "w_ucvr": 30,
+                "w_want": 40,
+                "w_polished": 30,
                 "min_score": 0,
                 "sample_mode": "top",
+                "norm_method": "percentile",
+                "no_data_behavior": "exclude",
                 "exclude_recent_order": False,
                 "exclude_polished": False,
             },
         ),
         (
             "激进清仓",
-            "加速清理：老化与无单信号大幅加权，低分不下架，订单保护更弱",
+            "加速清理：老化与连续无成交大幅加权，低分不下架，近7天成交与流量保护更弱",
             {
                 "base_score": 50,
-                "age_points_per_day": 5,
-                "age_cap_days": 60,
-                "no_order_points_per_day": 15,
-                "no_order_cap_days": 20,
-                "recent_order_penalty": 60,
-                "polished_penalty": 20,
+                "w_age": 120,
+                "w_no_sale": 180,
+                "w_exposure": 120,
+                "w_browse": 50,
+                "w_chat": 30,
+                "w_sale": 140,
+                "w_ucvr": 40,
+                "w_want": 30,
+                "w_polished": 10,
                 "min_score": 50,
                 "sample_mode": "top",
+                "norm_method": "percentile",
+                "no_data_behavior": "exclude",
                 "exclude_recent_order": False,
                 "exclude_polished": False,
             },
         ),
         (
             "保守保值",
-            "谨慎下架：老化计分缓慢，订单与擦亮保护最强，尽量只下长期无单商品",
+            "谨慎下架：老化计分缓慢，近7天成交/流量/咨询与想要增长保护最强，尽量只下长期无成交商品",
             {
                 "base_score": 100,
-                "age_points_per_day": 1,
-                "age_cap_days": 200,
-                "no_order_points_per_day": 3,
-                "no_order_cap_days": 45,
-                "recent_order_penalty": 200,
-                "polished_penalty": 150,
+                "w_age": 50,
+                "w_no_sale": 70,
+                "w_exposure": 80,
+                "w_browse": 30,
+                "w_chat": 40,
+                "w_sale": 90,
+                "w_ucvr": 20,
+                "w_want": 60,
+                "w_polished": 100,
                 "min_score": 0,
                 "sample_mode": "top",
+                "norm_method": "percentile",
+                "no_data_behavior": "exclude",
                 "exclude_recent_order": False,
                 "exclude_polished": False,
             },
         ),
     )
+
+    # 旧版预设参数（识别未修改的内置算法，升级为新版归一化参数；用户改过的不动）
+    # 旧版预设参数（识别未修改的预设，升级为新版归一化参数；用户改过的不动）
+    LEGACY_DELIST_PRESET_PARAMS = {
+        "下架均衡": {
+            "base_score": 100, "age_points_per_day": 2, "age_cap_days": 100,
+            "no_order_points_per_day": 8, "no_order_cap_days": 30,
+            "recent_order_penalty": 120, "polished_penalty": 60,
+            "min_score": 0, "sample_mode": "top",
+            "exclude_recent_order": False, "exclude_polished": False,
+        },
+        "激进清仓": {
+            "base_score": 50, "age_points_per_day": 5, "age_cap_days": 60,
+            "no_order_points_per_day": 15, "no_order_cap_days": 20,
+            "recent_order_penalty": 60, "polished_penalty": 20,
+            "min_score": 50, "sample_mode": "top",
+            "exclude_recent_order": False, "exclude_polished": False,
+        },
+        "保守保值": {
+            "base_score": 100, "age_points_per_day": 1, "age_cap_days": 200,
+            "no_order_points_per_day": 3, "no_order_cap_days": 45,
+            "recent_order_penalty": 200, "polished_penalty": 150,
+            "min_score": 0, "sample_mode": "top",
+            "exclude_recent_order": False, "exclude_polished": False,
+        },
+    }
+
+    # 可刷新的预设说明历史版本（描述仍为这些旧文案时刷新为新文案；参数是否升级独立判断）
+    LEGACY_DELIST_PRESET_DESCRIPTIONS = {
+        "下架均衡": (
+            "下架加权默认策略：上架越久/无单越久越优先下架，保护近期有单与已擦亮商品",
+            "下架加权默认策略：基于闲鱼官方数据归一化加权——老化越久/连续无成交越久/曝光浏览咨询成交转化越低越优先下架，保护有成交有流量与已擦亮商品",
+        ),
+        "激进清仓": (
+            "加速清理：老化与无单信号大幅加权，低分不下架，订单保护更弱",
+            "加速清理：老化与连续无成交大幅加权，低分不下架，成交与流量保护更弱",
+        ),
+        "保守保值": (
+            "谨慎下架：老化计分缓慢，订单与擦亮保护最强，尽量只下长期无单商品",
+            "谨慎下架：老化计分缓慢，成交/流量/咨询/想要保护最强，尽量只下长期无成交商品",
+        ),
+    }
 
     async def init_delist_algorithms(self):
         """初始化下架权重算法预设（按名称幂等，不覆盖用户修改）"""
@@ -3989,6 +4046,49 @@ class DatabaseInitializer:
                         {"name": name},
                     )
                     if result.fetchone():
+                        # 升级旧版预设（三套预设均参与）：
+                        # 1) 参数与旧预设完全一致（未被用户修改）→ 升级为新版归一化参数+新说明
+                        # 2) 参数已是新版但说明仍是旧文案 → 仅刷新说明
+                        legacy_params = self.LEGACY_DELIST_PRESET_PARAMS.get(name)
+                        legacy_desc = self.LEGACY_DELIST_PRESET_DESCRIPTIONS.get(name)
+                        stored_row = await session.execute(
+                            text(
+                                "SELECT params, description FROM xy_weight_algorithms "
+                                "WHERE name = :name"
+                            ),
+                            {"name": name},
+                        )
+                        stored_result = stored_row.fetchone()
+                        stored_raw = stored_result[0] if stored_result else None
+                        stored_desc = stored_result[1] if stored_result else None
+                        try:
+                            stored_params = json.loads(stored_raw) if isinstance(stored_raw, str) else stored_raw
+                        except Exception:
+                            stored_params = None
+
+                        if legacy_params is not None and stored_params == legacy_params:
+                            await session.execute(
+                                text(
+                                    "UPDATE xy_weight_algorithms SET params = :params, description = :description "
+                                    "WHERE name = :name"
+                                ),
+                                {
+                                    "name": name,
+                                    "params": json.dumps(params, ensure_ascii=False),
+                                    "description": description,
+                                },
+                            )
+                            logger.info(f"✓ 下架权重算法「{name}」已从旧版参数升级为归一化新参数")
+                        elif legacy_desc is not None and stored_desc in legacy_desc:
+                            await session.execute(
+                                text(
+                                    "UPDATE xy_weight_algorithms SET description = :description "
+                                    "WHERE name = :name"
+                                ),
+                                {"name": name, "description": description},
+                            )
+                            logger.info(f"✓ 下架权重算法「{name}」说明已刷新为新口径")
+
                         if is_builtin:
                             await session.execute(
                                 text("UPDATE xy_weight_algorithms SET is_builtin = 1, enabled = 1 WHERE name = :name"),

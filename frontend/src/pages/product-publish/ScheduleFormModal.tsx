@@ -14,6 +14,7 @@ import { useUIStore } from '@/store/uiStore'
 import { SegmentedControl } from '@/components/common/SegmentedControl'
 import { getAccountDetails } from '@/api/accounts'
 import { getMaterials, getAllMaterialIds, createSchedule, updateSchedule, getWeightAlgorithmOptions, type ProductMaterial, type PublishSchedule, type ScheduleConfig, type CreateScheduleParams, type UpdateScheduleParams, type WeightAlgorithmOption } from '@/api/productPublish'
+import { ALGORITHM_TYPES } from '@/api/weightAlgorithms'
 
 interface Props {
   initial?: PublishSchedule | null
@@ -29,10 +30,9 @@ type PublishMode = 'specified' | 'random'
 
 const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 
-// 算法类型注册表（新增算法类型时在此登记）
-const ALGORITHM_TYPES: Array<{ value: string; label: string }> = [
-  { value: 'heat_weight', label: '热度加权' },
-]
+// 算法类型注册表统一维护在 @/api/weightAlgorithms（ALGORITHM_TYPES）；
+// 本表单只开放热度加权（下架加权在定时下架规则表单中使用）
+const ALLOWED_ALGORITHM_TYPES = ['heat_weight']
 const DEFAULT_TIME_RANGE = { start: '09:00', end: '21:00' }
 
 export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props) {
@@ -495,11 +495,8 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
                           ?? weightAlgorithms.find(a => (a.algorithm_type || 'heat_weight') === t)
                         setWeightAlgorithmId(firstOfType?.id ?? null)
                       }}>
-                      {/* 注册表类型 + 数据中出现的类型（防未来新增类型时下拉空白） */}
-                      {Array.from(new Set([
-                        ...ALGORITHM_TYPES.map(t => t.value),
-                        ...weightAlgorithms.map(a => a.algorithm_type || 'heat_weight'),
-                      ])).map(v => (
+                      {/* 本表单开放的类型 + 当前已选类型（编辑时引用的算法可能属于历史类型，防下拉空白） */}
+                      {Array.from(new Set([...ALLOWED_ALGORITHM_TYPES, weightAlgorithmType])).map(v => (
                         <option key={v} value={v}>
                           {ALGORITHM_TYPES.find(t => t.value === v)?.label ?? v}
                         </option>

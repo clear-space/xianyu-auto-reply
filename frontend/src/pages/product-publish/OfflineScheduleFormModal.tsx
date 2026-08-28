@@ -4,7 +4,7 @@
  * 功能：
  * 1. 规则名称、重复模式（每天/每周）
  * 2. 时间配置：指定时间点 或 时间段随机（复用定时发布组件逻辑）
- * 3. 筛选参数：每账号下架上限 Z + 下架权重算法（选品排序）
+ * 3. 筛选参数：每账号下架上限 Z + 权重算法（按"算法类型 → 算法"两级选择）
  * 4. 选择账号（仅下架这些账号的商品）
  */
 import { useState, useEffect } from 'react'
@@ -13,7 +13,7 @@ import { X, Loader2, Save, PackageX, FileText, CalendarClock, SlidersHorizontal,
 import { useUIStore } from '@/store/uiStore'
 import { SegmentedControl } from '@/components/common/SegmentedControl'
 import { getAccountDetails } from '@/api/accounts'
-import { getWeightAlgorithmOptions, type WeightAlgorithmOption } from '@/api/weightAlgorithms'
+import { ALGORITHM_TYPES, getWeightAlgorithmOptions, type WeightAlgorithmOption } from '@/api/weightAlgorithms'
 import {
   createOfflineSchedule, updateOfflineSchedule,
   type OfflineSchedule, type CreateOfflineScheduleParams, type UpdateOfflineScheduleParams,
@@ -31,6 +31,10 @@ type TimeMode = 'fixed' | 'random'
 
 const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 const DEFAULT_TIME_RANGE = { start: '09:00', end: '21:00' }
+
+// 本表单开放的算法类型（算法类型注册表统一维护在 @/api/weightAlgorithms；
+// 未来新增算法类别时，在此追加即可出现在类型下拉中）
+const ALLOWED_ALGORITHM_TYPES = ['delist_weight']
 
 export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
   const { addToast } = useUIStore()
@@ -52,23 +56,54 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
     new Set(initial?.account_ids || [])
   )
   const [maxCount, setMaxCount] = useState<number>(initial?.max_count || 1)
+  // 算法两级选择：先选算法类型，再选该类型下的具体算法（与定时发布一致，便于扩展新类别）
+  const [weightAlgorithmType, setWeightAlgorithmType] = useState<string>('delist_weight')
   const [delistAlgorithmId, setDelistAlgorithmId] = useState<number | ''>(
     initial?.delist_algorithm_id ?? ''
   )
 
   useEffect(() => {
-    // 账号 + 启用中的下架权重算法（下拉用）
+    // 账号 + 启用中的全部权重算法（按"算法类型 → 算法"两级选择）
     Promise.all([
       getAccountDetails(),
-      getWeightAlgorithmOptions('delist_weight'),
+      getWeightAlgorithmOptions(),
     ])
       .then(([accList, algoRes]) => {
         setAccounts(accList)
-        if (algoRes.success) setAlgorithms(algoRes.data?.list ?? [])
+        if (algoRes.success) {
+          applyAlgorithmOptions(algoRes.data?.list ?? [])
+        }
       })
       .catch(() => {})
       .finally(() => setDataLoading(false))
   }, [])
+
+  /** 应用算法选项：补占位（规则引用的算法已停用/被删时），并回填当前类型 */
+  const applyAlgorithmOptions = (rawList: WeightAlgorithmOption[]) => {
+    let list = rawList
+    const referenced = initial?.delist_algorithm_id
+    if (referenced != null && !list.some(a => a.id === referenced)) {
+      list = [...list, {
+        id: referenced,
+        name: `算法#${referenced}（不可用）`,
+        algorithm_type: 'delist_weight',
+        description: null,
+        params: {},
+        is_builtin: false,
+      }]
+    }
+    setAlgorithms(list)
+    const chosen = referenced != null
+      ? list.find(a => a.id === referenced)
+      : list.find(a => a.algorithm_type === 'delist_weight' && a.is_builtin)
+    if (chosen) {
+      setWeightAlgorithmType(chosen.algorithm_type || 'delist_weight')
+      setDelistAlgorithmId(prev => (prev === '' ? chosen.id : prev))
+    } else if (list[0]) {
+      setWeightAlgorithmType(list[0].algorithm_type || 'delist_weight')
+      setDelistAlgorithmId(prev => (prev === '' ? list[0].id : prev))
+    }
+  }
 
   const buildConfig = (): ScheduleConfig => {
     const config: ScheduleConfig = {}
@@ -278,19 +313,50 @@ export function OfflineScheduleFormModal({ initial, onClose, onSaved }: Props) {
                   </div>
                 </div>
                 <div className="input-group">
-                  <label className="input-label">下架权重算法</label>
-                  <select className="input-ios" value={delistAlgorithmId}
-                    onChange={e => setDelistAlgorithmId(e.target.value === '' ? '' : Number(e.target.value))}>
-                    <option value="">系统默认参数（下架均衡）</option>
-                    {algorithms.map(a => (
-                      <option key={a.id} value={a.id}>{a.name}</option>
-                    ))}
-                  </select>
+                  <label className="input-label">权重算法</label>
+                  <div className="flex items-center gap-2">
+                    <select className="input-ios w-32" value={weightAlgorithmType}
+                      onChange={e => {
+                        const t = e.target.value
+                        setWeightAlgorithmType(t)
+                        const firstOfType = algorithms.find(a => (a.algorithm_type || 'delist_weight') === t && a.is_builtin)
+                          ?? algorithms.find(a => (a.algorithm_type || 'delist_weight') === t)
+                        setDelistAlgorithmId(firstOfType?.id ?? '')
+                      }}>
+                      {/* 本表单开放的类型 + 当前已选类型（编辑时引用的算法可能属于历史类型，防下拉空白） */}
+                      {Array.from(new Set([...ALLOWED_ALGORITHM_TYPES, weightAlgorithmType])).map(v => (
+                        <option key={v} value={v}>
+                          {ALGORITHM_TYPES.find(t => t.value === v)?.label ?? v}
+                        </option>
+                      ))}
+                    </select>
+                    <select className="input-ios flex-1" value={delistAlgorithmId}
+                      onChange={e => setDelistAlgorithmId(e.target.value === '' ? '' : Number(e.target.value))}>
+                      {(() => {
+                        const typedList = algorithms.filter(a => (a.algorithm_type || 'delist_weight') === weightAlgorithmType)
+                        // 兜底：按类型过滤为空时显示全部，避免下拉空白
+                        const displayList = typedList.length > 0 ? typedList : algorithms
+                        if (displayList.length === 0) {
+                          return <option value="">暂无算法（请先在「优化算法」中新建）</option>
+                        }
+                        return (
+                          <>
+                            <option value="">系统默认参数（不选算法）</option>
+                            {displayList.map(a => (
+                              <option key={a.id} value={a.id} title={a.description || undefined}>
+                                {a.name}{a.is_builtin ? '（内置）' : ''}
+                              </option>
+                            ))}
+                          </>
+                        )
+                      })()}
+                    </select>
+                  </div>
                 </div>
               </div>
               <p className="flex items-start gap-1.5 text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg px-3 py-2">
                 <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                <span>对账号内在售商品按下架权重算法打分（上架越久/无单越久分越高），权重最高的优先下架，每个账号最多下架 {maxCount} 个</span>
+                <span>对账号内在售商品按闲鱼官方数据（真实上架天数、近7天曝光/浏览/咨询/成交/转化率、累计想要）归一化打分，权重最高的优先下架，每个账号最多下架 {maxCount} 个</span>
               </p>
             </div>
           </div>

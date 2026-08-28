@@ -25,16 +25,23 @@ export interface HeatWeightParams {
   sample_mode: 'weighted' | 'top'
 }
 
-/** 下架加权参数（下架算法） */
+/** 下架加权参数（下架算法，基于闲鱼官方数据归一化加权） */
 export interface DelistWeightParams {
   base_score: number
-  age_points_per_day: number
-  age_cap_days: number
-  no_order_points_per_day: number
-  no_order_cap_days: number
-  recent_order_penalty: number
-  polished_penalty: number
+  w_age: number
+  w_no_sale: number
+  w_exposure: number
+  w_browse: number
+  w_chat: number
+  w_sale: number
+  w_ucvr: number
+  w_want: number
+  w_polished: number
   min_score: number
+  /** 归一化方式：percentile-账号内百分位；log-对数归一化 */
+  norm_method: 'percentile' | 'log'
+  /** 无快照商品：exclude-权重0不参与；base-仅基础分参与 */
+  no_data_behavior: 'exclude' | 'base'
   /** 选取方式：top-按权重直选（高分必先下）；weighted-加权随机（权重=概率） */
   sample_mode: 'weighted' | 'top'
   exclude_recent_order: boolean
@@ -124,7 +131,7 @@ export interface HeatWeightPreviewEntry {
   }
 }
 
-/** 下架加权预览条目（在售商品维度） */
+/** 下架加权预览条目（在售商品维度，基于闲鱼官方数据归一化加权） */
 export interface DelistWeightPreviewEntry {
   item_id: string
   title: string
@@ -134,18 +141,42 @@ export interface DelistWeightPreviewEntry {
   /** 权重逐项构成（含零值项，负数为扣分） */
   parts: {
     base: number
-    age_points: number
-    no_order_points: number
-    recent_order_penalty: number
-    polished_penalty: number
+    age: number
+    no_sale: number
+    exposure: number
+    browse: number
+    chat: number
+    sale: number
+    ucvr: number
+    want: number
+    polished: number
+  }
+  /** 各信号归一化值（0~1，百分位；仅预览透明化展示用） */
+  p_values?: {
+    age?: number
+    no_sale?: number
+    exposure?: number
+    browse?: number
+    chat?: number
+    sale?: number
+    ucvr?: number
+    want?: number
   }
   /** 原始分低于 0 被保底为 0 */
   clamped: boolean
   signals: {
     age_days: number
-    no_order_days: number
-    recent_order: boolean
+    no_sale_days: number
     polished: boolean
+    show_pv_7d?: number | null
+    ipv_7d?: number | null
+    chat_uv_7d?: number | null
+    pay_ord_cnt_7d?: number | null
+    ucvr_7d?: string | null
+    want_growth_7d?: number | null
+    want_now?: number | null
+    no_data?: boolean
+    excluded?: boolean
   }
 }
 
@@ -197,6 +228,12 @@ export interface WeightAlgorithmOption {
   params: Record<string, unknown>
   is_builtin: boolean
 }
+
+/** 算法类型注册表（规则表单两级选择下拉用；新增算法类型时在此登记） */
+export const ALGORITHM_TYPES: Array<{ value: WeightAlgorithmType; label: string }> = [
+  { value: 'heat_weight', label: '热度加权' },
+  { value: 'delist_weight', label: '下架加权' },
+]
 
 /** 启用中的算法列表（可按类型过滤） */
 export const getWeightAlgorithmOptions = (algorithmType?: WeightAlgorithmType): Promise<

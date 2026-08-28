@@ -34,7 +34,7 @@ ALGORITHM_TYPES = ("heat_weight", "delist_weight")
 # 内置算法各类型可调参数键（其余参数只读）
 _BUILTIN_EDITABLE_KEYS = {
     "heat_weight": ("exclude_sold", "sample_mode"),
-    "delist_weight": ("exclude_recent_order", "exclude_polished", "sample_mode"),
+    "delist_weight": ("sample_mode",),
 }
 
 
@@ -163,7 +163,7 @@ async def update_weight_algorithm(
     if algo is None:
         return ApiResponse(success=False, message="算法不存在")
     if algo.is_builtin:
-        # 内置算法：仅允许调整硬排开关与选料方式，其余字段与参数保持只读（静默忽略）
+        # 内置算法：仅允许调整选取方式，其余字段与参数保持只读（静默忽略）
         if payload.params is not None:
             editable = _BUILTIN_EDITABLE_KEYS.get(algo.algorithm_type, ("sample_mode",))
             normalized = _normalize_params_by_type(algo.algorithm_type, payload.params)
@@ -175,7 +175,7 @@ async def update_weight_algorithm(
             await session.refresh(algo)
         return ApiResponse(
             success=True,
-            message="内置算法已更新（仅硬排开关与选料方式生效，其余参数只读）",
+            message="内置算法已更新（仅选取方式生效，其余参数只读）",
             data=_to_dict(algo),
         )
 
@@ -273,7 +273,7 @@ async def preview_weight_algorithm(
     if algo is None:
         return ApiResponse(success=False, message="算法不存在")
 
-    # 下架加权：对作用域内全部在售商品打分（按账号分组，订单信号按账号隔离）
+    # 下架加权：对作用域内全部在售商品打分（按账号分组，官方快照信号按账号隔离）
     if algo.algorithm_type == "delist_weight":
         from common.models.xy_account import XYAccount
         from common.models.xy_catalog_item import XYCatalogItem
@@ -289,7 +289,7 @@ async def preview_weight_algorithm(
             acc_stmt = acc_stmt.where(XYAccount.owner_id == scope_owner)
         acc_rows = (await session.execute(acc_stmt)).scalars().all()
         acc_map = {a.id: a.account_id for a in acc_rows}
-        # 账号所属用户（管理员跨用户预览时，订单信号按商品实际 owner 隔离）
+        # 账号所属用户（管理员跨用户预览时，官方快照信号按商品实际 owner 隔离）
         acc_owner_map = {a.id: a.owner_id for a in acc_rows}
 
         # 指定账号预览：只保留所选账号的在售商品（不传=全部账号）
@@ -370,6 +370,7 @@ async def preview_weight_algorithm(
                         "weight": d["weight"],
                         "signals": d["signals"],
                         "parts": d["parts"],
+                        "p_values": d.get("p_values") or {},
                         "clamped": d["clamped"],
                     }
                     for d in details
