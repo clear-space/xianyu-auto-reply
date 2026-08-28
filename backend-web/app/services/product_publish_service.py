@@ -259,6 +259,53 @@ class ProductMaterialService:
                 material_map[row.id] = row
         return [material_map[mid] for mid in material_ids if mid in material_map]
 
+    async def sanitize_schedule_material_ids(
+        self, material_ids: List[int], user_id: int
+    ) -> tuple[List[int], List[int]]:
+        """净化定时规则素材ID：软删除静默剔除，返回 (有效ID列表, 缺失ID列表)
+
+        素材库删除素材后，规则里残留的旧ID不应卡住编辑保存：
+        - 存在且未删除 → 有效（保留原顺序、去重）
+        - 存在但已软删除 → 静默剔除（不报错）
+        - 不存在或不属于当前用户 → 缺失（由调用方决定报错）
+        """
+        valid: List[int] = []
+        missing: List[int] = []
+        seen: set[int] = set()
+        status_map: dict[int, bool] = {}
+        unique_ids = list(dict.fromkeys(material_ids))
+        # 分批查询：素材过多时避免 IN 子句超出 MySQL max_allowed_packet
+        for i in range(0, len(unique_ids), 500):
+            batch = unique_ids[i:i + 500]
+            stmt = select(ProductMaterial.id, ProductMaterial.is_deleted).where(
+                ProductMaterial.user_id == user_id,
+                ProductMaterial.id.in_(batch),
+            )
+            for row in (await self.session.execute(stmt)).all():
+                status_map[row[0]] = bool(row[1])
+        for mid in material_ids:
+            if mid in seen:
+                continue
+            seen.add(mid)
+            if mid not in status_map:
+                missing.append(mid)
+            elif not status_map[mid]:
+                valid.append(mid)
+            # 已软删除：静默剔除
+        return valid, missing
+
+    async def list_for_schedule(
+        self, material_ids: List[int], user_id: int, material_scope: str = "selected",
+    ) -> List[ProductMaterial]:
+        """按素材范围解析定时规则的素材池
+
+        scope=all：实时查询库内全部未删除素材（新增自动纳入、删除自动剔除）；
+        scope=selected：按规则存储的素材ID快照查询（已删除的自动过滤）。
+        """
+        if material_scope == "all":
+            material_ids = await self.list_material_ids(user_id)
+        return await self.list_by_ids(material_ids, user_id)
+
     async def update(self, material_id: int, user_id: int = None, data: dict = None) -> Optional[ProductMaterial]:
         """更新素材（user_id=None时管理员可操作任意素材）"""
         data = data or {}

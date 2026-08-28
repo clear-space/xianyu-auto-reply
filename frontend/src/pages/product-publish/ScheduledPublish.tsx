@@ -600,7 +600,9 @@ export function ScheduledPublish() {
                     </td>
                     <td className="text-sm text-slate-500">{formatConfig(s)}</td>
                     <td className="text-sm text-slate-500">
-                      {(s.account_count ?? s.account_ids.length)} 账号 / {(s.material_count ?? s.material_ids.length)} 素材
+                      {(s.account_count ?? s.account_ids.length)} 账号 / {s.material_scope === 'all'
+                        ? <span className="badge-info">全部素材（{s.material_count ?? 0}）</span>
+                        : `${s.material_count ?? s.material_ids.length} 素材`}
                     </td>
                     <td>
                       <span className={`text-sm ${!s.enabled ? 'text-slate-400' : s.next_trigger_at && new Date(s.next_trigger_at).getTime() < Date.now() ? 'text-amber-600 font-medium' : 'text-slate-500'}`}>

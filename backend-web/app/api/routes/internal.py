@@ -23,7 +23,7 @@ class InternalBatchPublishRequest(BaseModel):
     """内部批量发布请求（含 user_id，无需认证）"""
     user_id: int = Field(..., description="所属用户ID")
     account_ids: List[str] = Field(..., min_length=1, description="账号ID列表")
-    material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
+    material_ids: List[int] = Field(default_factory=list, description="素材ID列表（素材范围=全部素材的规则为空列表，素材池由后端实时解析）")
     schedule_id: Optional[int] = Field(None, description="定时发布规则ID（scheduler 传入）")
     schedule_log_id: Optional[int] = Field(None, description="关联的定时发布执行记录ID（scheduler 传入）")
     batch_id: Optional[str] = Field(None, description="批次ID（scheduler 预生成，保证执行记录与发布日志同批次）")
@@ -71,17 +71,27 @@ async def internal_publish_batch(
 
     if schedule:
         # 定时发布共享执行器（手动触发与 scheduler 共用的唯一实现）
+        from app.services.product_publish_service import ProductMaterialService
         from app.services.scheduled_publish_executor import ScheduledPublishExecutor
+
+        material_scope = schedule.material_scope or "selected"
+        # 全部素材范围：素材池由执行器实时解析，batch 快照初始素材数也取库内实时值（进度面板初始即正确）
+        material_count = len(schedule.material_ids or [])
+        if material_scope == "all":
+            material_count = len(
+                await ProductMaterialService(session).list_material_ids(schedule.user_id)
+            )
 
         await PublishBatchStatusService.init_batch(
             batch_id=batch_id,
             account_ids=list(schedule.account_ids or []),
-            material_count=len(schedule.material_ids or []),
+            material_count=material_count,
         )
         schedule_data = {
             "id": schedule.id,
             "account_ids": list(schedule.account_ids or []),
             "material_ids": list(schedule.material_ids or []),
+            "material_scope": material_scope,
             "publish_mode": schedule.publish_mode or "specified",
             "random_count": schedule.random_count,
             "deduplicate_enabled": bool(schedule.deduplicate_enabled),

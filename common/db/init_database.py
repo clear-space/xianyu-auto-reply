@@ -1903,6 +1903,7 @@ class DatabaseInitializer:
                 schedule_config JSON NOT NULL COMMENT '时间配置JSON',
                 account_ids JSON NOT NULL COMMENT '闲鱼账号ID列表',
                 material_ids JSON NOT NULL COMMENT '素材ID列表',
+                material_scope VARCHAR(20) NOT NULL DEFAULT 'selected' COMMENT '素材范围：selected-指定素材, all-全部素材（随素材库实时更新）',
                 enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
                 last_triggered_at DATETIME COMMENT '上次触发时间',
                 next_trigger_at DATETIME COMMENT '下次触发时间',
@@ -2024,6 +2025,7 @@ class DatabaseInitializer:
             ("random_count", "INT DEFAULT NULL COMMENT '随机发布数量（publish_mode=random 时有效）'", "publish_mode"),
             ("deduplicate_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '去重开关（随机模式可用）'", "random_count"),
             ("weight_algorithm_id", "BIGINT DEFAULT NULL COMMENT '权重算法ID（随机模式加权选料；NULL=系统默认参数）'", "deduplicate_enabled"),
+            ("material_scope", "VARCHAR(20) NOT NULL DEFAULT 'selected' COMMENT '素材范围：selected-指定素材, all-全部素材（随素材库实时更新）'", "material_ids"),
         ],
         "xy_publish_schedule_logs": [
             ("detail_json", "JSON DEFAULT NULL COMMENT '执行明细JSON（成功/失败商品编号明细、补发轮次、账号级错误）'", "error_message"),

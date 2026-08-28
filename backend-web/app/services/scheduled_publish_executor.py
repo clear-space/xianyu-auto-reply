@@ -60,7 +60,7 @@ class ScheduledPublishExecutor:
 
         Args:
             user_id: 规则所属用户ID
-            schedule_data: 规则快照 dict（id/account_ids/material_ids/publish_mode/random_count/deduplicate_enabled）
+            schedule_data: 规则快照 dict（id/account_ids/material_ids/material_scope/publish_mode/random_count/deduplicate_enabled）
             batch_id: 本次执行的批次ID（执行记录与发布日志共用）
             schedule_log_id: 执行记录ID
         """
@@ -359,8 +359,11 @@ class ScheduledPublishExecutor:
 
         async with async_session_maker() as session:
             mat_svc = ProductMaterialService(session)
-            materials = await mat_svc.list_by_ids(
-                list(schedule_data.get("material_ids") or []), user_id
+            # 素材池解析唯一入口：all=库内全部未删除素材（实时），selected=规则ID快照
+            materials = await mat_svc.list_for_schedule(
+                list(schedule_data.get("material_ids") or []),
+                user_id,
+                schedule_data.get("material_scope") or "selected",
             )
             pool: List[dict] = []
             for m in materials:

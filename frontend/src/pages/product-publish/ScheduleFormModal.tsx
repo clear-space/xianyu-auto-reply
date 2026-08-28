@@ -64,6 +64,8 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
   const [selectedMaterials, setSelectedMaterials] = useState<Set<number>>(
     new Set(initial?.material_ids || prefills?.materialIds || [])
   )
+  const [materialScope, setMaterialScope] = useState<'selected' | 'all'>(initial?.material_scope || 'selected')
+  const [libraryTotal, setLibraryTotal] = useState<number | null>(null)
   const [materialSearch, setMaterialSearch] = useState('')
   const [materialPage, setMaterialPage] = useState(1)
   const [materialPageSize, setMaterialPageSize] = useState(10)
@@ -88,11 +90,33 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
   }
 
   useEffect(() => {
+    // 编辑态净化：规则中已不存在的账号/素材（如素材已被删除）从选择中剔除，
+    // 避免幽灵ID提交后被后端拒绝导致无法保存
+    const needPurifyMaterials = !!initial && (initial.material_ids?.length ?? 0) > 0
     Promise.all([
       getAccountDetails(),
       loadMaterials(1, materialPageSize),
-    ]).then(([accList]) => {
+      needPurifyMaterials
+        ? getAllMaterialIds().then(res => (res.success ? (res.data?.ids ?? []) : []))
+        : Promise.resolve<number[] | null>(null),
+    ]).then(([accList, , allMaterialIds]) => {
       setAccounts(accList)
+      // 账号净化（账号列表为全量返回，可直接求交集）
+      const accountIdSet = new Set(accList.map((a: any) => a.id))
+      const removedAccounts = Array.from(selectedAccounts).filter(id => !accountIdSet.has(id))
+      if (removedAccounts.length > 0) {
+        setSelectedAccounts(prev => new Set(Array.from(prev).filter(id => accountIdSet.has(id))))
+        addToast({ type: 'warning', message: `规则中 ${removedAccounts.length} 个账号已不存在，已自动移除` })
+      }
+      // 素材净化（仅编辑已有规则时；新建/预填均为刚勾选的活跃素材）
+      if (allMaterialIds) {
+        const validIdSet = new Set(allMaterialIds)
+        const removedMaterials = Array.from(selectedMaterials).filter(id => !validIdSet.has(id))
+        if (removedMaterials.length > 0) {
+          setSelectedMaterials(prev => new Set(Array.from(prev).filter(id => validIdSet.has(id))))
+          addToast({ type: 'warning', message: `规则中 ${removedMaterials.length} 条素材已被删除，已自动移除` })
+        }
+      }
     }).finally(() => setDataLoading(false))
     // 加载权重算法选项（随机模式下拉）；按"算法类型 → 算法"两级选择
     const applyOptions = (rawList: WeightAlgorithmOption[]) => {
@@ -139,6 +163,14 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
     if (!dataLoading) loadMaterials(materialPage, materialPageSize)
   }, [materialPage, materialPageSize])
 
+  // 切换/进入"全部素材"时拉取库内素材总数（无筛选，供提示与预览展示）
+  useEffect(() => {
+    if (materialScope !== 'all') return
+    getAllMaterialIds().then(res => {
+      if (res.success) setLibraryTotal(res.data?.ids?.length ?? 0)
+    }).catch(() => { /* ignore */ })
+  }, [materialScope])
+
   const buildConfig = (): ScheduleConfig => {
     const config: ScheduleConfig = {}
     if (scheduleMode === 'once') {
@@ -160,7 +192,10 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
   const handleSave = async () => {
     if (!name.trim()) { addToast({ type: 'warning', message: '请输入规则名称' }); return }
     if (selectedAccounts.size === 0) { addToast({ type: 'warning', message: '请至少选择一个账号' }); return }
-    if (selectedMaterials.size === 0) { addToast({ type: 'warning', message: '请至少选择一条素材' }); return }
+    // 全部素材范围不校验勾选（执行时实时解析素材库；库空时执行会优雅失败）
+    if (materialScope === 'selected' && selectedMaterials.size === 0) {
+      addToast({ type: 'warning', message: '请至少选择一条素材' }); return
+    }
 
     if (scheduleMode === 'once' && !onceDatetime) {
       addToast({ type: 'warning', message: '请设置执行时间' }); return
@@ -173,7 +208,8 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
       if (!randomCount || randomCount < 1) {
         addToast({ type: 'warning', message: '随机发布数量至少为 1' }); return
       }
-      if (randomCount > selectedMaterials.size) {
+      // 全部素材范围：素材池随素材库实时变化，上限校验交给执行器（发布不足自动补发）
+      if (materialScope === 'selected' && randomCount > selectedMaterials.size) {
         addToast({ type: 'warning', message: `随机发布数量不能超过所选素材数（${selectedMaterials.size}）` }); return
       }
     }
@@ -185,7 +221,8 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
         schedule_mode: scheduleMode,
         schedule_config: buildConfig(),
         account_ids: Array.from(selectedAccounts),
-        material_ids: Array.from(selectedMaterials),
+        material_ids: materialScope === 'all' ? [] : Array.from(selectedMaterials),
+        material_scope: materialScope,
         publish_mode: publishMode,
         random_count: publishMode === 'random' ? randomCount : null,
         deduplicate_enabled: publishMode === 'random' ? deduplicate : false,
@@ -276,8 +313,13 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
 
   const allCurrentMaterialsSelected = materials.length > 0 && materials.every(m => selectedMaterials.has(m.id))
 
+  /** 全部素材范围下的库内素材总数（实时拉取，未加载完成时回退列表接口总数） */
+  const allLibraryCount = libraryTotal ?? materialTotal
+
   const totalPublishes = selectedAccounts.size * (
-    publishMode === 'random' ? Math.min(randomCount || 0, selectedMaterials.size) : selectedMaterials.size
+    materialScope === 'all'
+      ? (publishMode === 'random' ? Math.min(randomCount || 0, allLibraryCount) : allLibraryCount)
+      : (publishMode === 'random' ? Math.min(randomCount || 0, selectedMaterials.size) : selectedMaterials.size)
   )
 
   if (dataLoading) {
@@ -432,7 +474,7 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
                 <>
                   <div className="flex items-center gap-2">
                     <label className="input-label text-sm">每次随机发布</label>
-                    <input type="number" min={1} max={selectedMaterials.size || 1} className="input-ios w-24"
+                    <input type="number" min={1} max={materialScope === 'all' ? undefined : (selectedMaterials.size || 1)} className="input-ios w-24"
                       value={randomCount} onChange={e => setRandomCount(Math.max(1, parseInt(e.target.value) || 1))} />
                     <span className="text-sm text-slate-500">条（发布不足自动补发）</span>
                   </div>
@@ -518,14 +560,43 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
             <div className="vben-card-header">
               <h3 className="vben-card-title text-sm"><Image className="w-4 h-4" />选择素材</h3>
               <div className="flex items-center gap-2">
-                <button className="text-sm text-blue-500 hover:underline flex items-center gap-1" onClick={toggleAllMaterials} disabled={selectAllLoading}>
-                  {selectAllLoading && <Loader2 className="w-3 h-3 animate-spin" />}
-                  {allCurrentMaterialsSelected && materials.length > 0 ? '取消全选' : '全选所有'}
-                </button>
-                <span className="badge-primary text-xs">已选 {selectedMaterials.size} 条</span>
+                {materialScope === 'selected' && (
+                  <button className="text-sm text-blue-500 hover:underline flex items-center gap-1" onClick={toggleAllMaterials} disabled={selectAllLoading}>
+                    {selectAllLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+                    {allCurrentMaterialsSelected && materials.length > 0 ? '取消全选' : '全选所有'}
+                  </button>
+                )}
+                <span className="badge-primary text-xs">
+                  {materialScope === 'all' ? `素材库共 ${allLibraryCount} 条` : `已选 ${selectedMaterials.size} 条`}
+                </span>
               </div>
             </div>
             <div className="vben-card-body pt-0">
+              {/* 素材范围 */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="input-label text-sm whitespace-nowrap">素材范围</span>
+                <SegmentedControl<'selected' | 'all'>
+                  options={[
+                    { value: 'selected', label: '指定素材', desc: '按勾选的素材执行' },
+                    { value: 'all', label: '全部素材', desc: '随素材库实时更新' },
+                  ]}
+                  value={materialScope}
+                  onChange={setMaterialScope}
+                />
+              </div>
+
+              {materialScope === 'all' ? (
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-sm text-slate-600 dark:text-slate-300 space-y-1">
+                  <p>将实时使用素材库<strong>全部 {allLibraryCount} 条</strong>素材：新增素材自动纳入、删除素材自动剔除。</p>
+                  {publishMode === 'specified' && (
+                    <p className="text-amber-600">每次触发将发布库内全部素材，素材较多时发布量较大，请知悉。</p>
+                  )}
+                  {publishMode === 'random' && (
+                    <p>每次触发按权重随机选 {randomCount} 条；素材不足时按实际数量发布（自动补发）。</p>
+                  )}
+                </div>
+              ) : (
+              <>
               {/* 搜索栏 */}
               <div className="flex items-center gap-2 mb-2">
                 <input className="input-ios flex-1" placeholder="搜索素材标题..."
@@ -622,13 +693,17 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
                   </div>
                 </div>
               )}
+              </>
+              )}
             </div>
           </div>
 
           {/* 预览 */}
           <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
             <span className="text-sm text-slate-500">
-              {selectedAccounts.size} 账号 × {publishMode === 'random' ? randomCount : selectedMaterials.size} 素材
+              {selectedAccounts.size} 账号 × {materialScope === 'all'
+                ? `全部素材（${allLibraryCount}）`
+                : publishMode === 'random' ? randomCount : selectedMaterials.size} 素材
             </span>
             <span className="text-lg font-semibold text-blue-600 dark:text-blue-400">
               = {totalPublishes} 次发布
@@ -638,7 +713,7 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
 
         <div className="modal-footer flex-shrink-0">
           <button className="btn-ios-secondary" onClick={onClose}>取消</button>
-          <button className="btn-ios-primary" disabled={loading || totalPublishes === 0} onClick={handleSave}>
+          <button className="btn-ios-primary" disabled={loading || (materialScope === 'selected' && totalPublishes === 0)} onClick={handleSave}>
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             {initial ? '保存修改' : '创建规则'}
           </button>

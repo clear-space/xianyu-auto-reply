@@ -29,6 +29,7 @@ def _schedule_to_dict(s: PublishSchedule) -> dict:
         "schedule_config": s.schedule_config or {},
         "account_ids": s.account_ids or [],
         "material_ids": s.material_ids or [],
+        "material_scope": s.material_scope or "selected",
         "publish_mode": s.publish_mode or "specified",
         "random_count": s.random_count,
         "deduplicate_enabled": bool(s.deduplicate_enabled),
@@ -76,7 +77,8 @@ class PublishScheduleService:
             schedule_mode=data.get("schedule_mode", "daily"),
             schedule_config=data.get("schedule_config", {}),
             account_ids=data.get("account_ids", []),
-            material_ids=data.get("material_ids", []),
+            material_ids=[] if data.get("material_scope") == "all" else data.get("material_ids", []),
+            material_scope=data.get("material_scope", "selected"),
             publish_mode=data.get("publish_mode", "specified"),
             random_count=data.get("random_count"),
             deduplicate_enabled=bool(data.get("deduplicate_enabled", False)),
@@ -143,7 +145,7 @@ class PublishScheduleService:
 
         updatable = [
             "name", "schedule_mode", "schedule_config",
-            "account_ids", "material_ids",
+            "account_ids", "material_ids", "material_scope",
             "publish_mode", "random_count", "deduplicate_enabled",
             "enabled",
         ]
@@ -153,6 +155,9 @@ class PublishScheduleService:
         # 允许显式清除权重算法（None 值）
         if "weight_algorithm_id" in data:
             schedule.weight_algorithm_id = data["weight_algorithm_id"]
+        # 全部素材范围不存素材ID快照（执行时实时查询素材库）
+        if schedule.material_scope == "all":
+            schedule.material_ids = []
 
         # 指定发布模式下清掉随机配置（None 值不会被上面的通用循环处理）
         if schedule.publish_mode == "specified":

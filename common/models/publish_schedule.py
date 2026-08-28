@@ -39,6 +39,10 @@ class PublishSchedule(TimestampMixin, Base):
     # 发布配置
     account_ids: Mapped[list] = mapped_column(JSON, nullable=False, comment="闲鱼账号ID列表")
     material_ids: Mapped[list] = mapped_column(JSON, nullable=False, comment="素材ID列表")
+    material_scope: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="selected",
+        comment="素材范围：selected-指定素材, all-全部素材（随素材库实时更新）",
+    )
     publish_mode: Mapped[str] = mapped_column(
         String(20), nullable=False, default="specified",
         comment="发布模式：specified-指定发布（全部所选素材），random-随机发布"

@@ -544,6 +544,7 @@ export interface PublishSchedule {
   schedule_config: ScheduleConfig
   account_ids: string[]
   material_ids: number[]
+  material_scope: 'selected' | 'all'
   publish_mode: 'specified' | 'random'
   random_count?: number | null
   deduplicate_enabled: boolean
@@ -573,6 +574,7 @@ export interface CreateScheduleParams {
   schedule_config: ScheduleConfig
   account_ids: string[]
   material_ids: number[]
+  material_scope?: 'selected' | 'all'
   publish_mode?: 'specified' | 'random'
   random_count?: number | null
   deduplicate_enabled?: boolean
@@ -586,6 +588,7 @@ export interface UpdateScheduleParams {
   schedule_config?: Record<string, unknown>
   account_ids?: string[]
   material_ids?: number[]
+  material_scope?: 'selected' | 'all'
   publish_mode?: string
   random_count?: number | null
   deduplicate_enabled?: boolean

@@ -32,10 +32,12 @@ def _is_admin(user: User) -> bool:
 
 _SCHEDULE_MODES = {"once", "daily", "weekly"}
 _PUBLISH_MODES = {"specified", "random"}
+_MATERIAL_SCOPES = {"selected", "all"}
 
 
 def _validate_publish_fields(
-    publish_mode: str, random_count: Optional[int], deduplicate_enabled: bool, material_count: int
+    publish_mode: str, random_count: Optional[int], deduplicate_enabled: bool,
+    material_count: int, material_scope: str = "selected",
 ) -> None:
     """校验发布模式相关字段，非法时抛出 ValueError"""
     if publish_mode not in _PUBLISH_MODES:
@@ -43,7 +45,8 @@ def _validate_publish_fields(
     if publish_mode == "random":
         if not random_count or random_count < 1:
             raise ValueError("随机发布模式必须设置随机发布数量（至少1条）")
-        if random_count > material_count:
+        # 全部素材范围：素材池随素材库实时变化，上限校验交给执行器（发布不足自动补发）
+        if material_scope != "all" and random_count > material_count:
             raise ValueError(f"随机发布数量不能超过所选素材数（{material_count}）")
     else:
         if deduplicate_enabled:
@@ -68,19 +71,17 @@ async def _validate_owned_accounts(session: AsyncSession, user_id: int, account_
     return None
 
 
-async def _validate_owned_materials(session: AsyncSession, user_id: int, material_ids: List[int]) -> Optional[str]:
-    """校验素材归属，返回错误消息（None 表示全部合法）"""
+async def _sanitize_material_ids(
+    session: AsyncSession, user_id: int, material_ids: List[int]
+) -> tuple[List[int], List[int]]:
+    """净化素材ID：软删除静默剔除，返回 (有效ID, 缺失ID)
+
+    素材库删除素材后规则里残留的旧ID不应卡住编辑保存：
+    仅不存在/越权的ID进入 missing 报错，软删除的直接剔除。
+    """
     from app.services.product_publish_service import ProductMaterialService
 
-    mat_svc = ProductMaterialService(session)
-    materials = await mat_svc.list_by_ids(material_ids, user_id)
-    found = {m.id for m in materials}
-    missing = [mid for mid in dict.fromkeys(material_ids) if mid not in found]
-    if missing:
-        shown = "、".join(str(x) for x in missing[:5])
-        more = f" 等{len(missing)}个" if len(missing) > 5 else ""
-        return f"以下素材不存在或不属于当前用户: {shown}{more}"
-    return None
+    return await ProductMaterialService(session).sanitize_schedule_material_ids(material_ids, user_id)
 
 
 # ==================== 请求模型 ====================
@@ -100,7 +101,8 @@ class CreateScheduleRequest(BaseModel):
     schedule_mode: str = Field("daily", description="重复模式：once/daily/weekly")
     schedule_config: ScheduleConfig = Field(..., description="时间配置")
     account_ids: List[str] = Field(..., min_length=1, description="闲鱼账号ID列表")
-    material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
+    material_ids: List[int] = Field(default_factory=list, description="素材ID列表（素材范围=全部素材时忽略）")
+    material_scope: str = Field("selected", description="素材范围：selected-指定素材, all-全部素材（随素材库实时更新）")
     publish_mode: str = Field("specified", description="发布模式：specified-指定发布，random-随机发布")
     random_count: Optional[int] = Field(None, description="随机发布数量（随机模式必填）")
     deduplicate_enabled: bool = Field(False, description="去重开关（仅随机模式可用）")
@@ -113,7 +115,8 @@ class UpdateScheduleRequest(BaseModel):
     schedule_mode: Optional[str] = None
     schedule_config: Optional[ScheduleConfig] = None
     account_ids: Optional[List[str]] = Field(None, min_length=1)
-    material_ids: Optional[List[int]] = Field(None, min_length=1)
+    material_ids: Optional[List[int]] = Field(None, description="素材ID列表（素材范围=全部素材时忽略）")
+    material_scope: Optional[str] = Field(None, description="素材范围：selected-指定素材, all-全部素材")
     publish_mode: Optional[str] = None
     random_count: Optional[int] = None
     deduplicate_enabled: Optional[bool] = None
@@ -146,16 +149,33 @@ async def create_schedule(
     # 校验：重复模式与时间配置
     if req.schedule_mode not in _SCHEDULE_MODES:
         return ApiResponse(success=False, message=f"不支持的重复模式: {req.schedule_mode}")
+    if req.material_scope not in _MATERIAL_SCOPES:
+        return ApiResponse(success=False, message=f"不支持的素材范围: {req.material_scope}")
+
+    # 素材范围：all=库内全部素材（执行时实时解析，忽略提交的素材ID）；selected=按ID快照校验
+    material_ids: List[int] = []
+    if req.material_scope == "selected":
+        if not req.material_ids:
+            return ApiResponse(success=False, message="请至少选择一条素材")
+        valid_ids, missing = await _sanitize_material_ids(session, current_user.id, req.material_ids)
+        if missing:
+            shown = "、".join(str(x) for x in missing[:5])
+            more = f" 等{len(missing)}个" if len(missing) > 5 else ""
+            return ApiResponse(success=False, message=f"以下素材不存在或不属于当前用户: {shown}{more}")
+        if not valid_ids:
+            return ApiResponse(success=False, message="所选素材均已被删除，请重新选择")
+        material_ids = valid_ids
+
     try:
         _validate_schedule_config(req.schedule_mode, config)
-        _validate_publish_fields(req.publish_mode, req.random_count, req.deduplicate_enabled, len(req.material_ids))
+        _validate_publish_fields(
+            req.publish_mode, req.random_count, req.deduplicate_enabled,
+            len(material_ids), req.material_scope,
+        )
     except ValueError as e:
         return ApiResponse(success=False, message=str(e))
-    # 校验：账号归属 / 素材归属
+    # 校验：账号归属
     error = await _validate_owned_accounts(session, current_user.id, req.account_ids)
-    if error:
-        return ApiResponse(success=False, message=error)
-    error = await _validate_owned_materials(session, current_user.id, req.material_ids)
     if error:
         return ApiResponse(success=False, message=error)
 
@@ -173,7 +193,8 @@ async def create_schedule(
             "schedule_mode": req.schedule_mode,
             "schedule_config": config,
             "account_ids": req.account_ids,
-            "material_ids": req.material_ids,
+            "material_ids": material_ids,
+            "material_scope": req.material_scope,
             "publish_mode": publish_mode,
             "random_count": random_count,
             "deduplicate_enabled": deduplicate_enabled,
@@ -201,6 +222,25 @@ async def list_schedules(
     for item in data["list"]:
         item["account_count"] = len(item.get("account_ids", []))
         item["material_count"] = len(item.get("material_ids", []))
+    # 全部素材范围：素材数用库内实时总数（执行时按此素材池发布，前端展示"全部素材（N）"）
+    all_scope_user_ids = {item["user_id"] for item in data["list"] if item.get("material_scope") == "all"}
+    if all_scope_user_ids:
+        from sqlalchemy import func
+
+        from common.models.product_material import ProductMaterial
+
+        cnt_stmt = (
+            select(ProductMaterial.user_id, func.count())
+            .where(
+                ProductMaterial.user_id.in_(all_scope_user_ids),
+                ProductMaterial.is_deleted.is_(False),
+            )
+            .group_by(ProductMaterial.user_id)
+        )
+        real_counts = {row[0]: int(row[1]) for row in (await session.execute(cnt_stmt)).all()}
+        for item in data["list"]:
+            if item.get("material_scope") == "all":
+                item["material_count"] = real_counts.get(item["user_id"], 0)
     return ApiResponse(success=True, message="查询成功", data=data)
 
 
@@ -433,11 +473,40 @@ async def update_schedule(
         if req.schedule_config is not None
         else (current.schedule_config or {})
     )
+    eff_scope = update_data.get("material_scope") or current.material_scope or "selected"
+    if eff_scope not in _MATERIAL_SCOPES:
+        return ApiResponse(success=False, message=f"不支持的素材范围: {eff_scope}")
+
     eff_account_ids = update_data.get("account_ids") or current.account_ids or []
-    eff_material_ids = update_data.get("material_ids") or current.material_ids or []
     eff_publish_mode = update_data.get("publish_mode", current.publish_mode or "specified")
     eff_random_count = update_data.get("random_count", current.random_count)
     eff_dedup = update_data.get("deduplicate_enabled", bool(current.deduplicate_enabled))
+
+    # 素材范围合并：
+    # - all：不存素材ID快照（执行时实时查询素材库），无论是否提交都强制清空
+    # - selected：提交了素材ID才净化校验（软删除静默剔除，不存在/越权拒绝）；未提交保持原值不动
+    if eff_scope == "all":
+        eff_material_ids: List[int] = []
+        update_data["material_ids"] = []
+    elif "material_ids" in update_data:
+        if not update_data["material_ids"]:
+            return ApiResponse(success=False, message="请至少选择一条素材")
+        valid_ids, missing = await _sanitize_material_ids(
+            session, current.user_id, update_data["material_ids"]
+        )
+        if missing:
+            shown = "、".join(str(x) for x in missing[:5])
+            more = f" 等{len(missing)}个" if len(missing) > 5 else ""
+            return ApiResponse(success=False, message=f"以下素材不存在或不属于当前用户: {shown}{more}")
+        if not valid_ids:
+            return ApiResponse(success=False, message="所选素材均已被删除，请重新选择")
+        eff_material_ids = valid_ids
+        update_data["material_ids"] = valid_ids  # 回写净化后的列表（幽灵ID不再落库）
+    else:
+        eff_material_ids = current.material_ids or []
+
+    if eff_scope != "all" and not eff_material_ids:
+        return ApiResponse(success=False, message="请至少选择一条素材")
 
     if eff_mode not in _SCHEDULE_MODES:
         return ApiResponse(success=False, message=f"不支持的重复模式: {eff_mode}")
@@ -455,18 +524,14 @@ async def update_schedule(
             return ApiResponse(success=False, message=f"不支持的发布模式: {eff_publish_mode}")
         if not eff_random_count or eff_random_count < 1:
             return ApiResponse(success=False, message="随机发布模式必须设置随机发布数量（至少1条）")
-        if eff_random_count > len(eff_material_ids):
+        if eff_scope != "all" and eff_random_count > len(eff_material_ids):
             return ApiResponse(
                 success=False, message=f"随机发布数量不能超过所选素材数（{len(eff_material_ids)}）"
             )
 
-    # 校验：账号归属 / 素材归属（按规则属主校验；管理员可编辑他人规则）
+    # 校验：账号归属（按规则属主校验；管理员可编辑他人规则）
     if "account_ids" in update_data:
         error = await _validate_owned_accounts(session, current.user_id, eff_account_ids)
-        if error:
-            return ApiResponse(success=False, message=error)
-    if "material_ids" in update_data:
-        error = await _validate_owned_materials(session, current.user_id, eff_material_ids)
         if error:
             return ApiResponse(success=False, message=error)
 
@@ -544,10 +609,15 @@ async def trigger_schedule(
     if await svc.get_running_log(schedule_id):
         return ApiResponse(success=False, message="该规则正在执行中，请稍后再试")
 
-    # 预检素材（按规则属主校验；管理员可触发他人规则）
+    # 预检素材（按规则属主校验；管理员可触发他人规则；all=库内全部未删除素材实时解析）
+    material_scope = schedule.material_scope or "selected"
     mat_svc = ProductMaterialService(session)
-    materials = await mat_svc.list_by_ids(schedule.material_ids, schedule.user_id)
+    materials = await mat_svc.list_for_schedule(
+        list(schedule.material_ids or []), schedule.user_id, material_scope
+    )
     if not materials:
+        if material_scope == "all":
+            return ApiResponse(success=False, message="素材库为空，无法触发")
         return ApiResponse(success=False, message="没有找到有效的素材")
 
     account_ids = list(schedule.account_ids or [])
@@ -572,6 +642,7 @@ async def trigger_schedule(
         "id": schedule.id,
         "account_ids": account_ids,
         "material_ids": list(schedule.material_ids or []),
+        "material_scope": material_scope,
         "publish_mode": schedule.publish_mode or "specified",
         "random_count": schedule.random_count,
         "deduplicate_enabled": bool(schedule.deduplicate_enabled),
@@ -592,12 +663,12 @@ async def trigger_schedule(
 
     logger.info(
         f"[定时发布] 手动触发 schedule_id={schedule_id}, batch_id={batch_id}, "
-        f"{len(account_ids)} 账号 × {len(schedule.material_ids or [])} 素材"
+        f"{len(account_ids)} 账号 × {len(materials)} 素材（scope={material_scope}）"
     )
 
     return ApiResponse(
         success=True,
-        message=f"已触发批量发布，{len(account_ids)} 账号 × {len(schedule.material_ids or [])} 素材",
+        message=f"已触发批量发布，{len(account_ids)} 账号 × {len(materials)} 素材",
         data={"batch_id": batch_id, "log_id": log_entry.id},
     )
 
