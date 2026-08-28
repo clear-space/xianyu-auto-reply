@@ -1404,6 +1404,7 @@ export function Items() {
                   <th className="min-w-[160px]">商品ID</th>
                   <th className="min-w-[260px]">商品标题</th>
                   <th className="min-w-[90px] text-center">状态</th>
+                  <th className="min-w-[90px] text-center">上架天数</th>
                   <th className="min-w-[80px]">价格</th>
                   <th className="min-w-[100px] text-center">是否擦亮</th>
                   <th className="min-w-[100px] text-center">多规格</th>
@@ -1419,7 +1420,7 @@ export function Items() {
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={14}>
+                  <td colSpan={15}>
                     <div className="empty-state py-8">
                       <Package className="empty-state-icon" />
                       <p className="text-gray-500">暂无商品数据</p>
@@ -1483,6 +1484,17 @@ export function Items() {
                           </span>
                         )
                       })()}
+                    </td>
+                    <td className="text-center text-gray-600 dark:text-gray-300">
+                      {item.days_on_shelf != null ? (
+                        <span
+                          title={item.post_dt ? `上架日期 ${item.post_dt.slice(0, 4)}-${item.post_dt.slice(4, 6)}-${item.post_dt.slice(6, 8)}` : undefined}
+                        >
+                          {item.days_on_shelf} 天
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">--</span>
+                      )}
                     </td>
                     <td className="text-amber-600 font-medium">
                       {item.item_price || (item.price ? `¥${item.price}` : '-')}

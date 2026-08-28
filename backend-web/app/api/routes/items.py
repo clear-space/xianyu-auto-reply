@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any, Awaitable, Callable, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from common.models.user import User
+from common.models.xy_account import XYAccount
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.default_reply_api import validate_api_url, normalize_api_timeout
@@ -20,12 +24,82 @@ from common.schemas.item import (
 from common.services.item_offline_service import batch_offline_items_from_xianyu
 from common.services.item_delete_service import batch_delete_items_from_xianyu
 from app.services.account_service import AccountService
+from app.services.data_analysis_service import fetch_item_list as fetch_datacompass_item_list
 from app.services.item_service import ItemService
 from app.services.selectable_item_service import SelectableItemService
 
 logger = logging.getLogger(__name__)
 
 items_router = APIRouter(prefix="/items", tags=["items"])
+
+# ---------------------------------------------------------------------------
+# 上架天数补充（数据罗盘 datacompass.item.list）
+# 商品管理列表接口 xyh.item.list 不返回时间字段，上架天数从数据罗盘商品接口
+# 按 itemId 关联补充（实调验证：pageSize=300 一次返回全部在售商品，
+# 仅覆盖在售商品；其它状态字段为 None 由前端显示 --）。
+# ---------------------------------------------------------------------------
+
+# TTL 缓存：{account_id: (expire_ts, {item_id: {"daysOnShelf": int, "postDt": str}})}
+_days_on_shelf_cache: Dict[str, tuple] = {}
+_days_on_shelf_lock = asyncio.Lock()
+_DAYS_ON_SHELF_TTL = 600  # 秒
+
+
+async def _get_days_on_shelf_map(
+    db: AsyncSession,
+    account_id: str,
+) -> Dict[str, dict]:
+    """获取某账号在售商品的 {itemId: {daysOnShelf, postDt}} 映射（带TTL缓存）
+
+    失败（无Cookie/接口异常）返回空字典，不缓存失败结果。
+    """
+    now = time.time()
+    cached = _days_on_shelf_cache.get(account_id)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    async with _days_on_shelf_lock:
+        # 双重检查：等待锁期间可能有并发请求已填充缓存
+        cached = _days_on_shelf_cache.get(account_id)
+        if cached and cached[0] > now:
+            return cached[1]
+
+        result = await db.execute(
+            select(XYAccount).where(XYAccount.account_id == account_id)
+        )
+        account = result.scalar_one_or_none()
+        if not account or not account.cookie:
+            return {}
+
+        try:
+            api_result = await fetch_datacompass_item_list(
+                cookies_str=account.cookie,
+                date_type="recent7d",
+                page_num=1,
+                page_size=300,
+                seller_id=account.account_id,
+            )
+        except Exception as e:
+            logger.warning(f"获取账号 {account_id} 上架天数失败: {e}")
+            return {}
+
+        if not api_result.get("success"):
+            return {}
+
+        data = (api_result.get("data") or {}).get("data") or {}
+        item_map: Dict[str, dict] = {}
+        for row in data.get("list") or []:
+            itm_id = row.get("itmId")
+            if not itm_id:
+                continue
+            item_map[str(itm_id)] = {
+                "daysOnShelf": row.get("daysOnShelf"),
+                "postDt": row.get("postDt"),
+            }
+
+        # TTL 缓存：10 分钟内翻页/筛选复用同一份映射，过期后自动刷新
+        _days_on_shelf_cache[account_id] = (now + _DAYS_ON_SHELF_TTL, item_map)
+        return item_map
 
 
 async def _execute_batch_item_operation(
@@ -110,6 +184,7 @@ async def list_items_paginated(
     item_status: str | None = Query(default=None, description="商品状态筛选：on_sale/sold/offline/deleted/unknown"),
     current_user: User = Depends(deps.get_current_active_user),
     item_service: ItemService = Depends(deps.get_item_service),
+    db: AsyncSession = Depends(deps.get_db_session),
 ):
     """获取商品列表（分页），支持多条件筛选
 
@@ -121,6 +196,9 @@ async def list_items_paginated(
     - is_multi_spec: 多规格（true/false）
     - multi_quantity_delivery: 多数量发货（true/false）
     - item_status: 商品状态（on_sale/sold/offline/deleted/unknown）
+
+    每条商品附带 days_on_shelf（上架天数，数据罗盘接口补充，仅覆盖在售商品，
+    其它状态或获取失败时为 None）与 post_dt（上架日期）。
     """
     owner_id, _ = resolve_owner_scope(current_user)
     items, total = await item_service.list_items_paginated(
@@ -134,7 +212,18 @@ async def list_items_paginated(
         multi_quantity_delivery=multi_quantity_delivery,
         item_status=item_status,
     )
-    
+
+    # 补充上架天数：按当前页商品涉及到的账号逐个获取（每账号 TTL 缓存 10 分钟）
+    account_ids = {str(it.get("cookie_id")) for it in items if it.get("cookie_id")}
+    days_maps: Dict[str, Dict[str, dict]] = {}
+    for acct in account_ids:
+        days_maps[acct] = await _get_days_on_shelf_map(db, acct)
+    for it in items:
+        acct = str(it.get("cookie_id") or "")
+        info = days_maps.get(acct, {}).get(str(it.get("item_id") or ""))
+        it["days_on_shelf"] = info.get("daysOnShelf") if info else None
+        it["post_dt"] = info.get("postDt") if info else None
+
     return {
         "success": True,
         "data": items,

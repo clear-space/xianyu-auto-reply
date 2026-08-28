@@ -125,6 +125,8 @@ export interface Item {
   has_ai_prompt?: boolean          // 是否配置了AI提示词
   created_at?: string
   updated_at?: string
+  days_on_shelf?: number | null    // 上架天数（数据罗盘补充，仅覆盖在售商品，其它为 null）
+  post_dt?: string | null          // 上架日期（yyyyMMdd，数据罗盘补充）
 }
 
 // 订单相关类型
