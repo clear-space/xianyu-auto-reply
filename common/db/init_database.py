@@ -357,6 +357,13 @@ class DatabaseInitializer:
             "定时清理被禁用账号的浏览器数据",
         ),
         (
+            "cleanup_unconfigured_browser_data",
+            "清理未配置账号密码的浏览器数据任务",
+            10800,
+            False,
+            "定时清理未配置登录账号密码（username 或 login_password 为空）账号的浏览器数据",
+        ),
+        (
             "fetch_orders",
             "获取闲鱼订单任务",
             600,
@@ -700,6 +707,7 @@ class DatabaseInitializer:
                 description TEXT COMMENT '卡券描述',
                 enabled TINYINT(1) DEFAULT 1 COMMENT '是否启用',
                 delay_seconds INT DEFAULT 0 COMMENT '延迟秒数',
+                use_no_logistics_form TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否通过无需邮寄表单发货',
                 delivery_count INT DEFAULT 0 COMMENT '发货次数',
                 price VARCHAR(32) COMMENT '对接价格',
                 is_dockable TINYINT(1) DEFAULT 0 COMMENT '是否可对接',
@@ -2154,6 +2162,7 @@ class DatabaseInitializer:
         ],
         "xy_cards": [
             ("delivery_count", "INT DEFAULT 0 COMMENT '发货次数'", "delay_seconds"),
+            ("use_no_logistics_form", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否通过无需邮寄表单发货'", "delay_seconds"),
             ("price", "VARCHAR(32) COMMENT '对接价格'", "delivery_count"),
             ("is_dockable", "TINYINT(1) DEFAULT 0 COMMENT '是否可对接'", "price"),
             ("image_urls", "TEXT COMMENT '多图片URL列表(JSON数组，最多3张)'", "image_url"),
