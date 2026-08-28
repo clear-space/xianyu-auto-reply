@@ -443,6 +443,7 @@ class ItemService:
         fetched_pages = 0
         matched_required_title_keyword = False
         groups_complete = False  # 两个分组都成功抓完才允许对账（防误标）
+        early_break = False  # 任一分组因「整页已存在」提前停止翻页（增量同步，抓取不完整）
         try:
             # 0. 动态获取商品分组（在售/已售出），分组ID按账号变化，不写死
             target_groups: list[tuple[str, Any]] = [("在售", None)]
@@ -565,6 +566,7 @@ class ItemService:
                         logger.info(
                             f"账号[{account.account_id}]「{group_name}」命中整页已存在且无字段变更，停止继续获取后续页面"
                         )
+                        early_break = True
                         break
 
                     if len(items) < page_size:
@@ -576,9 +578,13 @@ class ItemService:
                     page_number += 1
                     await asyncio.sleep(1)
 
-            # 两个分组都抓完（未受 max_pages 截断）才认为完整
-            groups_complete = len(target_groups) >= 2 and not (
-                max_pages and fetched_pages >= max_pages
+            # 仅当两个分组都完整翻页抓完（未受 max_pages 截断、未因「整页已存在」提前停止）
+            # 才允许对账：增量同步只抓了前几页，此时 fetched_ids 不完整，
+            # 对账会把其余本地商品误判为已下架/删除（详情判定失败还会误标 unknown）
+            groups_complete = (
+                len(target_groups) >= 2
+                and not early_break
+                and not (max_pages and fetched_pages >= max_pages)
             )
         except Exception as exc:
             return {"success": False, "message": f"获取商品失败: {exc}"}

@@ -24,6 +24,8 @@ import {
   type WeightPreviewEntry, type HeatWeightPreviewEntry, type DelistWeightPreviewEntry,
   type WeightAlgorithmReference,
 } from '@/api/weightAlgorithms'
+import { getAccountDetails } from '@/api/accounts'
+import type { AccountDetail } from '@/types'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 
@@ -590,12 +592,32 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
   const [entries, setEntries] = useState<WeightPreviewEntry[]>([])
   const [total, setTotal] = useState(0)
   const [emptyMessage, setEmptyMessage] = useState('')
+  // 下架预览的账号范围：空集合 = 全部账号
+  const [accounts, setAccounts] = useState<AccountDetail[]>([])
+  const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set())
+  // 预览前先同步闲鱼最新商品（本地快照可能落后于闲鱼）
+  const [refreshBeforePreview, setRefreshBeforePreview] = useState(true)
 
   const isDelist = initial.algorithm_type === 'delist_weight'
 
   useEffect(() => {
+    if (!isDelist) return
+    getAccountDetails()
+      .then(list => setAccounts(list))
+      .catch(() => {})
+  }, [isDelist])
+
+  useEffect(() => {
     let cancelled = false
-    getWeightAlgorithmPreview(initial.id)
+    setLoading(true)
+    const accountIds = isDelist && selectedAccounts.size > 0
+      ? Array.from(selectedAccounts)
+      : undefined
+    getWeightAlgorithmPreview(
+      initial.id,
+      accountIds,
+      isDelist && refreshBeforePreview,
+    )
       .then(res => {
         if (cancelled) return
         if (res.success) {
@@ -611,7 +633,11 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [initial.id, addToast])
+  }, [initial.id, isDelist, selectedAccounts, refreshBeforePreview, addToast])
+
+  const toggleAccount = (id: string) => {
+    setSelectedAccounts(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -632,10 +658,45 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
         </div>
         <div className="modal-body overflow-y-auto space-y-3 text-sm text-slate-600 dark:text-slate-300">
           {isDelist ? (
-            <p className="text-xs text-slate-400">
-              对当前账号全部 {total} 条在售商品计算下架权重，降序排列；权重越高越先被下架。
-              每行下方为该商品的逐项分值构成。
-            </p>
+            <>
+              {/* 账号范围选择：全部账号 / 指定账号 */}
+              <div className="border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                    预览账号范围{selectedAccounts.size === 0 ? '：全部账号' : `：已选 ${selectedAccounts.size} 个`}
+                  </span>
+                  {selectedAccounts.size > 0 && (
+                    <button className="text-xs text-blue-500 hover:underline" onClick={() => setSelectedAccounts(new Set())}>
+                      改为全部账号
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                  {accounts.length === 0 ? (
+                    <p className="text-xs text-slate-400 px-2 py-1">暂无账号</p>
+                  ) : (
+                    accounts.map(a => (
+                      <label key={a.id} className={`flex items-center gap-2 px-2 py-1 rounded-lg cursor-pointer transition-colors ${selectedAccounts.has(a.id) ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                        <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
+                          checked={selectedAccounts.has(a.id)} onChange={() => toggleAccount(a.id)} />
+                        <span className="text-sm truncate text-slate-700 dark:text-slate-200">{a.note || a.id}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+                <label className="flex items-center gap-2 pt-1.5 border-t border-slate-100 dark:border-slate-800 cursor-pointer">
+                  <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
+                    checked={refreshBeforePreview} onChange={() => setRefreshBeforePreview(v => !v)} />
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    预览前先从闲鱼同步最新商品（商品较多时较慢；同步失败自动回退本地数据）
+                  </span>
+                </label>
+              </div>
+              <p className="text-xs text-slate-400">
+                预览范围：{selectedAccounts.size === 0 ? '全部账号' : `已选 ${selectedAccounts.size} 个账号`}，
+                共 {total} 条在售商品，按权重降序排列；权重越高越先被下架。每行下方为该商品的逐项分值构成。
+              </p>
+            </>
           ) : (() => {
             const filteredCount = entries
               .filter(e => 'on_sale_filtered' in e && e.on_sale_filtered).length
@@ -650,8 +711,11 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
             )
           })()}
           {loading ? (
-            <div className="flex items-center justify-center py-16">
+            <div className="flex flex-col items-center justify-center gap-2 py-16">
               <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+              {isDelist && refreshBeforePreview && (
+                <p className="text-xs text-slate-400">正在从闲鱼同步商品并计算权重，商品较多时可能需要几十秒…</p>
+              )}
             </div>
           ) : entries.length === 0 ? (
             <p className="text-center text-slate-400 py-10">{emptyMessage || '暂无数据，无法预览'}</p>

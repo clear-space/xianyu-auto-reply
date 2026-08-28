@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -254,6 +255,8 @@ async def preview_weight_algorithm(
     algorithm_id: int,
     current_user: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
+    account_ids: Optional[str] = Query(None, description="逗号分隔的账号ID列表（下架加权用），不传=全部账号"),
+    refresh: bool = Query(False, description="预览前先从闲鱼同步最新商品（下架加权用，较慢）"),
 ) -> dict:
     """预览算法效果：热度加权对全部素材、下架加权对全部在售商品计算权重，附信号明细与逐项分值"""
     from app.services.product_publish_service import ProductMaterialService
@@ -270,38 +273,72 @@ async def preview_weight_algorithm(
     if algo is None:
         return ApiResponse(success=False, message="算法不存在")
 
-    # 下架加权：对当前用户全部在售商品打分（按账号分组，订单信号按账号隔离）
+    # 下架加权：对作用域内全部在售商品打分（按账号分组，订单信号按账号隔离）
     if algo.algorithm_type == "delist_weight":
         from common.models.xy_account import XYAccount
         from common.models.xy_catalog_item import XYCatalogItem
         from common.services.delist_scoring import compute_delist_scores
         from common.services.item_service import _normalize_item_status
+        from common.utils.auth_scope import resolve_owner_scope
 
-        rows = list(
-            (
-                await session.execute(
-                    select(XYCatalogItem).where(XYCatalogItem.owner_id == current_user.id)
-                )
-            ).scalars().all()
-        )
+        # 与前端账号选择器（/cookies/options）一致的数据作用域：管理员=全部用户，普通用户=仅本人
+        scope_owner, _ = resolve_owner_scope(current_user)
+
+        acc_stmt = select(XYAccount)
+        if scope_owner is not None:
+            acc_stmt = acc_stmt.where(XYAccount.owner_id == scope_owner)
+        acc_rows = (await session.execute(acc_stmt)).scalars().all()
+        acc_map = {a.id: a.account_id for a in acc_rows}
+        # 账号所属用户（管理员跨用户预览时，订单信号按商品实际 owner 隔离）
+        acc_owner_map = {a.id: a.owner_id for a in acc_rows}
+
+        # 指定账号预览：只保留所选账号的在售商品（不传=全部账号）
+        allowed_pks: Optional[set] = None
+        if account_ids:
+            requested = {s.strip() for s in account_ids.split(",") if s.strip()}
+            if requested:
+                pk_by_account = {a.account_id: a.id for a in acc_rows}
+                allowed_pks = {pk_by_account[aid] for aid in requested if aid in pk_by_account}
+
+        # 预览前先同步所选账号商品：本地快照可能落后于闲鱼（增量同步只抓首页，
+        # 商品较多时本地库可能不完整/状态被误标），完整同步会刷新全部在售状态
+        if refresh:
+            from common.services.item_service import ItemService
+
+            sync_accounts = [
+                a for a in acc_rows if allowed_pks is None or a.id in allowed_pks
+            ]
+            if sync_accounts:
+                try:
+                    item_svc = ItemService(session)
+                    sync_result = await item_svc.fetch_all_items_from_accounts(
+                        accounts=sync_accounts, page_size=20, max_pages=None
+                    )
+                    logger.info(
+                        f"[权重算法预览] 预览前同步完成（{len(sync_accounts)} 个账号）: "
+                        f"{sync_result.get('message')}"
+                    )
+                except Exception as exc:
+                    logger.warning(f"[权重算法预览] 预览前同步商品失败（回退本地数据）: {exc}")
+
+        item_stmt = select(XYCatalogItem)
+        if scope_owner is not None:
+            item_stmt = item_stmt.where(XYCatalogItem.owner_id == scope_owner)
+        rows = list((await session.execute(item_stmt)).scalars().all())
         on_sale_rows = [
             r
             for r in rows
             if _normalize_item_status((r.metadata_json or {}).get("item_status")) == "on_sale"
         ]
+        if allowed_pks is not None:
+            on_sale_rows = [r for r in on_sale_rows if r.account_pk in allowed_pks]
         if not on_sale_rows:
             return ApiResponse(
                 success=True,
-                message="当前账号暂无在售商品，无法预览",
+                message="所选账号暂无在售商品，无法预览" if allowed_pks is not None else "暂无在售商品，无法预览",
                 data={"algorithm": _to_dict(algo), "total": 0, "list": []},
             )
 
-        acc_rows = (
-            await session.execute(
-                select(XYAccount).where(XYAccount.owner_id == current_user.id)
-            )
-        ).scalars().all()
-        acc_map = {a.id: a.account_id for a in acc_rows}
         by_account: Dict[int, list] = {}
         for r in on_sale_rows:
             by_account.setdefault(r.account_pk, []).append(r)
@@ -311,8 +348,9 @@ async def preview_weight_algorithm(
             account_id = acc_map.get(acc_pk)
             if account_id is None:
                 continue
+            owner_id = acc_owner_map.get(acc_pk) or current_user.id
             scored = await compute_delist_scores(
-                current_user.id, account_id, items, params=algo.params, session=session
+                owner_id, account_id, items, params=algo.params, session=session
             )
             details.extend(scored)
         details.sort(key=lambda d: d["weight"], reverse=True)

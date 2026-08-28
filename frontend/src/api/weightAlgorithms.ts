@@ -151,10 +151,25 @@ export interface DelistWeightPreviewEntry {
 
 export type WeightPreviewEntry = HeatWeightPreviewEntry | DelistWeightPreviewEntry
 
-/** 预览算法效果（热度加权=全部素材；下架加权=全部在售商品） */
-export const getWeightAlgorithmPreview = (id: number): Promise<
+/** 预览算法效果（热度加权=全部素材；下架加权=在售商品，可指定账号范围、可先同步最新商品） */
+export const getWeightAlgorithmPreview = (
+  id: number,
+  accountIds?: string[],
+  refresh?: boolean
+): Promise<
   ApiResponse<{ algorithm: WeightAlgorithm; total: number; list: WeightPreviewEntry[] }>
-> => get(`${PREFIX}/${id}/preview`)
+> => {
+  const params = new URLSearchParams()
+  if (accountIds && accountIds.length > 0) {
+    params.append('account_ids', accountIds.join(','))
+  }
+  if (refresh) {
+    params.append('refresh', '1')
+  }
+  const qs = params.toString()
+  // 预览前同步商品需逐页抓取闲鱼列表，商品较多时可能超过默认 90 秒超时
+  return get(`${PREFIX}/${id}/preview${qs ? `?${qs}` : ''}`, { timeout: 300000 })
+}
 
 /** 引用该算法的规则摘要（上架算法=定时发布规则；下架算法=定时下架规则） */
 export interface WeightAlgorithmReference {
