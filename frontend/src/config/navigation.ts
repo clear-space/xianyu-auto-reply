@@ -42,6 +42,7 @@ import {
   Tags,
   Ticket,
   Timer,
+  TrendingUp,
   UserCog,
   Users,
   Wallet,
@@ -87,6 +88,9 @@ export const mainNavItems: NavEntry[] = [
     label: '数据分析',
     children: [
       { key: 'data-overview', icon: LineChart, label: '数据总览', path: '/data-analysis/overview' },
+      { key: 'data-browse', icon: BarChart3, label: '流量分布', path: '/data-analysis/browse' },
+      { key: 'data-items', icon: Package, label: '商品分析', path: '/data-analysis/items' },
+      { key: 'data-operations', icon: TrendingUp, label: '经营数据', path: '/data-analysis/operations' },
     ],
   },
   { key: 'accounts', icon: Users, label: '账号管理', path: '/accounts' },

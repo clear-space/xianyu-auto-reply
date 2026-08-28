@@ -23,6 +23,9 @@ import { GetSourceCode } from '@/pages/auth/GetSourceCode'
 // 页面组件懒加载，按需加载提升首屏速度
 const Dashboard = React.lazy(() => import('@/pages/dashboard/Dashboard').then(m => ({ default: m.Dashboard })))
 const DataOverview = React.lazy(() => import('@/pages/data_analysis/DataOverview').then(m => ({ default: m.DataOverview })))
+const BrowseDistribution = React.lazy(() => import('@/pages/data_analysis/BrowseDistribution').then(m => ({ default: m.BrowseDistribution })))
+const ItemAnalysis = React.lazy(() => import('@/pages/data_analysis/ItemAnalysis').then(m => ({ default: m.ItemAnalysis })))
+const OperationsTabs = React.lazy(() => import('@/pages/data_analysis/OperationsTabs').then(m => ({ default: m.OperationsTabs })))
 const Accounts = React.lazy(() => import('@/pages/accounts/Accounts').then(m => ({ default: m.Accounts })))
 const Items = React.lazy(() => import('@/pages/items/Items').then(m => ({ default: m.Items })))
 const Orders = React.lazy(() => import('@/pages/orders/Orders').then(m => ({ default: m.Orders })))
@@ -339,6 +342,9 @@ function App() {
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="data-analysis/overview" element={<DataOverview />} />
+            <Route path="data-analysis/browse" element={<BrowseDistribution />} />
+            <Route path="data-analysis/items" element={<ItemAnalysis />} />
+            <Route path="data-analysis/operations" element={<OperationsTabs />} />
             <Route path="accounts" element={<Accounts />} />
             <Route path="accounts/shared-scan" element={<SharedScanManager />} />
             <Route path="items" element={<Items />} />
