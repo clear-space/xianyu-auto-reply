@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState, useRef } from 'react'
-import { ArrowDown, ArrowUp, ArrowUpDown, CheckSquare, Download, Edit2, ExternalLink, Link2, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, CheckSquare, Columns3, Download, Edit2, ExternalLink, Link2, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
 import { batchClearItemRelations, autoMatchCards, type AutoMatchCardsResult } from '@/api/cards'
@@ -44,6 +44,34 @@ function SortableTh({
     </th>
   )
 }
+
+/** 可显隐列清单（选择框与操作列固定不可隐藏） */
+const COLUMN_OPTIONS: { key: string; label: string }[] = [
+  { key: 'account_id', label: '账号ID' },
+  { key: 'item_id', label: '商品ID' },
+  { key: 'title', label: '商品标题' },
+  { key: 'item_status', label: '状态' },
+  { key: 'days_on_shelf', label: '上架天数' },
+  { key: 'show_pv', label: '曝光(7天)' },
+  { key: 'ipv', label: '浏览(7天)' },
+  { key: 'chat_uv', label: '咨询(7天)' },
+  { key: 'pay_amt', label: '支付金额(7天)' },
+  { key: 'pay_ord_cnt', label: '支付订单(7天)' },
+  { key: 'ipv_pay_ucvr', label: '转化率(7天)' },
+  { key: 'want_count', label: '想要' },
+  { key: 'price', label: '价格' },
+  { key: 'is_polished', label: '是否擦亮' },
+  { key: 'is_multi_spec', label: '多规格' },
+  { key: 'multi_quantity_delivery', label: '多数量发货' },
+  { key: 'has_card', label: '关联卡券' },
+  { key: 'default_reply', label: '默认回复' },
+  { key: 'ai_prompt', label: 'AI提示词' },
+  { key: 'created_at', label: '创建时间' },
+  { key: 'updated_at', label: '更新时间' },
+]
+
+/** 列显隐本地持久化键 */
+const COLUMNS_PREF_KEY = 'items_columns_hidden_v1'
 
 const ITEM_STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   on_sale: { label: '在售', cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
@@ -101,6 +129,72 @@ export function Items() {
     field: 'created_at',
     order: 'desc',
   })
+  // 列显隐状态（默认全部显示，偏好按用户存 localStorage）
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set())
+  const [columnPanelOpen, setColumnPanelOpen] = useState(false)
+  const columnPanelRef = useRef<HTMLDivElement>(null)
+  const columnsPrefLoadedRef = useRef(false)
+
+  const isColVisible = (key: string) => !hiddenColumns.has(key)
+
+  /** 持久化列显隐偏好 */
+  const persistColumnsPref = (next: Set<string>) => {
+    const userId = useAuthStore.getState().user?.user_id ?? 'anon'
+    try {
+      localStorage.setItem(`${COLUMNS_PREF_KEY}_${userId}`, JSON.stringify(Array.from(next)))
+    } catch {
+      /* 存储不可用时忽略 */
+    }
+  }
+
+  /** 登录态就绪后加载一次列显隐偏好 */
+  useEffect(() => {
+    if (_hasHydrated && !columnsPrefLoadedRef.current) {
+      columnsPrefLoadedRef.current = true
+      const userId = useAuthStore.getState().user?.user_id ?? 'anon'
+      try {
+        const raw = localStorage.getItem(`${COLUMNS_PREF_KEY}_${userId}`)
+        if (raw) {
+          const arr = JSON.parse(raw)
+          if (Array.isArray(arr)) setHiddenColumns(new Set(arr))
+        }
+      } catch {
+        /* 忽略损坏的偏好 */
+      }
+    }
+  }, [_hasHydrated])
+
+  /** 切换列显隐 */
+  const toggleColumn = (key: string) => {
+    setHiddenColumns((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      persistColumnsPref(next)
+      return next
+    })
+  }
+
+  /** 恢复默认（全部显示） */
+  const resetColumns = () => {
+    setHiddenColumns(new Set())
+    persistColumnsPref(new Set())
+  }
+
+  /** 点击面板外部关闭 */
+  useEffect(() => {
+    if (!columnPanelOpen) return
+    const handler = (e: MouseEvent) => {
+      if (columnPanelRef.current && !columnPanelRef.current.contains(e.target as Node)) {
+        setColumnPanelOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [columnPanelOpen])
   
   // 筛选状态
   const [filters, setFilters] = useState<ItemFilterParams>({
@@ -1431,6 +1525,49 @@ export function Items() {
             商品列表
           </h2>
           <span className="badge-primary">{pagination.total} 个商品</span>
+          {/* 列设置 */}
+          <div className="relative ml-auto" ref={columnPanelRef}>
+            <button
+              onClick={() => setColumnPanelOpen((v) => !v)}
+              className="btn-ios-secondary whitespace-nowrap"
+              title="控制显示哪些列"
+            >
+              <Columns3 className="w-4 h-4" />
+              列设置
+              {hiddenColumns.size > 0 && (
+                <span className="text-xs text-blue-500">({COLUMN_OPTIONS.length - hiddenColumns.size}/{COLUMN_OPTIONS.length})</span>
+              )}
+            </button>
+            {columnPanelOpen && (
+              <div className="absolute right-0 top-full mt-1 z-50 w-60 bg-white dark:bg-slate-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-2">
+                <div className="flex items-center justify-between px-2 py-1 border-b border-gray-100 dark:border-gray-700">
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">显示列</span>
+                  <button
+                    onClick={resetColumns}
+                    className="text-xs text-blue-500 hover:text-blue-600"
+                  >
+                    恢复默认
+                  </button>
+                </div>
+                <div className="max-h-72 overflow-y-auto py-1">
+                  {COLUMN_OPTIONS.map((col) => (
+                    <label
+                      key={col.key}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 dark:hover:bg-slate-700 cursor-pointer text-sm text-gray-700 dark:text-gray-200"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isColVisible(col.key)}
+                        onChange={() => toggleColumn(col.key)}
+                        className="accent-blue-500"
+                      />
+                      {col.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex-1 overflow-x-auto overflow-y-auto">
           {itemsLoading ? (
@@ -1454,27 +1591,27 @@ export function Items() {
                       )}
                     </button>
                   </th>
-                  <th className="min-w-[150px]">账号ID</th>
-                  <th className="min-w-[160px]">商品ID</th>
-                  <th className="min-w-[260px]">商品标题</th>
-                  <th className="min-w-[90px] text-center">状态</th>
-                  <SortableTh label="上架天数" field="days_on_shelf" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
-                  <SortableTh label="曝光(7天)" field="show_pv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
-                  <SortableTh label="浏览(7天)" field="ipv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
-                  <SortableTh label="咨询(7天)" field="chat_uv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
-                  <SortableTh label="支付金额(7天)" field="pay_amt" sortState={sortState} onSort={handleSortChange} className="min-w-[100px] text-center" />
-                  <SortableTh label="支付订单(7天)" field="pay_ord_cnt" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
-                  <SortableTh label="转化率(7天)" field="ipv_pay_ucvr" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
-                  <SortableTh label="想要" field="want_count" sortState={sortState} onSort={handleSortChange} className="min-w-[80px] text-center" />
-                  <SortableTh label="价格" field="price" sortState={sortState} onSort={handleSortChange} className="min-w-[80px]" />
-                  <th className="min-w-[100px] text-center">是否擦亮</th>
-                  <th className="min-w-[100px] text-center">多规格</th>
-                  <th className="min-w-[120px] text-center">多数量发货</th>
-                  <th className="min-w-[110px] text-center">关联卡券</th>
-                  <th className="min-w-[110px] text-center">默认回复</th>
-                  <th className="min-w-[110px] text-center">AI提示词</th>
-                  <SortableTh label="创建时间" field="created_at" sortState={sortState} onSort={handleSortChange} className="min-w-[170px]" />
-                  <th className="min-w-[170px]">更新时间</th>
+                  {isColVisible('account_id') && <th className="min-w-[150px]">账号ID</th>}
+                  {isColVisible('item_id') && <th className="min-w-[160px]">商品ID</th>}
+                  {isColVisible('title') && <th className="min-w-[260px]">商品标题</th>}
+                  {isColVisible('item_status') && <th className="min-w-[90px] text-center">状态</th>}
+                  {isColVisible('days_on_shelf') && <SortableTh label="上架天数" field="days_on_shelf" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />}
+                  {isColVisible('show_pv') && <SortableTh label="曝光(7天)" field="show_pv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />}
+                  {isColVisible('ipv') && <SortableTh label="浏览(7天)" field="ipv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />}
+                  {isColVisible('chat_uv') && <SortableTh label="咨询(7天)" field="chat_uv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />}
+                  {isColVisible('pay_amt') && <SortableTh label="支付金额(7天)" field="pay_amt" sortState={sortState} onSort={handleSortChange} className="min-w-[100px] text-center" />}
+                  {isColVisible('pay_ord_cnt') && <SortableTh label="支付订单(7天)" field="pay_ord_cnt" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />}
+                  {isColVisible('ipv_pay_ucvr') && <SortableTh label="转化率(7天)" field="ipv_pay_ucvr" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />}
+                  {isColVisible('want_count') && <SortableTh label="想要" field="want_count" sortState={sortState} onSort={handleSortChange} className="min-w-[80px] text-center" />}
+                  {isColVisible('price') && <SortableTh label="价格" field="price" sortState={sortState} onSort={handleSortChange} className="min-w-[80px]" />}
+                  {isColVisible('is_polished') && <th className="min-w-[100px] text-center">是否擦亮</th>}
+                  {isColVisible('is_multi_spec') && <th className="min-w-[100px] text-center">多规格</th>}
+                  {isColVisible('multi_quantity_delivery') && <th className="min-w-[120px] text-center">多数量发货</th>}
+                  {isColVisible('has_card') && <th className="min-w-[110px] text-center">关联卡券</th>}
+                  {isColVisible('default_reply') && <th className="min-w-[110px] text-center">默认回复</th>}
+                  {isColVisible('ai_prompt') && <th className="min-w-[110px] text-center">AI提示词</th>}
+                  {isColVisible('created_at') && <SortableTh label="创建时间" field="created_at" sortState={sortState} onSort={handleSortChange} className="min-w-[170px]" />}
+                  {isColVisible('updated_at') && <th className="min-w-[170px]">更新时间</th>}
                   <th className="sticky right-0 bg-slate-50 dark:bg-slate-800 min-w-[70px]">操作</th>
               </tr>
             </thead>
@@ -1503,12 +1640,15 @@ export function Items() {
                         )}
                       </button>
                     </td>
+                    {isColVisible('account_id') && (
                     <td className="font-medium text-blue-600 dark:text-blue-400">
                       {(() => {
                         const account = accounts.find(acc => acc.id === item.cookie_id)
                         return account?.note ? `${item.cookie_id} (${account.note})` : item.cookie_id
                       })()}
                     </td>
+                    )}
+                    {isColVisible('item_id') && (
                     <td className="text-xs text-gray-500">
                       <a
                         href={`https://www.goofish.com/item?id=${item.item_id}`}
@@ -1520,6 +1660,8 @@ export function Items() {
                         <ExternalLink className="w-3 h-3" />
                       </a>
                     </td>
+                    )}
+                    {isColVisible('title') && (
                     <td className="max-w-[280px]">
                       <div
                         className="font-medium line-clamp-2 cursor-help"
@@ -1536,6 +1678,8 @@ export function Items() {
                         </div>
                       )}
                     </td>
+                    )}
+                    {isColVisible('item_status') && (
                     <td className="text-center">
                       {(() => {
                         const cfg = ITEM_STATUS_CONFIG[item.item_status || 'unknown'] || ITEM_STATUS_CONFIG.unknown
@@ -1546,6 +1690,8 @@ export function Items() {
                         )
                       })()}
                     </td>
+                    )}
+                    {isColVisible('days_on_shelf') && (
                     <td className="text-center text-gray-600 dark:text-gray-300">
                       {item.days_on_shelf != null ? (
                         <span
@@ -1557,6 +1703,8 @@ export function Items() {
                         <span className="text-gray-400">--</span>
                       )}
                     </td>
+                    )}
+                    {isColVisible('show_pv') && (
                     <td className="text-center text-gray-600 dark:text-gray-300">
                       {item.show_pv != null ? (
                         <span
@@ -1569,6 +1717,8 @@ export function Items() {
                         <span className="text-gray-400">--</span>
                       )}
                     </td>
+                    )}
+                    {isColVisible('ipv') && (
                     <td className="text-center text-gray-600 dark:text-gray-300">
                       {item.ipv != null ? (
                         <span
@@ -1581,6 +1731,8 @@ export function Items() {
                         <span className="text-gray-400">--</span>
                       )}
                     </td>
+                    )}
+                    {isColVisible('chat_uv') && (
                     <td className="text-center text-gray-600 dark:text-gray-300">
                       {item.chat_uv != null ? (
                         <span className={item.chat_uv === 0 ? 'text-gray-400' : undefined}>
@@ -1590,6 +1742,8 @@ export function Items() {
                         <span className="text-gray-400">--</span>
                       )}
                     </td>
+                    )}
+                    {isColVisible('pay_amt') && (
                     <td className="text-center text-amber-600 font-medium">
                       {item.pay_amt != null ? (
                         <span>¥{item.pay_amt}</span>
@@ -1597,6 +1751,8 @@ export function Items() {
                         <span className="text-gray-400">--</span>
                       )}
                     </td>
+                    )}
+                    {isColVisible('pay_ord_cnt') && (
                     <td className="text-center text-gray-600 dark:text-gray-300">
                       {item.pay_ord_cnt != null ? (
                         <span className={item.pay_ord_cnt === 0 ? 'text-gray-400' : undefined}>
@@ -1606,6 +1762,8 @@ export function Items() {
                         <span className="text-gray-400">--</span>
                       )}
                     </td>
+                    )}
+                    {isColVisible('ipv_pay_ucvr') && (
                     <td className="text-center text-gray-600 dark:text-gray-300">
                       {item.ipv_pay_ucvr != null ? (
                         <span className={item.ipv_pay_ucvr === '0.00%' ? 'text-gray-400' : undefined}>
@@ -1615,6 +1773,8 @@ export function Items() {
                         <span className="text-gray-400">--</span>
                       )}
                     </td>
+                    )}
+                    {isColVisible('want_count') && (
                     <td className="text-center text-gray-600 dark:text-gray-300">
                       {item.want_count != null ? (
                         <span title="累计想要数，每日凌晨更新">{item.want_count}</span>
@@ -1622,9 +1782,13 @@ export function Items() {
                         <span className="text-gray-400">--</span>
                       )}
                     </td>
+                    )}
+                    {isColVisible('price') && (
                     <td className="text-amber-600 font-medium">
                       {item.item_price || (item.price ? `¥${item.price}` : '-')}
                     </td>
+                    )}
+                    {isColVisible('is_polished') && (
                     <td>
                       <span
                         className={`px-2 py-1 rounded text-xs font-medium ${
@@ -1636,6 +1800,8 @@ export function Items() {
                         {item.is_polished ? '已擦亮' : '未擦亮'}
                       </span>
                     </td>
+                    )}
+                    {isColVisible('is_multi_spec') && (
                     <td>
                       <button
                         onClick={() => handleToggleMultiSpec(item)}
@@ -1649,6 +1815,8 @@ export function Items() {
                         {(item.is_multi_spec || item.has_sku) ? '已开启' : '已关闭'}
                       </button>
                     </td>
+                    )}
+                    {isColVisible('multi_quantity_delivery') && (
                     <td>
                       <button
                         onClick={() => handleToggleMultiQuantity(item)}
@@ -1662,6 +1830,8 @@ export function Items() {
                         {item.multi_quantity_delivery ? '已开启' : '已关闭'}
                       </button>
                     </td>
+                    )}
+                    {isColVisible('has_card') && (
                     <td>
                       <button
                         onClick={() => handleOpenDeliveryConfig(item)}
@@ -1676,6 +1846,8 @@ export function Items() {
                         {item.has_card ? '已配置' : '未配置'}
                       </button>
                     </td>
+                    )}
+                    {isColVisible('default_reply') && (
                     <td>
                       <button
                         onClick={() => handleOpenDefaultReply(item)}
@@ -1692,6 +1864,8 @@ export function Items() {
                         {item.has_default_reply ? (item.default_reply_enabled ? '已配置' : '已关闭') : '未配置'}
                       </button>
                     </td>
+                    )}
+                    {isColVisible('ai_prompt') && (
                     <td>
                       <button
                         onClick={() => handleOpenAiPrompt(item)}
@@ -1706,12 +1880,17 @@ export function Items() {
                         {item.has_ai_prompt ? '已配置' : '未配置'}
                       </button>
                     </td>
+                    )}
+                    {isColVisible('created_at') && (
                     <td className="text-gray-500 text-xs">
                       {item.created_at ? new Date(item.created_at).toLocaleString() : '-'}
                     </td>
+                    )}
+                    {isColVisible('updated_at') && (
                     <td className="text-gray-500 text-xs">
                       {item.updated_at ? new Date(item.updated_at).toLocaleString() : '-'}
                     </td>
+                    )}
                     <td className="sticky right-0 bg-white dark:bg-slate-900">
                       <div className="flex gap-1">
                         <button
