@@ -323,9 +323,13 @@ async def fetch_item_list(
     date_range: str = "",
     page_num: int = 1,
     page_size: int = 20,
+    seller_id: str = "",
 ) -> Dict[str, Any]:
     """
     获取商品列表（分页，含单品曝光/浏览/咨询/成交/退款数据）
+
+    注意（实调验证）：闲鱼接口的分页参数是 page（非 pageNum/pageNo），
+    响应中的 pageNo/pageSize/rowLimit/rowOffset 字段无参考意义，以 list 与 total 为准。
 
     Args:
         cookies_str: 账号Cookie字符串
@@ -333,13 +337,15 @@ async def fetch_item_list(
         date_range: 自定义日期范围（可选，格式: yyyyMMdd|yyyyMMdd）
         page_num: 页码（从1开始）
         page_size: 每页条数
+        seller_id: 卖家ID（官方请求携带 selectedSellerId）
 
     Returns:
         API返回的数据字典
     """
     data_obj = {
         **_build_date_payload(date_type, date_range),
-        "pageNum": page_num,
+        "selectedSellerId": seller_id,
+        "page": page_num,
         "pageSize": page_size,
     }
     return await _call_datacompass(ITEM_LIST_API, cookies_str, data_obj)

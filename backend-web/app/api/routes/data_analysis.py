@@ -235,6 +235,7 @@ async def get_item_list(
         date_range=request.date_range or "",
         page_num=request.page_num,
         page_size=request.page_size,
+        seller_id=account.account_id,
     )
     if api_result.get("success"):
         return ApiResponse(success=True, message="获取成功", data=api_result.get("data"))
