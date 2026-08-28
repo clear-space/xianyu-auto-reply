@@ -1461,6 +1461,10 @@ export function Items() {
                   <SortableTh label="上架天数" field="days_on_shelf" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
                   <SortableTh label="曝光(7天)" field="show_pv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
                   <SortableTh label="浏览(7天)" field="ipv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
+                  <SortableTh label="咨询(7天)" field="chat_uv" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
+                  <SortableTh label="支付金额(7天)" field="pay_amt" sortState={sortState} onSort={handleSortChange} className="min-w-[100px] text-center" />
+                  <SortableTh label="支付订单(7天)" field="pay_ord_cnt" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
+                  <SortableTh label="转化率(7天)" field="ipv_pay_ucvr" sortState={sortState} onSort={handleSortChange} className="min-w-[90px] text-center" />
                   <SortableTh label="想要" field="want_count" sortState={sortState} onSort={handleSortChange} className="min-w-[80px] text-center" />
                   <SortableTh label="价格" field="price" sortState={sortState} onSort={handleSortChange} className="min-w-[80px]" />
                   <th className="min-w-[100px] text-center">是否擦亮</th>
@@ -1477,7 +1481,7 @@ export function Items() {
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={18}>
+                  <td colSpan={22}>
                     <div className="empty-state py-8">
                       <Package className="empty-state-icon" />
                       <p className="text-gray-500">暂无商品数据</p>
@@ -1572,6 +1576,40 @@ export function Items() {
                           className={item.ipv === 0 ? 'text-gray-400' : undefined}
                         >
                           {item.ipv}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">--</span>
+                      )}
+                    </td>
+                    <td className="text-center text-gray-600 dark:text-gray-300">
+                      {item.chat_uv != null ? (
+                        <span className={item.chat_uv === 0 ? 'text-gray-400' : undefined}>
+                          {item.chat_uv}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">--</span>
+                      )}
+                    </td>
+                    <td className="text-center text-amber-600 font-medium">
+                      {item.pay_amt != null ? (
+                        <span>¥{item.pay_amt}</span>
+                      ) : (
+                        <span className="text-gray-400">--</span>
+                      )}
+                    </td>
+                    <td className="text-center text-gray-600 dark:text-gray-300">
+                      {item.pay_ord_cnt != null ? (
+                        <span className={item.pay_ord_cnt === 0 ? 'text-gray-400' : undefined}>
+                          {item.pay_ord_cnt}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">--</span>
+                      )}
+                    </td>
+                    <td className="text-center text-gray-600 dark:text-gray-300">
+                      {item.ipv_pay_ucvr != null ? (
+                        <span className={item.ipv_pay_ucvr === '0.00%' ? 'text-gray-400' : undefined}>
+                          {item.ipv_pay_ucvr}
                         </span>
                       ) : (
                         <span className="text-gray-400">--</span>

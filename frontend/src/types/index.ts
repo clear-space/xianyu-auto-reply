@@ -131,6 +131,10 @@ export interface Item {
   show_uv?: number | null          // 近7天曝光人数（快照表补充）
   ipv?: number | null              // 近7天浏览次数（快照表补充）
   ipv_uv?: number | null           // 近7天浏览人数（快照表补充）
+  chat_uv?: number | null          // 近7天咨询人数（快照表补充）
+  pay_amt?: string | null          // 近7天支付金额（快照表补充）
+  pay_ord_cnt?: number | null      // 近7天支付订单数（快照表补充）
+  ipv_pay_ucvr?: string | null     // 近7天浏览支付转化率（快照表补充）
   want_count?: number | null       // 累计想要数（每日凌晨更新，快照表补充）
 }
 

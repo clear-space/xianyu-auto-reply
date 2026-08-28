@@ -155,6 +155,8 @@ async def list_items_paginated(
     每条商品附带最新运营指标快照字段（scheduler 每日凌晨采集落库）：
     - days_on_shelf 上架天数 / post_dt 上架日期
     - show_pv/show_uv 近7天曝光次数/人数、ipv/ipv_uv 近7天浏览次数/人数
+    - chat_uv 近7天咨询人数、pay_amt 近7天支付金额、pay_ord_cnt 近7天支付订单数、
+      ipv_pay_ucvr 近7天浏览支付转化率
     - want_count 累计想要数
     无快照（当天新发布等）时上述字段为 None，由前端显示 --。
     """
@@ -162,6 +164,7 @@ async def list_items_paginated(
     _SORTABLE_FIELDS = {
         "created_at", "updated_at", "price",
         "days_on_shelf", "show_pv", "ipv", "want_count", "post_dt",
+        "chat_uv", "pay_amt", "pay_ord_cnt", "ipv_pay_ucvr",
     }
     if sort_by and sort_by not in _SORTABLE_FIELDS:
         return {
@@ -197,6 +200,10 @@ async def list_items_paginated(
         it["show_uv"] = s.show_uv_7d if s else None
         it["ipv"] = s.ipv_7d if s else None
         it["ipv_uv"] = s.ipv_uv_7d if s else None
+        it["chat_uv"] = s.chat_uv_7d if s else None
+        it["pay_amt"] = s.pay_amt_7d if s else None
+        it["pay_ord_cnt"] = s.pay_ord_cnt_7d if s else None
+        it["ipv_pay_ucvr"] = s.ipv_pay_ucvr_7d if s else None
         it["want_count"] = s.want_count if s else None
 
     return {

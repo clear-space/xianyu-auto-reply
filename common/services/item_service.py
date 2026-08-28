@@ -216,7 +216,8 @@ class ItemService:
             keyword: 关键字（支持商品ID、标题、详情）
             is_polished: 是否擦亮筛选
             sort_by: 排序字段（created_at/updated_at/price 基础字段；
-                     days_on_shelf/show_pv/ipv/want_count/post_dt 快照字段）
+                     days_on_shelf/show_pv/ipv/want_count/post_dt/chat_uv/
+                     pay_amt/pay_ord_cnt/ipv_pay_ucvr 快照字段）
             sort_order: asc/desc（默认 desc）
             is_multi_spec: 多规格筛选
             multi_quantity_delivery: 多数量发货筛选
@@ -323,14 +324,10 @@ class ItemService:
         sort_desc = (sort_order or "desc").lower() != "asc"
         order_col = None
         stats_alias = None
-        if sort_by in ("days_on_shelf", "show_pv", "ipv", "want_count", "post_dt"):
-            stats_col_map = {
-                "days_on_shelf": "days_on_shelf",
-                "show_pv": "show_pv_7d",
-                "ipv": "ipv_7d",
-                "want_count": "want_count",
-                "post_dt": "post_dt",
-            }
+        if sort_by in (
+            "days_on_shelf", "show_pv", "ipv", "want_count", "post_dt",
+            "chat_uv", "pay_amt", "pay_ord_cnt", "ipv_pay_ucvr",
+        ):
             max_date_subq = (
                 select(ItemStatsDaily.item_id, func.max(ItemStatsDaily.stat_date).label("max_date"))
                 .group_by(ItemStatsDaily.item_id)
@@ -348,7 +345,24 @@ class ItemService:
                     ),
                 )
             )
-            order_col = getattr(stats_alias, stats_col_map[sort_by])
+            # 字符串列排序需转数值：金额直接转，转化率先剥离 % 符号；
+            # 空串/'-' 等无效值转 NULLIF 置空，避免 MySQL DECIMAL 转换警告并排到最后
+            pay_amt_expr = func.nullif(func.nullif(stats_alias.pay_amt_7d, ""), "-")
+            ucvr_expr = func.nullif(
+                func.nullif(func.replace(stats_alias.ipv_pay_ucvr_7d, "%", ""), ""), "-"
+            )
+            stats_col_map = {
+                "days_on_shelf": stats_alias.days_on_shelf,
+                "show_pv": stats_alias.show_pv_7d,
+                "ipv": stats_alias.ipv_7d,
+                "want_count": stats_alias.want_count,
+                "post_dt": stats_alias.post_dt,
+                "chat_uv": stats_alias.chat_uv_7d,
+                "pay_ord_cnt": stats_alias.pay_ord_cnt_7d,
+                "pay_amt": cast(pay_amt_expr, Numeric(12, 2)),
+                "ipv_pay_ucvr": cast(ucvr_expr, Numeric(8, 4)),
+            }
+            order_col = stats_col_map[sort_by]
         elif sort_by == "price":
             # 价格列为字符串且部分数据带货币符号（如 "¥1"），剥离符号后再转数值排序
             order_col = cast(
