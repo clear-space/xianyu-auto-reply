@@ -200,8 +200,7 @@ export interface DelistWeightPreviewEntry {
     chat_uv_7d?: number | null
     pay_ord_cnt_7d?: number | null
     ucvr_7d?: string | null
-    want_growth_7d?: number | null
-    want_now?: number | null
+    want_total?: number | null
     no_data?: boolean
     excluded?: boolean
   }

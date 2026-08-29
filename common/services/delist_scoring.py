@@ -2,7 +2,7 @@
 商品下架权重计算服务（基于闲鱼官方运营数据）
 
 功能：
-1. 采集在售商品的官方运营信号（真实上架天数/曝光/浏览/咨询/成交/转化率/想要增速，
+1. 采集在售商品的官方运营信号（真实上架天数/曝光/浏览/咨询/成交/转化率/累计想要，
    数据来源 xy_item_stats_daily 每日快照表，由商品指标快照任务凌晨采集）
 2. 各信号在账号内先做归一化（percentile/log），再乘以权重计入总分
 3. 供定时下架规则选品与算法效果预览使用（管理员定义的算法参数驱动）
@@ -17,7 +17,7 @@
       + w_chat     × (1 − p(近7天咨询))
       + w_sale     × (1 − p(近7天成交))
       + w_ucvr     × (1 − p(近7天转化率))
-      + w_want     × (1 − p(想要7天增速))            # 掉想要 → 增速排低端 → 加分
+      + w_want     × (1 − p(累计想要))                  # 想要越低分越高（反向）
       − w_polished × [已擦亮]                        # 布尔保护（系统动作）
     )
 
@@ -184,7 +184,7 @@ async def compute_delist_scores(
     """计算账号内在售商品的下架权重，返回按权重降序的明细列表。
 
     返回 [{item, weight, signals, parts, p_values, clamped, no_data}, ...]
-    - signals: 原始信号（真实上架天数/曝光/浏览/咨询/成交/转化率/想要增速/连续无成交天数）
+    - signals: 原始信号（真实上架天数/曝光/浏览/咨询/成交/转化率/累计想要/连续无成交天数）
     - parts: 逐项分值构成，供算法效果预览与执行明细展示
     - p_values: 各信号归一化值（百分位），供预览透明化
 
@@ -233,7 +233,7 @@ async def compute_delist_scores(
             ).scalars().all()
             latest_map = {str(r.item_id): r for r in latest_rows}
 
-            # 历史序列（近 30 天，用于连续无成交天数与想要增速）
+            # 历史序列（近 30 天，用于连续无成交天数推算）
             hist_rows = (
                 await session.execute(
                     select(
@@ -268,7 +268,7 @@ async def compute_delist_scores(
                     "age_days": 0, "no_sale_days": 0,
                     "show_pv": None, "ipv": None, "chat_uv": None,
                     "pay_ord_cnt": None, "ucvr": None,
-                    "want_growth": None, "want_now": None, "polished": bool(row.is_polished),
+                    "want_total": None, "polished": bool(row.is_polished),
                 })
                 continue
 
@@ -290,20 +290,8 @@ async def compute_delist_scores(
                     no_sale_days += 1
                     cur = d
 
-            # 想要 7 天增速：want_now − 7天前（历史中距 latest-7d 最近的一行）
-            want_now = latest.want_count
-            want_growth = 0
-            if hist:
-                latest_dt = datetime.strptime(hist[0][0], "%Y%m%d")
-                target = latest_dt - timedelta(days=7)
-                ref_row = None
-                for stat_date, _, want in hist:
-                    d = datetime.strptime(stat_date, "%Y%m%d")
-                    if d <= target:
-                        ref_row = (d, want)
-                        break
-                if ref_row is not None and want_now is not None and ref_row[1] is not None:
-                    want_growth = want_now - ref_row[1]
+            # 累计想要（与商品列表「想要」列同口径：最新快照的 want_count）
+            want_total = latest.want_count
 
             signals_rows.append({
                 "item": row, "no_data": False,
@@ -311,7 +299,7 @@ async def compute_delist_scores(
                 "show_pv": latest.show_pv_7d, "ipv": latest.ipv_7d,
                 "chat_uv": latest.chat_uv_7d, "pay_ord_cnt": latest.pay_ord_cnt_7d,
                 "ucvr": latest.ipv_pay_ucvr_7d,
-                "want_growth": want_growth, "want_now": want_now,
+                "want_total": want_total,
                 "polished": bool(row.is_polished),
             })
 
@@ -324,7 +312,7 @@ async def compute_delist_scores(
             ("chat", lambda s: _to_float(s["chat_uv"])),
             ("sale", lambda s: _to_float(s["pay_ord_cnt"])),
             ("ucvr", lambda s: _to_float(s["ucvr"])),
-            ("want", lambda s: float(s["want_growth"] or 0)),
+            ("want", lambda s: _to_float(s["want_total"])),
         ]
         # 归一化在全体商品上计算（无快照按 0 参与，保持 n 一致）
         raw_values = {name: [fn(s) for s in signals_rows] for name, fn in metric_defs}
@@ -355,7 +343,7 @@ async def compute_delist_scores(
                         "age_days": 0, "no_sale_days": 0, "polished": s["polished"],
                         "show_pv_7d": None, "ipv_7d": None, "chat_uv_7d": None,
                         "pay_ord_cnt_7d": None, "ucvr_7d": None,
-                        "want_growth_7d": None, "want_now": None,
+                        "want_total": None,
                         "no_data": True, "excluded": False,
                     },
                     "parts": {"base": 0, "age": 0, "no_sale": 0, "exposure": 0,
@@ -404,8 +392,7 @@ async def compute_delist_scores(
                     "chat_uv_7d": s["chat_uv"],
                     "pay_ord_cnt_7d": s["pay_ord_cnt"],
                     "ucvr_7d": s["ucvr"],
-                    "want_growth_7d": s["want_growth"],
-                    "want_now": s["want_now"],
+                    "want_total": s["want_total"],
                     "no_data": False,
                     "excluded": excluded,
                 },

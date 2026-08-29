@@ -86,7 +86,7 @@ const DELIST_PARAM_FIELDS: ParamField[] = [
   { key: 'w_chat', label: '咨询(7天)权重', hint: '近7天咨询归一化后的权重（咨询越低分越高）', type: 'number' },
   { key: 'w_sale', label: '成交(7天)权重', hint: '近7天成交归一化后的权重（成交越低分越高）', type: 'number' },
   { key: 'w_ucvr', label: '转化率(7天)权重', hint: '近7天浏览支付转化率归一化后的权重（转化越低分越高）', type: 'number' },
-  { key: 'w_want', label: '想要增速(7天)权重', hint: '想要7天增速归一化后的权重（掉想要→加分）', type: 'number' },
+  { key: 'w_want', label: '想要(累计)权重', hint: '累计想要数归一化后的权重（想要越低分越高）', type: 'number' },
   { key: 'w_polished', label: '擦亮保护', hint: '已擦亮商品的固定扣分（保护近期活跃商品）', type: 'number' },
   { key: 'min_score', label: '下架分数线', hint: '权重低于该值不参与下架；0=不启用', type: 'number' },
   {
@@ -149,7 +149,7 @@ function defaultParamsFor(type: WeightAlgorithmType): Record<string, any> {
 
 function paramsSummary(type: WeightAlgorithmType, p: any): string {
   if (type === 'delist_weight') {
-    return `老化${p.w_age} 无成交${p.w_no_sale} 曝光(7天)${p.w_exposure} 浏览(7天)${p.w_browse} 咨询(7天)${p.w_chat} 成交(7天)${p.w_sale} 转化(7天)${p.w_ucvr} 想要(7天)${p.w_want} 擦亮-${p.w_polished}${p.min_score > 0 ? ` 线${p.min_score}` : ''} · ${p.norm_method === 'log' ? '对数' : '百分位'}归一 · ${p.no_data_behavior === 'base' ? '无数据仅基础分' : '无数据排除'}${p.exclude_recent_order ? ' 硬排有成交' : ''}${p.exclude_polished ? ' 硬排擦亮' : ''} · ${p.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
+    return `老化${p.w_age} 无成交${p.w_no_sale} 曝光(7天)${p.w_exposure} 浏览(7天)${p.w_browse} 咨询(7天)${p.w_chat} 成交(7天)${p.w_sale} 转化(7天)${p.w_ucvr} 想要${p.w_want} 擦亮-${p.w_polished}${p.min_score > 0 ? ` 线${p.min_score}` : ''} · ${p.norm_method === 'log' ? '对数' : '百分位'}归一 · ${p.no_data_behavior === 'base' ? '无数据仅基础分' : '无数据排除'}${p.exclude_recent_order ? ' 硬排有成交' : ''}${p.exclude_polished ? ' 硬排擦亮' : ''} · ${p.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
   }
   return `首次+${p.first_use_bonus} 曝光(7天)${p.w_exposure} 浏览(7天)${p.w_browse} 咨询(7天)${p.w_chat} 成交(7天)${p.w_sale} 转化(7天)${p.w_ucvr} 想要${p.w_want} 售出+${p.w_sold} 恢复${p.offline_recover_per_day}/${p.deleted_recover_per_day}天 · ${p.norm_method === 'log' ? '对数' : '百分位'}归一${p.exclude_sold ? ' 硬排售出' : ''} · ${p.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
 }
@@ -417,7 +417,7 @@ function WeightAlgorithmsPage({ algorithmType }: { algorithmType: WeightAlgorith
                         &nbsp;&nbsp;+ 老化权重 × p(真实上架天数)<br />
                         &nbsp;&nbsp;+ 无成交权重 × p(连续无成交天数)<br />
                         &nbsp;&nbsp;+ 曝光/浏览/咨询/成交/转化率权重 × (1 − p(近7天指标))<br />
-                        &nbsp;&nbsp;+ 想要权重 × (1 − p(想要7天增速))<br />
+                        &nbsp;&nbsp;+ 想要权重 × (1 − p(累计想要))<br />
                         &nbsp;&nbsp;− 擦亮保护（已擦亮）<br />
                         &nbsp;&nbsp;下限 0 分（0 = 不参与下架）
                       </div>
@@ -433,7 +433,7 @@ function WeightAlgorithmsPage({ algorithmType }: { algorithmType: WeightAlgorith
                         <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">老化权重</span>真实上架天数归一化后加分，越久越该下</p>
                         <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">连续无成交权重</span>官方成交数据逐日推算的连续无成交天数归一化后加分</p>
                         <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">曝光/浏览/咨询/成交/转化率权重</span>近7天官方指标归一化后反向加分（指标越低分越高）</p>
-                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">想要增速权重</span>想要数7天增速归一化后反向加分（掉想要→加分）</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">想要(累计)权重</span>累计想要数归一化后反向加分（与商品列表「想要」列同口径，想要越低分越高）</p>
                         <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">擦亮保护</span>已擦亮 = 近期主动操作，固定扣分保护</p>
                         <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">归一化方式</span>percentile-账号内百分位（推荐）；log-对数归一化</p>
                         <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">无数据商品</span>无快照（当日新发布）商品：排除不参与下架（推荐）或仅基础分参与</p>
@@ -806,8 +806,8 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
                             <span className="badge-gray" title="近7天咨询人数">7天咨询 {e.signals.chat_uv_7d ?? '--'}</span>
                             <span className="badge-gray" title="近7天官方成交笔数">7天成交 {e.signals.pay_ord_cnt_7d ?? '--'}</span>
                             <span className="badge-gray" title="近7天浏览支付转化率">7天转化 {e.signals.ucvr_7d ?? '--'}</span>
-                            <span className={`badge-gray ${(e.signals.want_growth_7d ?? 0) < 0 ? '!text-red-500' : ''}`} title={`累计想要 ${e.signals.want_now ?? '--'}，7天增速`}>
-                              7天想要{(e.signals.want_growth_7d ?? 0) > 0 ? '+' : ''}{e.signals.want_growth_7d ?? '--'}
+                            <span className="badge-gray" title="累计想要数（与商品列表「想要」列同口径）">
+                              想要 {e.signals.want_total ?? '--'}
                             </span>
                             {e.signals.polished && <span className="badge-primary">已擦亮</span>}
                             {e.signals.excluded && <span className="badge-warning">硬排</span>}
@@ -820,7 +820,7 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
                       className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5 pl-8 font-mono text-xs text-slate-500 dark:text-slate-400"
                       title={
                         e.p_values
-                          ? `归一化值：老化${e.p_values.age ?? '--'} 无成交${e.p_values.no_sale ?? '--'} 曝光(7天)${e.p_values.exposure ?? '--'} 浏览(7天)${e.p_values.browse ?? '--'} 咨询(7天)${e.p_values.chat ?? '--'} 成交(7天)${e.p_values.sale ?? '--'} 转化(7天)${e.p_values.ucvr ?? '--'} 想要(7天)${e.p_values.want ?? '--'}`
+                          ? `归一化值：老化${e.p_values.age ?? '--'} 无成交${e.p_values.no_sale ?? '--'} 曝光(7天)${e.p_values.exposure ?? '--'} 浏览(7天)${e.p_values.browse ?? '--'} 咨询(7天)${e.p_values.chat ?? '--'} 成交(7天)${e.p_values.sale ?? '--'} 转化(7天)${e.p_values.ucvr ?? '--'} 想要${e.p_values.want ?? '--'}`
                           : undefined
                       }
                     >
@@ -836,7 +836,7 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
                           <span>咨询(7天) {fmt(p.chat)}</span>
                           <span>成交(7天) {fmt(p.sale)}</span>
                           <span>转化(7天) {fmt(p.ucvr)}</span>
-                          <span>想要(7天) {fmt(p.want)}</span>
+                          <span>想要 {fmt(p.want)}</span>
                           <span>擦亮 {fmt(p.polished)}</span>
                           <span className="text-slate-700 dark:text-slate-200 font-semibold">= 合计 {e.weight}{e.clamped ? '（保底0）' : ''}</span>
                         </>
