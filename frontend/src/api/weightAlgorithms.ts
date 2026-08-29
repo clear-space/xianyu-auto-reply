@@ -12,15 +12,22 @@ const PREFIX = '/api/v1/admin/weight-algorithms'
 
 export type WeightAlgorithmType = 'heat_weight' | 'delist_weight'
 
-/** 热度加权参数（上架算法） */
+/** 热度加权参数（上架算法，基于闲鱼官方数据归一化加权） */
 export interface HeatWeightParams {
   first_use_bonus: number
-  recent_order_bonus: number
-  sold_bonus: number
+  w_exposure: number
+  w_browse: number
+  w_chat: number
+  w_sale: number
+  w_ucvr: number
+  w_want: number
+  w_sold: number
   offline_recover_per_day: number
   deleted_recover_per_day: number
   fail_penalty: number
   exclude_sold: boolean
+  /** 归一化方式：percentile-素材池内百分位；log-对数归一化 */
+  norm_method: 'percentile' | 'log'
   /** 选料方式：weighted-加权随机（权重=概率）；top-按权重直选（高分必先选） */
   sample_mode: 'weighted' | 'top'
 }
@@ -100,7 +107,7 @@ export const deleteWeightAlgorithm = (id: number): Promise<ApiResponse> =>
 export const toggleWeightAlgorithm = (id: number): Promise<ApiResponse> =>
   patch(`${PREFIX}/${id}/toggle`)
 
-/** 热度加权预览条目（素材维度） */
+/** 热度加权预览条目（素材维度，基于闲鱼官方数据归一化加权） */
 export interface HeatWeightPreviewEntry {
   material_id: number
   title: string
@@ -110,11 +117,25 @@ export interface HeatWeightPreviewEntry {
   parts: {
     base: number
     first_use_bonus: number
-    recent_order_bonus: number
-    sold_bonus: number
+    exposure: number
+    browse: number
+    chat: number
+    sale: number
+    ucvr: number
+    want: number
+    sold: number
     offline_penalty: number
     deleted_penalty: number
     fail_penalty: number
+  }
+  /** 各信号归一化值（0~1，百分位；仅预览透明化展示用） */
+  p_values?: {
+    exposure?: number
+    browse?: number
+    chat?: number
+    sale?: number
+    ucvr?: number
+    want?: number
   }
   /** 原始分低于 1 被保底为 1 */
   clamped: boolean
@@ -123,11 +144,17 @@ export interface HeatWeightPreviewEntry {
   signals: {
     item_status?: string | null
     first_use: boolean
-    recent_order: boolean
     sold: boolean
     offline_days?: number | null
     deleted_days?: number | null
     fail_count: number
+    show_pv_7d?: number | null
+    ipv_7d?: number | null
+    chat_uv_7d?: number | null
+    pay_ord_cnt_7d?: number | null
+    ucvr_7d?: number | null
+    want_total?: number | null
+    no_data?: boolean
   }
 }
 

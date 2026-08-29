@@ -3839,47 +3839,115 @@ class DatabaseInitializer:
     DEFAULT_WEIGHT_ALGORITHMS = (
         (
             "热度均衡",
-            "热度加权默认策略：首次发布优先，兼顾复销信号，下架50天恢复",
+            "热度加权默认策略：首次发布优先，基于闲鱼官方数据归一化加权——近7天曝光/浏览/咨询/成交/转化率与累计想要越好的素材越优先发布，下架50天恢复",
             {
                 "first_use_bonus": 50,
-                "recent_order_bonus": 30,
-                "sold_bonus": 25,
+                "w_exposure": 40,
+                "w_browse": 20,
+                "w_chat": 20,
+                "w_sale": 60,
+                "w_ucvr": 20,
+                "w_want": 30,
+                "w_sold": 25,
                 "offline_recover_per_day": 2,
                 "deleted_recover_per_day": 1,
                 "fail_penalty": 10,
                 "exclude_sold": False,
                 "sample_mode": "weighted",
+                "norm_method": "percentile",
             },
         ),
         (
             "激进复销",
-            "复销优先：已售出/有订单的素材大幅加权，恢复更快",
+            "复销优先：官方近7天成交与已售出素材大幅加权，恢复更快",
             {
                 "first_use_bonus": 20,
-                "recent_order_bonus": 50,
-                "sold_bonus": 60,
+                "w_exposure": 30,
+                "w_browse": 15,
+                "w_chat": 20,
+                "w_sale": 80,
+                "w_ucvr": 30,
+                "w_want": 30,
+                "w_sold": 60,
                 "offline_recover_per_day": 3,
                 "deleted_recover_per_day": 2,
                 "fail_penalty": 10,
                 "exclude_sold": False,
                 "sample_mode": "weighted",
+                "norm_method": "percentile",
             },
         ),
         (
             "保守首用",
-            "新素材优先：从未使用过的素材权重最高，下架/删除恢复最慢",
+            "新素材优先：从未使用过的素材权重最高，官方表现信号弱化，下架/删除恢复最慢",
             {
                 "first_use_bonus": 100,
-                "recent_order_bonus": 10,
-                "sold_bonus": 10,
+                "w_exposure": 20,
+                "w_browse": 10,
+                "w_chat": 10,
+                "w_sale": 30,
+                "w_ucvr": 10,
+                "w_want": 10,
+                "w_sold": 10,
                 "offline_recover_per_day": 1,
                 "deleted_recover_per_day": 1,
                 "fail_penalty": 20,
                 "exclude_sold": False,
                 "sample_mode": "weighted",
+                "norm_method": "percentile",
             },
         ),
     )
+
+    # 旧版预设参数（识别未修改的预设，升级为新版归一化参数；用户改过的不动）
+    # 每项为历史版本参数元组（含 sample_mode 版本与更早的无 sample_mode 版本）
+    LEGACY_WEIGHT_PRESET_PARAMS = {
+        "热度均衡": (
+            {
+                "first_use_bonus": 50, "recent_order_bonus": 30, "sold_bonus": 25,
+                "offline_recover_per_day": 2, "deleted_recover_per_day": 1,
+                "fail_penalty": 10, "exclude_sold": False, "sample_mode": "weighted",
+            },
+            {
+                "first_use_bonus": 50, "recent_order_bonus": 30, "sold_bonus": 25,
+                "offline_recover_per_day": 2, "deleted_recover_per_day": 1,
+                "fail_penalty": 10, "exclude_sold": False,
+            },
+        ),
+        "激进复销": (
+            {
+                "first_use_bonus": 20, "recent_order_bonus": 50, "sold_bonus": 60,
+                "offline_recover_per_day": 3, "deleted_recover_per_day": 2,
+                "fail_penalty": 10, "exclude_sold": False, "sample_mode": "weighted",
+            },
+        ),
+        "保守首用": (
+            {
+                "first_use_bonus": 100, "recent_order_bonus": 10, "sold_bonus": 10,
+                "offline_recover_per_day": 1, "deleted_recover_per_day": 1,
+                "fail_penalty": 20, "exclude_sold": False, "sample_mode": "weighted",
+            },
+            {
+                "first_use_bonus": 100, "recent_order_bonus": 10, "sold_bonus": 10,
+                "offline_recover_per_day": 1, "deleted_recover_per_day": 1,
+                "fail_penalty": 20, "exclude_sold": False,
+            },
+        ),
+    }
+
+    # 可刷新的预设说明历史版本（描述仍为这些旧文案时刷新为新文案；参数是否升级独立判断）
+    LEGACY_WEIGHT_PRESET_DESCRIPTIONS = {
+        "热度均衡": (
+            "热度加权默认策略：首次发布优先，兼顾复销信号，下架50天恢复",
+            "均衡策略：首次发布优先，兼顾复销信号，下架50天恢复",
+        ),
+        "激进复销": (
+            "复销优先：已售出/有订单的素材大幅加权，恢复更快",
+        ),
+        "保守首用": (
+            "新素材优先：从未使用过的素材权重最高，下架/删除恢复最慢",
+        ),
+    }
 
     async def init_weight_algorithms(self):
         """初始化上架权重算法预设（按名称幂等，不覆盖用户修改）"""
@@ -3899,6 +3967,49 @@ class DatabaseInitializer:
                         {"name": name},
                     )
                     if result.fetchone():
+                        # 升级旧版预设（三套预设均参与）：
+                        # 1) 参数与旧预设完全一致（未被用户修改）→ 升级为新版归一化参数+新说明
+                        # 2) 参数已是新版但说明仍是旧文案 → 仅刷新说明
+                        legacy_params = self.LEGACY_WEIGHT_PRESET_PARAMS.get(name)
+                        legacy_descs = self.LEGACY_WEIGHT_PRESET_DESCRIPTIONS.get(name)
+                        stored_row = await session.execute(
+                            text(
+                                "SELECT params, description FROM xy_weight_algorithms "
+                                "WHERE name = :name"
+                            ),
+                            {"name": name},
+                        )
+                        stored_result = stored_row.fetchone()
+                        stored_raw = stored_result[0] if stored_result else None
+                        stored_desc = stored_result[1] if stored_result else None
+                        try:
+                            stored_params = json.loads(stored_raw) if isinstance(stored_raw, str) else stored_raw
+                        except Exception:
+                            stored_params = None
+
+                        if legacy_params is not None and stored_params in legacy_params:
+                            await session.execute(
+                                text(
+                                    "UPDATE xy_weight_algorithms SET params = :params, description = :description "
+                                    "WHERE name = :name"
+                                ),
+                                {
+                                    "name": name,
+                                    "params": json.dumps(params, ensure_ascii=False),
+                                    "description": description,
+                                },
+                            )
+                            logger.info(f"✓ 上架权重算法「{name}」已从旧版参数升级为归一化新参数")
+                        elif legacy_descs is not None and stored_desc in legacy_descs:
+                            await session.execute(
+                                text(
+                                    "UPDATE xy_weight_algorithms SET description = :description "
+                                    "WHERE name = :name"
+                                ),
+                                {"name": name, "description": description},
+                            )
+                            logger.info(f"✓ 上架权重算法「{name}」说明已刷新为新口径")
+
                         if is_builtin:
                             await session.execute(
                                 text("UPDATE xy_weight_algorithms SET is_builtin = 1, enabled = 1 WHERE name = :name"),

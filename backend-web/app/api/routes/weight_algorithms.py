@@ -432,6 +432,7 @@ async def preview_weight_algorithm(
                     "weight": d["weight"],
                     "signals": d["signals"],
                     "parts": d["parts"],
+                    "p_values": d.get("p_values") or {},
                     "clamped": d["clamped"],
                     "on_sale_filtered": extract_prefix_number(d["material"].get("title"))
                     in on_sale_nos,

@@ -44,12 +44,27 @@ interface ParamField {
 
 const HEAT_PARAM_FIELDS: ParamField[] = [
   { key: 'first_use_bonus', label: '首次使用加成', hint: '从未发布过的素材加分（最高优先级）', type: 'number' },
-  { key: 'recent_order_bonus', label: '近30天有订单加成', hint: '售卖情况好的编号加分', type: 'number' },
-  { key: 'sold_bonus', label: '已售出加成', hint: '复销信号加分', type: 'number' },
+  { key: 'w_exposure', label: '曝光(7天)权重', hint: '近7天曝光归一化后的权重（曝光越好越该发）', type: 'number' },
+  { key: 'w_browse', label: '浏览(7天)权重', hint: '近7天浏览归一化后的权重', type: 'number' },
+  { key: 'w_chat', label: '咨询(7天)权重', hint: '近7天咨询归一化后的权重', type: 'number' },
+  { key: 'w_sale', label: '成交(7天)权重', hint: '近7天官方成交归一化后的权重（取代系统订单信号）', type: 'number' },
+  { key: 'w_ucvr', label: '转化率(7天)权重', hint: '近7天转化率归一化后的权重', type: 'number' },
+  { key: 'w_want', label: '想要(累计)权重', hint: '累计想要数归一化后的权重', type: 'number' },
+  { key: 'w_sold', label: '已售出加成', hint: '本地状态已售出的复销信号加分', type: 'number' },
   { key: 'offline_recover_per_day', label: '下架恢复速率', hint: '自动下架后每天恢复的分数（每天）', type: 'number' },
   { key: 'deleted_recover_per_day', label: '删除恢复速率', hint: '手动删除后每天恢复的分数（更慢）', type: 'number' },
   { key: 'fail_penalty', label: '失败扣分', hint: '近60天单次发布失败扣分', type: 'number' },
   { key: 'exclude_sold', label: '硬排已售出', hint: '开启后已售出编号不参与随机', type: 'bool' },
+  {
+    key: 'norm_method',
+    label: '归一化方式',
+    hint: 'percentile：素材池内百分位（推荐）；log：对数归一化',
+    type: 'select',
+    options: [
+      { value: 'percentile', label: '百分位（推荐）' },
+      { value: 'log', label: '对数归一化' },
+    ],
+  },
   {
     key: 'sample_mode',
     label: '选料方式',
@@ -125,9 +140,10 @@ function defaultParamsFor(type: WeightAlgorithmType): Record<string, any> {
     }
   }
   return {
-    first_use_bonus: 50, recent_order_bonus: 30, sold_bonus: 25,
+    first_use_bonus: 50, w_exposure: 40, w_browse: 20, w_chat: 20,
+    w_sale: 60, w_ucvr: 20, w_want: 30, w_sold: 25,
     offline_recover_per_day: 2, deleted_recover_per_day: 1, fail_penalty: 10,
-    exclude_sold: false, sample_mode: 'weighted',
+    exclude_sold: false, sample_mode: 'weighted', norm_method: 'percentile',
   }
 }
 
@@ -135,7 +151,7 @@ function paramsSummary(type: WeightAlgorithmType, p: any): string {
   if (type === 'delist_weight') {
     return `老化${p.w_age} 无成交${p.w_no_sale} 曝光(7天)${p.w_exposure} 浏览(7天)${p.w_browse} 咨询(7天)${p.w_chat} 成交(7天)${p.w_sale} 转化(7天)${p.w_ucvr} 想要(7天)${p.w_want} 擦亮-${p.w_polished}${p.min_score > 0 ? ` 线${p.min_score}` : ''} · ${p.norm_method === 'log' ? '对数' : '百分位'}归一 · ${p.no_data_behavior === 'base' ? '无数据仅基础分' : '无数据排除'}${p.exclude_recent_order ? ' 硬排有成交' : ''}${p.exclude_polished ? ' 硬排擦亮' : ''} · ${p.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
   }
-  return `首次+${p.first_use_bonus} 订单+${p.recent_order_bonus} 售出+${p.sold_bonus} 恢复${p.offline_recover_per_day}/${p.deleted_recover_per_day}天${p.exclude_sold ? ' 硬排售出' : ''} · ${p.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
+  return `首次+${p.first_use_bonus} 曝光(7天)${p.w_exposure} 浏览(7天)${p.w_browse} 咨询(7天)${p.w_chat} 成交(7天)${p.w_sale} 转化(7天)${p.w_ucvr} 想要${p.w_want} 售出+${p.w_sold} 恢复${p.offline_recover_per_day}/${p.deleted_recover_per_day}天 · ${p.norm_method === 'log' ? '对数' : '百分位'}归一${p.exclude_sold ? ' 硬排售出' : ''} · ${p.sample_mode === 'top' ? '按权重直选' : '加权随机'}`
 }
 
 function WeightAlgorithmsPage({ algorithmType }: { algorithmType: WeightAlgorithmType }) {
@@ -205,7 +221,7 @@ function WeightAlgorithmsPage({ algorithmType }: { algorithmType: WeightAlgorith
           <h1 className="page-title">{algorithmType === 'heat_weight' ? '上架权重算法' : '下架权重算法'}</h1>
           <p className="page-description">
             {algorithmType === 'heat_weight'
-              ? '管理定时发布随机模式的选料算法：按使用历史与售卖情况为素材打分，支持效果预览与引用查看'
+              ? '管理定时发布随机模式的选料算法：基于闲鱼官方运营数据（近7天曝光/浏览/咨询/成交/转化率、累计想要）与发布历史为素材打分，支持效果预览与引用查看'
               : '管理定时下架的选品算法：基于闲鱼官方运营数据（真实上架天数、近7天曝光/浏览/咨询/成交/转化率、累计想要）归一化打分，支持效果预览与引用查看'}
           </p>
         </div>
@@ -337,7 +353,7 @@ function WeightAlgorithmsPage({ algorithmType }: { algorithmType: WeightAlgorith
                 {algorithmType === 'heat_weight' ? (
                   <>
                     <p>
-                      「热度加权」用于定时发布随机模式：按使用历史与售卖情况为每个素材打分，选料时<b>权重越高越优先</b>，可选「按权重直选」或「加权随机」两种选料方式。素材池永不枯竭（保底 1 分），被下架/删除的素材会随时间逐步恢复权重。
+                      「热度加权」用于定时发布随机模式：基于闲鱼官方运营数据（近7天曝光/浏览/咨询/成交/转化率、累计想要，按素材编号聚合其发布商品）与发布历史为每个素材打分，选料时<b>权重越高越优先</b>，可选「按权重直选」或「加权随机」两种选料方式。素材池永不枯竭（保底 1 分），被下架/删除的素材会随时间逐步恢复权重。
                     </p>
 
                     <div>
@@ -345,22 +361,29 @@ function WeightAlgorithmsPage({ algorithmType }: { algorithmType: WeightAlgorith
                       <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 font-mono text-xs leading-relaxed">
                         权重 = 100 基础分<br />
                         &nbsp;&nbsp;+ 首次使用加成（从未发布过）<br />
-                        &nbsp;&nbsp;+ 近30天有订单加成<br />
-                        &nbsp;&nbsp;+ 已售出加成（复销信号）<br />
+                        &nbsp;&nbsp;+ 曝光/浏览/咨询/成交/转化率权重 × p(近7天指标)<br />
+                        &nbsp;&nbsp;+ 想要权重 × p(累计想要)<br />
+                        &nbsp;&nbsp;+ 已售出加成（本地复销信号）<br />
                         &nbsp;&nbsp;− 下架恢复惩罚（每天恢复，50 天回满）<br />
                         &nbsp;&nbsp;− 删除恢复惩罚（每天恢复，100 天回满）<br />
                         &nbsp;&nbsp;− 失败扣分 × 近60天失败次数<br />
                         &nbsp;&nbsp;保底 1 分
                       </div>
+                      <p className="text-xs leading-relaxed mt-1.5">
+                        p 为素材池内百分位归一化值（0~1，越接近 1 表示该指标越高）。
+                        官方指标按素材标题前缀编号聚合其发布商品的最新快照求和；无编号/无数据的素材按中性 0.5 计。
+                      </p>
                     </div>
 
                     <div>
                       <h3 className="text-xs font-semibold text-slate-400 mb-1.5">参数说明</h3>
                       <div className="space-y-1.5">
-                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">首次使用加成</span>从未出现在商品记录/发布日志/订单任何一处的素材加分（最高优先级）</p>
-                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">近30天订单加成</span>近期有订单的编号优先</p>
-                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">已售出加成</span>卖掉的款式重新上架是合理的复销行为</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">首次使用加成</span>从未出现在商品记录/发布日志任何一处的素材加分（最高优先级）</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">曝光/浏览/咨询/成交/转化率(7天)权重</span>近7天官方指标归一化后正向加分（表现越好越优先）</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">想要(累计)权重</span>累计想要数归一化后正向加分</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">已售出加成</span>卖掉的款式重新上架是合理的复销行为（本地状态）</p>
                         <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">下架/删除恢复速率</span>退场素材每天恢复的分数，控制「多久后可以重新被选中」</p>
+                        <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">归一化方式</span>percentile-素材池内百分位（推荐）；log-对数归一化</p>
                         <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">失败扣分</span>减少容易发布失败的素材被选中的概率</p>
                         <p><span className="inline-block min-w-[108px] font-medium text-slate-700 dark:text-slate-200">硬排已售出</span>开启后已售出编号完全不参与随机（硬排除）</p>
                       </div>
@@ -832,7 +855,18 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
                       {e.on_sale_filtered && <span className="badge-gray shrink-0">在售（去重过滤）</span>}
                       <span className="flex gap-1 flex-wrap shrink-0">
                         {e.signals.first_use && <span className="badge-success">首次使用</span>}
-                        {e.signals.recent_order && <span className="badge-info">近30天订单</span>}
+                        {e.signals.no_data ? (
+                          <span className="badge-gray">无官方数据</span>
+                        ) : (
+                          <>
+                            <span className="badge-gray" title="近7天曝光（该编号商品合计）">7天曝光 {e.signals.show_pv_7d ?? '--'}</span>
+                            <span className="badge-gray" title="近7天浏览（该编号商品合计）">7天浏览 {e.signals.ipv_7d ?? '--'}</span>
+                            <span className="badge-gray" title="近7天咨询（该编号商品合计）">7天咨询 {e.signals.chat_uv_7d ?? '--'}</span>
+                            <span className="badge-gray" title="近7天官方成交（该编号商品合计）">7天成交 {e.signals.pay_ord_cnt_7d ?? '--'}</span>
+                            <span className="badge-gray" title="近7天转化率（成交/浏览）">7天转化 {e.signals.ucvr_7d != null ? `${(e.signals.ucvr_7d * 100).toFixed(2)}%` : '--'}</span>
+                            <span className="badge-gray" title="累计想要（该编号商品合计）">想要 {e.signals.want_total ?? '--'}</span>
+                          </>
+                        )}
                         {e.signals.sold && <span className="badge-primary">已售出</span>}
                         {e.signals.offline_days != null && <span className="badge-gray">下架{e.signals.offline_days}天</span>}
                         {e.signals.deleted_days != null && <span className="badge-gray">删除{e.signals.deleted_days}天</span>}
@@ -840,11 +874,23 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
                       </span>
                     </div>
                     {/* 逐项分值构成 */}
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5 pl-8 font-mono text-xs text-slate-500 dark:text-slate-400">
+                    <div
+                      className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5 pl-8 font-mono text-xs text-slate-500 dark:text-slate-400"
+                      title={
+                        e.p_values
+                          ? `归一化值：曝光(7天)${e.p_values.exposure ?? '--'} 浏览(7天)${e.p_values.browse ?? '--'} 咨询(7天)${e.p_values.chat ?? '--'} 成交(7天)${e.p_values.sale ?? '--'} 转化(7天)${e.p_values.ucvr ?? '--'} 想要${e.p_values.want ?? '--'}`
+                          : undefined
+                      }
+                    >
                       <span>基础 {p.base}</span>
                       <span>首次使用 {fmt(p.first_use_bonus)}</span>
-                      <span>近30天订单 {fmt(p.recent_order_bonus)}</span>
-                      <span>已售出 {fmt(p.sold_bonus)}</span>
+                      <span>曝光(7天) {fmt(p.exposure)}</span>
+                      <span>浏览(7天) {fmt(p.browse)}</span>
+                      <span>咨询(7天) {fmt(p.chat)}</span>
+                      <span>成交(7天) {fmt(p.sale)}</span>
+                      <span>转化(7天) {fmt(p.ucvr)}</span>
+                      <span>想要 {fmt(p.want)}</span>
+                      <span>已售出 {fmt(p.sold)}</span>
                       <span>下架 {fmt(p.offline_penalty)}</span>
                       <span>删除 {fmt(p.deleted_penalty)}</span>
                       <span>失败 {fmt(p.fail_penalty)}</span>

@@ -129,22 +129,25 @@ def normalize_delist_params(raw: Optional[dict]) -> Dict[str, Any]:
     return params
 
 
-def _midrank_percentile(sorted_values: List[float], n: int) -> List[float]:
-    """对已升序数组计算各元素的百分位（中位秩 p ∈ (0,1]）"""
+def _value_percentiles(values: List[float]) -> Dict[float, float]:
+    """计算各值的中位秩百分位（p ∈ (0,1]），相同值同分。
+
+    返回 {值: p} 映射——按值取分位，避免排序位置回填错位。
+    """
+    n = len(values)
     if n == 0:
-        return []
-    result: List[float] = []
+        return {}
+    sorted_vals = sorted(values)
+    p_by_value: Dict[float, float] = {}
     i = 0
     while i < n:
         j = i
-        while j + 1 < n and sorted_values[j + 1] == sorted_values[i]:
+        while j + 1 < n and sorted_vals[j + 1] == sorted_vals[i]:
             j += 1
         mid = (i + j) / 2.0
-        p = mid / n
-        for _ in range(i, j + 1):
-            result.append(p)
+        p_by_value[sorted_vals[i]] = mid / n
         i = j + 1
-    return result
+    return p_by_value
 
 
 def _log_normalize(values: List[float]) -> List[float]:
@@ -331,8 +334,9 @@ async def compute_delist_scores(
             if p["norm_method"] == "log":
                 norm_map[name] = _log_normalize(values)
             else:
-                sorted_vals = sorted(values)
-                norm_map[name] = _midrank_percentile(sorted_vals, len(sorted_vals))
+                # 按值取分位（相同值同分），再按原始顺序还原
+                p_by_value = _value_percentiles(values)
+                norm_map[name] = [p_by_value[v] for v in values]
 
         # ---------- 计分 ----------
         weights = {k: float(p[k]) for k in _WEIGHT_KEYS}
