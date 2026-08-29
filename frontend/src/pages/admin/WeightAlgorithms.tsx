@@ -656,16 +656,22 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
   const isDelist = initial.algorithm_type === 'delist_weight'
 
   useEffect(() => {
-    if (!isDelist) return
     getAccountDetails()
-      .then(list => setAccounts(list))
+      .then(list => {
+        setAccounts(list)
+        // 默认选择第一个账号（启用账号优先），不默认全部账号
+        const sorted = [...list].sort((a, b) => (a.enabled === b.enabled ? 0 : a.enabled ? -1 : 1))
+        if (sorted.length > 0) {
+          setSelectedAccounts(new Set([sorted[0].id]))
+        }
+      })
       .catch(() => {})
-  }, [isDelist])
+  }, [])
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    const accountIds = isDelist && selectedAccounts.size > 0
+    const accountIds = selectedAccounts.size > 0
       ? Array.from(selectedAccounts)
       : undefined
     getWeightAlgorithmPreview(
@@ -712,52 +718,53 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
           <button className="modal-close" onClick={onClose}><X className="w-5 h-5" /></button>
         </div>
         <div className="modal-body overflow-y-auto space-y-3 text-sm text-slate-600 dark:text-slate-300">
+          {/* 账号范围选择：全部账号 / 指定账号（两种算法通用，默认第一个账号） */}
+          <div className="border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                预览账号范围{selectedAccounts.size === 0 ? '：全部账号' : `：已选 ${selectedAccounts.size} 个`}
+              </span>
+              {selectedAccounts.size > 0 && (
+                <button className="text-xs text-blue-500 hover:underline" onClick={() => setSelectedAccounts(new Set())}>
+                  改为全部账号
+                </button>
+              )}
+            </div>
+            <div className="space-y-0.5 max-h-32 overflow-y-auto">
+              {accounts.length === 0 ? (
+                <p className="text-xs text-slate-400 px-2 py-1">暂无账号</p>
+              ) : (
+                accounts.map(a => (
+                  <label key={a.id} className={`flex items-center gap-2 px-2 py-1 rounded-lg cursor-pointer transition-colors ${selectedAccounts.has(a.id) ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                    <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
+                      checked={selectedAccounts.has(a.id)} onChange={() => toggleAccount(a.id)} />
+                    <span className="text-sm truncate text-slate-700 dark:text-slate-200">{a.note || a.id}</span>
+                  </label>
+                ))
+              )}
+            </div>
+            {isDelist && (
+              <label className="flex items-center gap-2 pt-1.5 border-t border-slate-100 dark:border-slate-800 cursor-pointer">
+                <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
+                  checked={refreshBeforePreview} onChange={() => setRefreshBeforePreview(v => !v)} />
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  预览前先从闲鱼同步最新商品（商品较多时较慢；同步失败自动回退本地数据）
+                </span>
+              </label>
+            )}
+          </div>
           {isDelist ? (
-            <>
-              {/* 账号范围选择：全部账号 / 指定账号 */}
-              <div className="border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                    预览账号范围{selectedAccounts.size === 0 ? '：全部账号' : `：已选 ${selectedAccounts.size} 个`}
-                  </span>
-                  {selectedAccounts.size > 0 && (
-                    <button className="text-xs text-blue-500 hover:underline" onClick={() => setSelectedAccounts(new Set())}>
-                      改为全部账号
-                    </button>
-                  )}
-                </div>
-                <div className="space-y-0.5 max-h-32 overflow-y-auto">
-                  {accounts.length === 0 ? (
-                    <p className="text-xs text-slate-400 px-2 py-1">暂无账号</p>
-                  ) : (
-                    accounts.map(a => (
-                      <label key={a.id} className={`flex items-center gap-2 px-2 py-1 rounded-lg cursor-pointer transition-colors ${selectedAccounts.has(a.id) ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
-                        <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
-                          checked={selectedAccounts.has(a.id)} onChange={() => toggleAccount(a.id)} />
-                        <span className="text-sm truncate text-slate-700 dark:text-slate-200">{a.note || a.id}</span>
-                      </label>
-                    ))
-                  )}
-                </div>
-                <label className="flex items-center gap-2 pt-1.5 border-t border-slate-100 dark:border-slate-800 cursor-pointer">
-                  <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
-                    checked={refreshBeforePreview} onChange={() => setRefreshBeforePreview(v => !v)} />
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    预览前先从闲鱼同步最新商品（商品较多时较慢；同步失败自动回退本地数据）
-                  </span>
-                </label>
-              </div>
-              <p className="text-xs text-slate-400">
-                预览范围：{selectedAccounts.size === 0 ? '全部账号' : `已选 ${selectedAccounts.size} 个账号`}，
-                共 {total} 条在售商品，按权重降序排列；权重越高越先被下架。每行下方为该商品的逐项分值构成。
-              </p>
-            </>
+            <p className="text-xs text-slate-400">
+              预览范围：{selectedAccounts.size === 0 ? '全部账号' : `已选 ${selectedAccounts.size} 个账号`}，
+              共 {total} 条在售商品，按权重降序排列；权重越高越先被下架。每行下方为该商品的逐项分值构成。
+            </p>
           ) : (() => {
             const filteredCount = entries
               .filter(e => 'on_sale_filtered' in e && e.on_sale_filtered).length
             return (
               <p className="text-xs text-slate-400">
-                对当前账号全部 {total} 条素材计算权重，降序排列；权重越高越容易被随机选中。
+                预览范围：{selectedAccounts.size === 0 ? '全部账号' : `已选 ${selectedAccounts.size} 个账号`}，
+                共 {total} 条素材，按权重降序排列；权重越高越容易被随机选中。
                 {filteredCount > 0 && (
                   <>其中 <b>{filteredCount}</b> 条编号本地状态为在售，执行去重时会被硬过滤（行标灰）。</>
                 )}

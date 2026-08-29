@@ -135,10 +135,11 @@ async def compute_material_weights(
     materials: List[dict],
     params: Optional[dict] = None,
     session=None,
+    account_ids: Optional[List[str]] = None,
 ) -> List[Tuple[dict, int]]:
     """计算素材权重，返回 [(material, weight), ...] 按权重降序（执行器加权随机用）"""
     details = await compute_material_weight_details(
-        user_id, materials, params=params, session=session
+        user_id, materials, params=params, session=session, account_ids=account_ids
     )
     return [(d["material"], d["weight"]) for d in details]
 
@@ -148,6 +149,7 @@ async def compute_material_weight_details(
     materials: List[dict],
     params: Optional[dict] = None,
     session=None,
+    account_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """计算素材权重并附带信号明细，返回 [{"material","weight","signals","parts","p_values"}, ...]
     按权重降序。
@@ -161,10 +163,14 @@ async def compute_material_weight_details(
         materials: 素材池 dict 列表（含 id/title）
         params: 权重参数（None 用系统默认）
         session: 复用调用方的 DB session（不传则内部新建）
+        account_ids: 账号范围（闲鱼账号ID列表）；仅预览指定账号时传入，
+                     商品信号（编号状态/官方快照聚合/已用编号）只统计这些账号的商品，
+                     发布日志信号仍按用户全量统计
     """
     from common.db.session import async_session_maker
     from common.models.item_stats_daily import ItemStatsDaily
     from common.models.publish_log import PublishLog
+    from common.models.xy_account import XYAccount
     from common.models.xy_catalog_item import XYCatalogItem
     from common.services.delist_scoring import _log_normalize, _value_percentiles
     from common.utils.time_utils import get_beijing_now
@@ -183,15 +189,16 @@ async def compute_material_weight_details(
         # 1. 本地商品记录：编号 -> (状态, offline_at, deleted_at)（多记录按优先级聚合）
         from common.services.item_service import _normalize_item_status
 
-        catalog_rows = (
-            await session.execute(
-                select(
-                    XYCatalogItem.item_id,
-                    XYCatalogItem.title,
-                    XYCatalogItem.metadata_json,
-                ).where(XYCatalogItem.owner_id == user_id)
-            )
-        ).all()
+        catalog_stmt = select(
+            XYCatalogItem.item_id,
+            XYCatalogItem.title,
+            XYCatalogItem.metadata_json,
+        ).where(XYCatalogItem.owner_id == user_id)
+        if account_ids:
+            catalog_stmt = catalog_stmt.join(
+                XYAccount, XYCatalogItem.account_pk == XYAccount.id
+            ).where(XYAccount.account_id.in_(account_ids))
+        catalog_rows = (await session.execute(catalog_stmt)).all()
         state_map: Dict[int, Dict[str, Any]] = {}
         for item_id, title, meta in catalog_rows:
             num = extract_prefix_number(title)

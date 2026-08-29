@@ -400,23 +400,35 @@ async def preview_weight_algorithm(
         )
 
     # 当前用户本地状态为「在售」的编号（执行时去重硬过滤会先排除这些；实际以规则账号刷新为准）
+    # 账号范围：指定账号时，商品信号统计与在售去重标记只统计所选账号的商品
+    from common.models.xy_account import XYAccount
     from common.models.xy_catalog_item import XYCatalogItem
     from common.services.item_service import _normalize_item_status
 
+    account_id_list: Optional[List[str]] = None
+    if account_ids:
+        account_id_list = [s.strip() for s in account_ids.split(",") if s.strip()]
+
+    on_sale_stmt = select(XYCatalogItem.title, XYCatalogItem.metadata_json).where(
+        XYCatalogItem.owner_id == current_user.id
+    )
+    if account_id_list:
+        on_sale_stmt = on_sale_stmt.join(
+            XYAccount, XYCatalogItem.account_pk == XYAccount.id
+        ).where(XYAccount.account_id.in_(account_id_list))
+
     on_sale_nos = set()
-    for title, meta in (
-        await session.execute(
-            select(XYCatalogItem.title, XYCatalogItem.metadata_json).where(
-                XYCatalogItem.owner_id == current_user.id
-            )
-        )
-    ).all():
+    for title, meta in (await session.execute(on_sale_stmt)).all():
         num = extract_prefix_number(title)
         if num is not None and _normalize_item_status((meta or {}).get("item_status")) == "on_sale":
             on_sale_nos.add(num)
 
     details = await compute_material_weight_details(
-        current_user.id, materials, params=algo.params, session=session
+        current_user.id,
+        materials,
+        params=algo.params,
+        session=session,
+        account_ids=account_id_list,
     )
     return ApiResponse(
         success=True,
