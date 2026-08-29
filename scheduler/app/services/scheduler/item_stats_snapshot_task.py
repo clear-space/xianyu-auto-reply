@@ -93,6 +93,14 @@ class ItemStatsSnapshotTaskService:
             await self._run()
         return None
 
+    async def run_now(self) -> None:
+        """手动触发：跳过窗口/随机延迟/当日已跑判断，强制重采当日快照（UPSERT 覆盖当天数据）"""
+        if self._lock.locked():
+            logger.warning(f"【{self.task_name}】已有执行进行中，跳过手动触发")
+            return
+        async with self._lock:
+            await self._run(force=True)
+
     async def startup_catchup(self) -> None:
         """启动补跑：当日尚无快照时立即执行一次（不判断窗口），保证上线当天即有数据"""
         if self._lock.locked():
@@ -123,9 +131,13 @@ class ItemStatsSnapshotTaskService:
             except Exception as e:
                 logger.error(f"【{self.task_name}】启动补跑异常: {e}")
 
-    async def _run(self) -> None:
-        """实际执行：遍历活跃账号采集快照 + 清理过期数据"""
-        logger.info(f"【{self.task_name}】开始执行")
+    async def _run(self, force: bool = False) -> None:
+        """实际执行：遍历活跃账号采集快照 + 清理过期数据
+
+        Args:
+            force: True=手动触发，跳过「当日已采集」判断强制重采（UPSERT 覆盖当天数据）
+        """
+        logger.info(f"【{self.task_name}】开始执行（force={force}）")
         stat_date = self._today_str()
 
         try:
@@ -150,7 +162,7 @@ class ItemStatsSnapshotTaskService:
         for account in accounts:
             try:
                 async with async_session_maker() as session:
-                    if await has_today_snapshot(session, account.account_id, stat_date):
+                    if not force and await has_today_snapshot(session, account.account_id, stat_date):
                         logger.info(f"【{self.task_name}】账号 {account.account_id} 当日已采集，跳过")
                         continue
                     result_info = await snapshot_account_stats(session, account, stat_date)

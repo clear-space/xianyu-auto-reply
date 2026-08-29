@@ -204,7 +204,7 @@ async def snapshot_account_stats(
              chat_uv_7d = VALUES(chat_uv_7d),
              pay_ord_cnt_7d = VALUES(pay_ord_cnt_7d), pay_byr_cnt_7d = VALUES(pay_byr_cnt_7d),
              pay_amt_7d = VALUES(pay_amt_7d), ipv_pay_ucvr_7d = VALUES(ipv_pay_ucvr_7d),
-             want_count = VALUES(want_count),
+             want_count = IF(VALUES(want_count) IS NULL, want_count, VALUES(want_count)),
              days_on_shelf = VALUES(days_on_shelf), post_dt = VALUES(post_dt),
              updated_at = NOW()
         """

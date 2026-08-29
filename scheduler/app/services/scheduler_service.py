@@ -624,6 +624,9 @@ class SchedulerService:
         elif task_code == TASK_CODE_DB_BACKUP:
             logger.info("[定时任务调度] 手动触发数据库备份任务")
             await self._db_backup_task.execute()
+        elif task_code == TASK_CODE_ITEM_STATS_SNAPSHOT:
+            logger.info("[定时任务调度] 手动触发商品指标快照任务")
+            await self._item_stats_snapshot_task.run_now()
         elif task_code == TASK_CODE_DELIVERY_TIMEOUT:
             logger.info("[定时任务调度] 手动触发发货超时检测任务")
             await self._delivery_timeout_task.execute()
@@ -671,6 +674,7 @@ class SchedulerService:
             TASK_CODE_POLISH,
             TASK_CODE_DAY_SWITCH,
             TASK_CODE_CLEANUP_BROWSER_DATA,
+            TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA,
             TASK_CODE_FETCH_ORDERS,
             TASK_CODE_FETCH_PENDING_ORDERS,
             TASK_CODE_FETCH_REFUND_ORDERS,
