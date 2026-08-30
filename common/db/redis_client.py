@@ -47,6 +47,14 @@ async def get_redis_client() -> redis.Redis:
             logger.info(f"Redis连接成功: {settings.redis_host}:{settings.redis_port}/{settings.redis_db}")
         except Exception as e:
             logger.error(f"Redis连接失败: {e}")
+            # 连接失败时清空单例，下次调用重新建连（此前失败后残留损坏的客户端，
+            # 后续调用直接复用导致永远失败）
+            try:
+                await _redis_client.close()
+            except Exception:
+                pass
+            _redis_client = None
+            _redis_pool = None
             raise
     
     return _redis_client

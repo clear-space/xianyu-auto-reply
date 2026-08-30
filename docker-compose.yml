@@ -89,6 +89,7 @@ services:
       - SCHEDULER_SERVICE_URL=http://scheduler:8091
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
+      - DATA_ROOT=/app
       - BACKEND_WEB_PUBLIC_URL=${BACKEND_WEB_PUBLIC_URL:-}
       - CARD_DOCK_BASE_URL=${CARD_DOCK_BASE_URL:-http://backend.zhinianboke.com}
       - EXTERNAL_API_KEY=${EXTERNAL_API_KEY:-zhinian_bk}
@@ -108,6 +109,11 @@ services:
       - backend_web_logs:/app/backend-web/logs
       - static-files:/app/static
       - backup-files:/app/backups
+      # 发布临时图片目录与 scheduler 共享：后端崩溃残留由 scheduler 的过期临时文件清理任务回收
+      - publish_images_tmp:/tmp/xianyu_publish_images
+      # 只读挂载另两个服务的日志目录，供系统信息接口统计日志文件大小
+      - websocket_logs:/app/websocket/logs:ro
+      - scheduler_logs:/app/scheduler/logs:ro
     ports:
       - "${BACKEND_WEB_PORT:-8089}:8089"
     networks:
@@ -217,6 +223,11 @@ services:
       - static-files:/app/static
       - backup-files:/app/backups
       - browser_data:/app/browser_data
+      # 只读挂载另两个服务的日志目录，供系统指标采集统计全部日志体积
+      - backend_web_logs:/app/backend-web/logs:ro
+      - websocket_logs:/app/websocket/logs:ro
+      # 发布临时图片目录（backend-web 崩溃残留由本容器清理）
+      - publish_images_tmp:/tmp/xianyu_publish_images
     ports:
       - "${SCHEDULER_PORT:-8091}:8091"
     networks:
@@ -272,4 +283,6 @@ volumes:
   backup-files:
     driver: local
   browser_data:
+    driver: local
+  publish_images_tmp:
     driver: local

@@ -177,6 +177,7 @@ services:
       - SCHEDULER_SERVICE_URL=http://scheduler:8091
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
+      - DATA_ROOT=/app
       - BACKEND_WEB_PUBLIC_URL=${BACKEND_WEB_PUBLIC_URL:-}
       - CARD_DOCK_BASE_URL=${CARD_DOCK_BASE_URL:-http://backend.zhinianboke.com}
       - EXTERNAL_API_KEY=${EXTERNAL_API_KEY:-zhinian_bk}
@@ -196,6 +197,9 @@ services:
       - ./xianyu_auto_reply/logs/backend_web:/app/backend-web/logs
       - ./xianyu_auto_reply/static:/app/static
       - ./xianyu_auto_reply/backups:/app/backups
+      - ./xianyu_auto_reply/tmp/publish_images:/tmp/xianyu_publish_images
+      - ./xianyu_auto_reply/logs/websocket:/app/websocket/logs:ro
+      - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs:ro
     ports:
       - "${BACKEND_WEB_PORT:-8089}:8089"
     networks:
@@ -299,6 +303,11 @@ services:
       - ./xianyu_auto_reply/static:/app/static:ro
       - ./xianyu_auto_reply/backups:/app/backups
       - ./xianyu_auto_reply/browser_data:/app/browser_data
+      # 只读挂载另两个服务的日志目录，供系统指标采集统计全部日志体积
+      - ./xianyu_auto_reply/logs/backend_web:/app/backend-web/logs:ro
+      - ./xianyu_auto_reply/logs/websocket:/app/websocket/logs:ro
+      # 发布临时图片目录（backend-web 崩溃残留由本容器清理）
+      - ./xianyu_auto_reply/tmp/publish_images:/tmp/xianyu_publish_images
     ports:
       - "${SCHEDULER_PORT:-8091}:8091"
     networks:
@@ -441,7 +450,8 @@ create_mount_dirs() {
         "$WORK_DIR/xianyu_auto_reply/logs/scheduler" \
         "$WORK_DIR/xianyu_auto_reply/static" \
         "$WORK_DIR/xianyu_auto_reply/backups" \
-        "$WORK_DIR/xianyu_auto_reply/browser_data"
+        "$WORK_DIR/xianyu_auto_reply/browser_data" \
+        "$WORK_DIR/xianyu_auto_reply/tmp/publish_images"
 }
 
 read_env_value() {

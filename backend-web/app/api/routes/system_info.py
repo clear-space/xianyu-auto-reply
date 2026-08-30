@@ -63,13 +63,39 @@ def _parse_json(text_value: Optional[str]) -> object:
         return None
 
 
+async def _get_display_dirs() -> dict:
+    """获取存储分布数据（目录名 -> {path, size_bytes, file_count}）。
+
+    优先读取 scheduler 采集任务写入的最新指标快照（Docker 部署下 scheduler 容器
+    挂载了全部数据卷，而 backend-web 容器看不到 browser_data 等目录，现场统计会得 0）；
+    尚无快照（部署后首分钟内）时回退为 backend-web 进程现场统计。
+    """
+    try:
+        async with async_session_maker() as session:
+            latest = await session.execute(
+                select(SystemMetric.dirs)
+                .where(SystemMetric.dirs.isnot(None))
+                .order_by(SystemMetric.created_at.desc())
+                .limit(1)
+            )
+            stored = latest.scalar_one_or_none()
+            if stored:
+                parsed = _parse_json(stored)
+                if isinstance(parsed, dict) and parsed:
+                    return parsed
+    except Exception as exc:
+        logger.warning(f"[系统信息] 读取指标目录快照失败，回退现场统计: {exc}")
+    return collect_dir_sizes()
+
+
 @router.get("/summary")
 async def get_system_summary(
     _: User = Depends(deps.get_current_admin_user),
 ) -> dict:
     """系统运行状态实时快照（含活跃告警）。"""
     host = collect_host_metrics()
-    dirs = collect_dir_sizes()
+    # 目录体积优先用 scheduler 快照（Docker 下 backend-web 容器看不到全部目录）
+    dirs = await _get_display_dirs()
 
     # 最近一次 scheduler 采样的 MySQL/Redis 指标（实时库连接数等信息由后端现场采集）
     latest_mysql: object = None
@@ -111,8 +137,19 @@ async def get_system_summary(
         services["websocket"] = await probe_service_health(settings.websocket_service_url)
     if getattr(settings, "scheduler_service_url", ""):
         services["scheduler"] = await probe_service_health(settings.scheduler_service_url)
-    services["mysql"] = {"available": bool(latest_mysql and latest_mysql.get("available"))}
-    services["redis"] = {"available": bool(latest_redis and latest_redis.get("available"))}
+
+    # MySQL/Redis 状态来自 scheduler 采集的最新指标记录：
+    # - 记录不存在（采集任务尚未运行/写入失败）→ available=None，前端显示「未知」而非「离线」
+    # - 记录存在但采集明确失败 → available=False，前端显示「离线」
+    def _service_status(metric_json: object) -> dict:
+        if metric_json is None or not isinstance(metric_json, dict):
+            return {"available": None, "detail": None}
+        return {
+            "available": bool(metric_json.get("available")),
+            "detail": metric_json,
+        }
+    services["mysql"] = _service_status(latest_mysql)
+    services["redis"] = _service_status(latest_redis)
 
     return {
         "success": True,
@@ -224,7 +261,8 @@ async def get_system_storage(
     _: User = Depends(deps.get_current_admin_user),
 ) -> dict:
     """存储分布：关键目录体积 + 数据库备份清单。"""
-    dirs = collect_dir_sizes()
+    # 目录体积优先用 scheduler 快照（Docker 下 backend-web 容器看不到全部目录）
+    dirs = await _get_display_dirs()
 
     backups: list[dict] = []
     try:
@@ -305,21 +343,23 @@ async def get_system_services(
     _: User = Depends(deps.get_current_admin_user),
 ) -> dict:
     """服务与进程详情：探活结果 + 各服务日志文件大小。"""
-    from pathlib import Path
+    from common.utils.data_paths import get_project_root
 
     from app.core.config import get_settings
     settings = get_settings()
 
+    # 基于项目根解析（Docker 容器 cwd=/app 与本地源码 cwd=backend-web 均可正确解析；
+    # Docker 下未挂载到本容器的日志目录 stat 不到，返回 None 而非错误）
+    project_root = get_project_root()
     log_candidates = [
-        ("backend-web", Path("logs") / "backend-web.log"),
-        ("websocket", Path("..") / "websocket" / "logs" / "websocket.log"),
-        ("scheduler", Path("..") / "scheduler" / "logs" / "scheduler.log"),
+        ("backend-web", project_root / "backend-web" / "logs" / "backend-web.log"),
+        ("websocket", project_root / "websocket" / "logs" / "websocket.log"),
+        ("scheduler", project_root / "scheduler" / "logs" / "scheduler.log"),
     ]
 
     service_infos: list[dict] = []
-    for name, rel_path in log_candidates:
+    for name, log_path in log_candidates:
         try:
-            log_path = (Path.cwd() / rel_path).resolve()
             log_size = log_path.stat().st_size if log_path.is_file() else None
         except Exception:
             log_size = None
@@ -456,9 +496,13 @@ async def get_cleanup_report(
 async def refresh_dirs(
     _: User = Depends(deps.get_current_admin_user),
 ) -> dict:
-    """清空目录体积缓存并立即重新统计（清理任务执行后调用，即时反映最新体积）。"""
+    """清空目录体积缓存并返回最新存储分布（清理任务执行后调用，即时反映最新体积）。
+
+    说明：scheduler 的目录统计缓存 60 秒过期，此接口无法跨进程失效该缓存，
+    但 scheduler 每分钟都会重新采样，此处返回的已是最新可用快照。
+    """
     invalidate_dir_size_cache()
-    dirs = collect_dir_sizes()
+    dirs = await _get_display_dirs()
     return {"success": True, "data": {"dirs": dirs}}
 
 

@@ -190,6 +190,11 @@ class ServiceManager:
         # 否则 scheduler 写入的备份文件 backend-web 无法读取下载（本地源码模式各服务 cwd 不同）
         backup_dir = (self.project_root / "backups").as_posix()
 
+        # 静态文件目录：三个服务必须指向同一绝对路径（backend-web/static）。
+        # 此前各服务写相对路径 STATIC_DIR=static，按各自 cwd 解析后 scheduler/websocket
+        # 会指向自己的空 static 目录，导致图片清理任务与目录体积统计指向错误位置
+        static_dir = (self.project_root / "backend-web" / "static").as_posix()
+
         # 安全设计：密码等敏感字段不写入 .env 文件（磁盘不留明文密码），
         # 仅保存在内存中，启动子进程时通过环境变量传递
         # （pydantic-settings 环境变量优先级高于 .env，子服务无需改动即可读取）
@@ -216,7 +221,7 @@ class ServiceManager:
             f"CORS_ORIGINS=*\n"
             f"WEBSOCKET_SERVICE_URL=http://127.0.0.1:8090\n"
             f"SCHEDULER_SERVICE_URL=http://127.0.0.1:8091\n"
-            f"STATIC_DIR=static\n"
+            f"STATIC_DIR={static_dir}\n"
             f"BACKUP_DIR={backup_dir}\n"
             f"FRONTEND_PUBLIC_URL=http://127.0.0.1:9000\n"
             f"BACKEND_WEB_PUBLIC_URL=http://127.0.0.1:8089\n"
@@ -239,7 +244,7 @@ class ServiceManager:
             f"TOKEN_REFRESH_INTERVAL=72000\n"
             f"TOKEN_RETRY_INTERVAL=7200\n"
             f"BACKEND_WEB_SERVICE_URL=http://127.0.0.1:8089\n"
-            f"STATIC_DIR=static\n"
+            f"STATIC_DIR={static_dir}\n"
         )
         
         # scheduler .env
@@ -258,7 +263,7 @@ class ServiceManager:
             f"RATE_INTERVAL=20\n"
             f"WEBSOCKET_SERVICE_URL=http://127.0.0.1:8090\n"
             f"BACKEND_WEB_SERVICE_URL=http://127.0.0.1:8089\n"
-            f"STATIC_DIR=static\n"
+            f"STATIC_DIR={static_dir}\n"
             f"BACKUP_DIR={backup_dir}\n"
         )
         
@@ -307,9 +312,10 @@ class ServiceManager:
             # 确保使用UTF-8编码
             env["PYTHONIOENCODING"] = "utf-8"
             # 注入数据库/Redis 密码（.env 中已不含密码，仅经子进程环境变量传递，不落盘）
+            # 注意：空密码也必须注入空字符串——pydantic-settings 环境变量为空字符串时
+            # 使用空值，而未设置环境变量时会落回默认值（root），导致免密数据库连接失败
             for secret_key, secret_value in self._service_secret_env.items():
-                if secret_value:
-                    env[secret_key] = secret_value
+                env[secret_key] = secret_value
             from launcher.browser_setup import ensure_playwright_browser_path
             browser_dir = ensure_playwright_browser_path()
             if browser_dir:

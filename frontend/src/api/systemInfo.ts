@@ -53,7 +53,8 @@ export interface DirSizeInfo {
 }
 
 export interface ServiceProbe {
-  available: boolean
+  // null 表示尚无采样数据（未知状态，前端显示灰色「未知」）
+  available: boolean | null
   status_code?: number | null
   latency_ms?: number
   error?: string

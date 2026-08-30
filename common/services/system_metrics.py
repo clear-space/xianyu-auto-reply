@@ -225,6 +225,11 @@ def get_default_monitor_dirs() -> Dict[str, Path]:
     - STATIC_DIR 环境变量（Docker 共享卷）
     - BACKUP_DIR 环境变量
     - 项目根下的 logs、websocket/browser_data
+
+    兼容 Docker 部署：
+    - 各服务日志目录（backend-web/websocket/scheduler/logs）仅在目录存在时登记，
+      容器内未挂载的目录自动跳过（统计结果 0 不代表真实为空，而是不可见）
+    - 浏览器数据目录经 DATA_ROOT 解析（Docker 共享卷挂载点）
     """
     global _DEFAULT_DIRS
     if _DEFAULT_DIRS:
@@ -250,11 +255,13 @@ def get_default_monitor_dirs() -> Dict[str, Path]:
 
     dirs["浏览器数据"] = get_browser_data_root()
 
-    for name, sub in (("日志", "logs"),):
-        dirs[name] = get_project_root() / sub
-        service_logs = get_project_root() / "backend-web" / "logs"
+    # 根日志目录（launcher 日志、滑块轨迹历史等）
+    dirs["日志"] = get_project_root() / "logs"
+    # 各服务日志目录（存在才登记，兼容 Docker 容器内未挂载其它服务日志卷的情况）
+    for service in ("backend-web", "websocket", "scheduler"):
+        service_logs = get_project_root() / service / "logs"
         if service_logs.is_dir():
-            dirs["服务日志(backend-web)"] = service_logs
+            dirs[f"服务日志({service})"] = service_logs
 
     _DEFAULT_DIRS = dirs
     return dirs
@@ -397,8 +404,14 @@ async def probe_service_health(url: str) -> dict:
 
     各服务健康路径约定不一致：backend-web 为 /health/ping，
     websocket/scheduler 为 /health —— 依次尝试两个路径，任一返回 200 即视为在线。
+    注意：import 必须放在 try 内——scheduler 镜像依赖表中曾缺少 httpx，
+    放在 try 外会让整轮指标采集因一个探活依赖缺失而全部失败。
     """
-    import httpx
+    try:
+        import httpx
+    except ImportError:
+        return {"available": False, "status_code": None,
+                "error": "httpx 未安装（请在服务依赖中加入 httpx）"}
 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:

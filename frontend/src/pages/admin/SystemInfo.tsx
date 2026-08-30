@@ -117,14 +117,15 @@ function RingGauge({ percent, label, color }: { percent: number | null; label: s
   )
 }
 
-function ServiceLight({ name, available }: { name: string; available: boolean | undefined }) {
-  const color = available === undefined ? 'bg-gray-300' : available ? 'bg-emerald-500' : 'bg-red-500'
-  const label = available === undefined ? '未知' : available ? '在线' : '离线'
+function ServiceLight({ name, available }: { name: string; available: boolean | null | undefined }) {
+  const isUnknown = available === null || available === undefined
+  const color = isUnknown ? 'bg-gray-300' : available ? 'bg-emerald-500' : 'bg-red-500'
+  const label = isUnknown ? '未知' : available ? '在线' : '离线'
   return (
     <div className="flex items-center gap-2">
       <span className={`w-2.5 h-2.5 rounded-full ${color}`} />
       <span className="text-sm text-slate-700 dark:text-slate-300">{name}</span>
-      <span className={`text-xs ${available ? 'text-emerald-600' : available === undefined ? 'text-gray-400' : 'text-red-500'}`}>
+      <span className={`text-xs ${isUnknown ? 'text-gray-400' : available ? 'text-emerald-600' : 'text-red-500'}`}>
         {label}
       </span>
     </div>

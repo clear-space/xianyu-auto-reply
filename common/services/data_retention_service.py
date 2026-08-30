@@ -93,6 +93,8 @@ async def get_setting_int(key: str, default: int, minimum: int = 1, maximum: int
 
     每次执行时现读（不缓存），管理员修改后下次执行即生效。
     值无效或越界时回退默认值。
+    兼容布尔开关（如 data_retention.enabled 存储 "true"/"false" 字符串）：
+    布尔开关请传 minimum=0, maximum=1，函数会把 true/false/yes/no 转为 1/0。
     """
     try:
         async with async_session_maker() as session:
@@ -100,7 +102,10 @@ async def get_setting_int(key: str, default: int, minimum: int = 1, maximum: int
             result = await session.execute(stmt)
             row = result.scalar_one_or_none()
             if row:
-                value = int(str(row).strip())
+                raw = str(row).strip().lower()
+                if minimum == 0 and maximum == 1 and raw in {"true", "false", "yes", "no", "on", "off"}:
+                    return 1 if raw in {"true", "yes", "on"} else 0
+                value = int(raw)
                 if minimum <= value <= maximum:
                     return value
     except Exception as exc:
