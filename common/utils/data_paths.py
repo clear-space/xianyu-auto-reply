@@ -13,9 +13,10 @@ browser_data、滑块轨迹历史等目录此前使用相对 CWD 路径（os.get
   1. 设置了 DATA_ROOT → DATA_ROOT/browser_data
   2. 未设置 → 项目根/websocket/browser_data
      （与 EXE/源码部署的历史位置一致，避免迁移导致既有登录态丢失）
-- 轨迹历史目录：
-  1. 设置了 DATA_ROOT → DATA_ROOT/logs/trajectory_history
-  2. 未设置 → 项目根/logs/trajectory_history
+- 根日志目录（launcher 日志、滑块轨迹历史等）：
+  1. 设置了 DATA_ROOT → DATA_ROOT/logs（Docker 挂载 logs-data 卷持久化）
+  2. 未设置 → 项目根/logs
+- 轨迹历史目录：根日志目录/trajectory_history
 """
 
 from __future__ import annotations
@@ -59,9 +60,18 @@ def get_browser_data_root() -> Path:
     return _PROJECT_ROOT / "websocket" / "browser_data"
 
 
-def get_trajectory_history_dir() -> Path:
-    """获取滑块轨迹历史/策略统计目录。"""
+def get_logs_root() -> Path:
+    """获取根日志目录（launcher 日志、滑块轨迹历史等）。
+
+    写入方（history_manager / strategy_stats 等）与读取方（存储分布「日志」行）
+    必须共用此解析结果，否则 Docker 下会因容器间路径不一致导致统计缺失。
+    """
     data_root = get_data_root()
     if data_root is not None:
-        return data_root / "logs" / "trajectory_history"
-    return _PROJECT_ROOT / "logs" / "trajectory_history"
+        return data_root / "logs"
+    return _PROJECT_ROOT / "logs"
+
+
+def get_trajectory_history_dir() -> Path:
+    """获取滑块轨迹历史/策略统计目录。"""
+    return get_logs_root() / "trajectory_history"

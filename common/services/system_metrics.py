@@ -224,19 +224,20 @@ def get_default_monitor_dirs() -> Dict[str, Path]:
     目录解析规则与备份路径/浏览器数据路径保持一致：
     - STATIC_DIR 环境变量（Docker 共享卷）
     - BACKUP_DIR 环境变量
-    - 项目根下的 logs、websocket/browser_data
+    - 根日志目录经 get_logs_root() 解析（DATA_ROOT 感知，Docker 挂载 logs-data 卷）、
+      各服务日志目录位于项目根 backend-web/websocket/scheduler/logs
 
     兼容 Docker 部署：
     - 各服务日志目录（backend-web/websocket/scheduler/logs）仅在目录存在时登记，
       容器内未挂载的目录自动跳过（统计结果 0 不代表真实为空，而是不可见）
-    - 浏览器数据目录经 DATA_ROOT 解析（Docker 共享卷挂载点）
+    - 浏览器数据目录与根日志目录均经 DATA_ROOT 解析（Docker 共享卷挂载点）
     """
     global _DEFAULT_DIRS
     if _DEFAULT_DIRS:
         return _DEFAULT_DIRS
 
     from common.utils.backup_paths import get_backup_root
-    from common.utils.data_paths import get_browser_data_root, get_project_root
+    from common.utils.data_paths import get_browser_data_root, get_logs_root, get_project_root
 
     dirs: Dict[str, Path] = {}
     static_env = os.environ.get("STATIC_DIR", "")
@@ -256,9 +257,10 @@ def get_default_monitor_dirs() -> Dict[str, Path]:
     dirs["浏览器数据"] = get_browser_data_root()
 
     # 根日志目录（launcher 日志、滑块轨迹历史等）——存在才登记：
-    # Docker 下各服务日志均挂载在独立的服务日志卷，/app/logs 不存在，
-    # 若不判断会显示一行永远为 0 的「日志」
-    root_logs = get_project_root() / "logs"
+    # 与写入方共用 get_logs_root()（DATA_ROOT 感知）；Docker 下挂载 logs-data 卷，
+    # scheduler 采集快照时可见 backend-web 写入的轨迹历史，本地与服务器视图一致。
+    # 目录不存在（源码/EXE 尚未产生根日志）时不登记，避免显示一行永远为 0 的「日志」
+    root_logs = get_logs_root()
     if root_logs.is_dir():
         dirs["日志"] = root_logs
     # 各服务日志目录（存在才登记，兼容 Docker 容器内未挂载其它服务日志卷的情况）

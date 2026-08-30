@@ -247,6 +247,8 @@ services:
       # 挂载另两个服务的日志目录：统计日志大小 + 管理员清空日志接口需要写权限
       - ./xianyu_auto_reply/logs/websocket:/app/websocket/logs
       - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs
+      # 根日志目录（滑块轨迹历史/策略统计）：DATA_ROOT/logs 写入方，独立子目录避免与服务日志重复统计
+      - ./xianyu_auto_reply/logs/root:/app/logs
     ports:
       - "${BACKEND_WEB_PORT:-8089}:8089"
     networks:
@@ -299,6 +301,7 @@ services:
       - ./xianyu_auto_reply/logs/websocket:/app/websocket/logs
       - ./xianyu_auto_reply/static:/app/static
       - ./xianyu_auto_reply/browser_data:/app/browser_data
+      - ./xianyu_auto_reply/logs/root:/app/logs
     ports:
       - "${WEBSOCKET_PORT:-8090}:8090"
     networks:
@@ -355,6 +358,8 @@ services:
       # 只读挂载另两个服务的日志目录，供系统指标采集统计全部日志体积
       - ./xianyu_auto_reply/logs/backend_web:/app/backend-web/logs:ro
       - ./xianyu_auto_reply/logs/websocket:/app/websocket/logs:ro
+      # 根日志目录只读挂载：统计存储分布「日志」行（写入方为 backend-web）
+      - ./xianyu_auto_reply/logs/root:/app/logs:ro
       # 发布临时图片目录（backend-web 崩溃残留由本容器清理）
       - ./xianyu_auto_reply/tmp/publish_images:/tmp/xianyu_publish_images
     ports:
@@ -446,6 +451,7 @@ mkdir -p \
     "$WORK_DIR/xianyu_auto_reply/logs/backend_web" \
     "$WORK_DIR/xianyu_auto_reply/logs/websocket" \
     "$WORK_DIR/xianyu_auto_reply/logs/scheduler" \
+    "$WORK_DIR/xianyu_auto_reply/logs/root" \
     "$WORK_DIR/xianyu_auto_reply/static" \
     "$WORK_DIR/xianyu_auto_reply/backups" \
     "$WORK_DIR/xianyu_auto_reply/browser_data" \

@@ -114,6 +114,8 @@ services:
       # 挂载另两个服务的日志目录：统计日志大小 + 管理员清空日志接口需要写权限
       - websocket_logs:/app/websocket/logs
       - scheduler_logs:/app/scheduler/logs
+      # 根日志目录（滑块轨迹历史/策略统计）：DATA_ROOT/logs 写入方，卷持久化避免重建容器丢失
+      - logs-data:/app/logs
     ports:
       - "${BACKEND_WEB_PORT:-8089}:8089"
     networks:
@@ -168,6 +170,7 @@ services:
       - websocket_logs:/app/websocket/logs
       - static-files:/app/static
       - browser_data:/app/browser_data
+      - logs-data:/app/logs
     ports:
       - "${WEBSOCKET_PORT:-8090}:8090"
     networks:
@@ -226,6 +229,8 @@ services:
       # 只读挂载另两个服务的日志目录，供系统指标采集统计全部日志体积
       - backend_web_logs:/app/backend-web/logs:ro
       - websocket_logs:/app/websocket/logs:ro
+      # 根日志目录只读挂载：统计存储分布「日志」行（写入方为 backend-web）
+      - logs-data:/app/logs:ro
       # 发布临时图片目录（backend-web 崩溃残留由本容器清理）
       - publish_images_tmp:/tmp/xianyu_publish_images
     ports:
@@ -283,6 +288,8 @@ volumes:
   backup-files:
     driver: local
   browser_data:
+    driver: local
+  logs-data:
     driver: local
   publish_images_tmp:
     driver: local
