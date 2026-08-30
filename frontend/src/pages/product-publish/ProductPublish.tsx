@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { CheckCircle, ExternalLink, FolderOpen, Loader2, Send, XCircle } from 'lucide-react'
+import { CheckCircle, ExternalLink, FolderOpen, Loader2, RefreshCw, Send, XCircle } from 'lucide-react'
 import { getAccountDetails } from '@/api/accounts'
 import { getPublishAccountCapability, publishSingle, type MaterialVideo, type ProductMaterial, type PublishAccountCapability, uploadProductImages, uploadProductVideos } from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
@@ -45,6 +45,10 @@ export function ProductPublish() {
   const [loadingAccounts, setLoadingAccounts] = useState(true)
   const [capabilityLoading, setCapabilityLoading] = useState(false)
   const [accountCapability, setAccountCapability] = useState<PublishAccountCapability | null>(null)
+  // 能力检测失败（如鱼小铺后台配置暂时取不到）时保留错误文案，并提供「重新检测」入口：
+  // 检测失败会禁用发布按钮，若只弹一次 Toast，用户重选同一账号不会触发重新请求而被卡住
+  const [capabilityError, setCapabilityError] = useState('')
+  const [capabilityRetryToken, setCapabilityRetryToken] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
@@ -73,6 +77,7 @@ export function ProductPublish() {
     const requestId = capabilityRequestRef.current + 1
     capabilityRequestRef.current = requestId
     setAccountCapability(null)
+    setCapabilityError('')
     if (!accountId) {
       setCapabilityLoading(false)
       return
@@ -82,17 +87,21 @@ export function ProductPublish() {
     getPublishAccountCapability(accountId).then((response) => {
       if (capabilityRequestRef.current !== requestId) return
       if (!response.success || !response.data) {
-        addToast({ type: 'error', message: response.message || '账号发布能力检测失败' })
+        const message = response.message || '账号发布能力检测失败'
+        setCapabilityError(message)
+        addToast({ type: 'error', message })
         return
       }
       setAccountCapability(response.data)
     }).catch((error) => {
       if (capabilityRequestRef.current !== requestId) return
-      addToast({ type: 'error', message: getApiErrorMessage(error, '账号发布能力检测失败') })
+      const message = getApiErrorMessage(error, '账号发布能力检测失败')
+      setCapabilityError(message)
+      addToast({ type: 'error', message })
     }).finally(() => {
       if (capabilityRequestRef.current === requestId) setCapabilityLoading(false)
     })
-  }, [addToast, form.account_id])
+  }, [addToast, form.account_id, capabilityRetryToken])
 
   useEffect(() => {
     if (accountCapability?.is_fish_shop !== false) return
@@ -219,7 +228,7 @@ export function ProductPublish() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="xl:col-span-2"><ProductPublishForm form={form} setForm={setForm} accounts={accounts} onUploadSpecImage={handleSpecUpload} categoryLocked={categoryLocked} onCategoryEdit={() => setCategoryLocked(false)} accountCapability={accountCapability} capabilityLoading={capabilityLoading} /></motion.div>
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="space-y-4">
           <div className="vben-card"><div className="vben-card-header"><h2 className="vben-card-title">{supportsVideo ? '宝贝图片与视频' : '宝贝图片'} <span className="text-red-500 ml-1">*</span></h2><span className="text-xs text-slate-400">{imagePreviews.length}/9 图{supportsVideo ? ` · ${form.videos.length}/3 视频` : ''}</span></div><div className="vben-card-body"><ImageUploadGrid images={imagePreviews} onChange={(next) => { setImagePaths(next); setImagePreviews(next) }} onUpload={handleUploadFiles} uploading={uploading} />{supportsVideo && <ProductVideoUploader videos={form.videos} onUploadVideo={handleVideoUpload} onChange={(videos) => setForm((current) => ({ ...current, videos }))} />}</div></div>
-          <div className="vben-card"><div className="vben-card-body space-y-3"><button className="btn-ios-primary w-full" disabled={submitting || uploading || capabilityLoading || !accountCapability} onClick={handlePublish}>{submitting ? <><Loader2 className="w-4 h-4 animate-spin" />正在调用闲鱼接口...</> : capabilityLoading ? <><Loader2 className="w-4 h-4 animate-spin" />检测账号能力...</> : <><Send className="w-4 h-4" />立即发布</>}</button>{submitting && <p className="text-xs text-slate-400 text-center">接口发布中，请勿重复提交</p>}</div></div>
+          <div className="vben-card"><div className="vben-card-body space-y-3">{capabilityError && !capabilityLoading && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"><p>{capabilityError}</p><button type="button" className="btn-ios-secondary mt-2 w-full" onClick={() => setCapabilityRetryToken((current) => current + 1)}><RefreshCw className="w-4 h-4" />重新检测账号能力</button></div>}{!capabilityError && !capabilityLoading && !accountCapability && <p className="text-sm text-amber-600 dark:text-amber-400">{accounts.length === 0 ? '当前没有可用的闲鱼账号，请先到「账号管理」添加账号后再发布' : '请先在左侧选择发布账号，选定后会自动检测该账号的发布能力'}</p>}<button className="btn-ios-primary w-full" disabled={submitting || uploading || capabilityLoading || !accountCapability} onClick={handlePublish}>{submitting ? <><Loader2 className="w-4 h-4 animate-spin" />正在调用闲鱼接口...</> : capabilityLoading ? <><Loader2 className="w-4 h-4 animate-spin" />检测账号能力...</> : <><Send className="w-4 h-4" />立即发布</>}</button>{submitting && <p className="text-xs text-slate-400 text-center">接口发布中，请勿重复提交</p>}</div></div>
           {result && <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className={`vben-card border-l-4 ${result.success ? 'border-l-green-500' : 'border-l-red-500'}`}><div className="vben-card-body"><div className="flex items-start gap-3">{result.success ? <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" /> : <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />}<div className="flex-1"><p className={`font-medium ${result.success ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>{result.message}</p>{result.item_url && <a href={result.item_url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-500 hover:underline flex items-center gap-1 mt-1"><ExternalLink className="w-3 h-3" />查看商品</a>}{(result.sync_status === 'success' || result.sync_status === 'failed') && <p className="text-xs mt-2 text-slate-500 dark:text-slate-300">{result.sync_status === 'success' ? `已自动获取 ${result.sync_total_count || 0} 个商品，入库 ${result.sync_saved_count || 0} 个商品` : result.sync_message}</p>}</div></div></div></motion.div>}
         </motion.div>
       </div>
