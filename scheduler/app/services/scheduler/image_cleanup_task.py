@@ -44,6 +44,9 @@ ORPHAN_RETENTION_HOURS = 24
 # 允许清理的图片扩展名（小写，含点）；其它文件（视频、.gitkeep 等）一律跳过
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
+# 视频扩展名（仅 external_publish 临时媒体目录使用：该目录专存公开接口上传的图片/规格图/视频）
+VIDEO_EXTS = {".mp4", ".mov", ".webm", ".avi", ".mkv", ".flv", ".m4v"}
+
 
 def _basename_set_from(values) -> set[str]:
     """从一组图片路径/URL 中提取去目录化后的文件名集合"""
@@ -139,11 +142,15 @@ class ImageCleanupTaskService:
         - xy_default_replies.reply_image（账号/商品默认回复图片）
         - xy_feedbacks.images（意见反馈图片，JSON 数组）
         - xy_user_settings 中 key=payment_qrcode 的收款码图片
+        - xy_advertisements.image_url（广告图片，当前为外链但也可能是本地上传）
+        - xy_auto_reply_message_logs.reply_image_url（消息日志中引用的回复图片）
 
         Raises:
-            Exception: 任一查询失败时向上抛出，由调用方跳过 images/ 目录清理
+            Exception: 任一查询失败时向上抛出，由调用方跳过该目录清理
             （共用目录宁可少删，引用清单不完整时绝不删）
         """
+        from common.models.advertisement import Advertisement
+        from common.models.auto_reply_message_log import XYAutoReplyMessageLog
         from common.models.confirm_receipt_message import ConfirmReceiptMessage
         from common.models.default_reply import DefaultReply
         from common.models.feedback import Feedback
@@ -185,6 +192,16 @@ class ImageCleanupTaskService:
             )
             for (value,) in result.fetchall():
                 referenced |= _basename_set_from([value])
+
+            # 广告图片（当前为外链 URL，但防御性纳入，避免未来改本地上传后被误删）
+            result = await session.execute(select(Advertisement.image_url))
+            for (image_url,) in result.fetchall():
+                referenced |= _basename_set_from([image_url])
+
+            # 消息日志中引用的回复图片（防御性纳入，防跨目录引用被误删）
+            result = await session.execute(select(XYAutoReplyMessageLog.reply_image_url))
+            for (reply_image_url,) in result.fetchall():
+                referenced |= _basename_set_from([reply_image_url])
         return referenced
 
     async def _keyword_referenced_filenames(self) -> set[str]:
@@ -223,19 +240,23 @@ class ImageCleanupTaskService:
         label: str,
         retention_hours: int,
         recursive: bool = False,
+        allowed_exts: set[str] | None = None,
     ) -> dict:
         """
         按 TTL 清理目录（不区分引用关系，仅按文件 mtime 删除超期文件）。
 
         仅用于「无需引用判定的临时/诊断目录」：
         - uploads/face/：人脸验证截图（每次新登录自动替换旧截图，TTL 兜底）
-        - uploads/external_publish/：公开接口临时媒体（按 media_id 使用，发布后即弃）
+        - uploads/external_publish/：公开接口临时媒体（按 media_id 使用，发布后即弃，
+          含图片与视频）
 
         Args:
             target_dir: 待清理目录
             label: 日志标识
             retention_hours: 保留期（小时）
             recursive: 是否递归清理子目录内文件（子目录本身保留）
+            allowed_exts: 允许清理的扩展名集合（小写，含点）；默认仅图片扩展名。
+                目录内其它文件一律跳过（防误删 .gitkeep 等标记文件）
 
         Returns:
             统计信息字典
@@ -246,6 +267,7 @@ class ImageCleanupTaskService:
             logger.info(f"【{self.task_name}】{label}目录不存在，跳过: {target_dir}")
             return stats
 
+        exts = allowed_exts if allowed_exts is not None else IMAGE_EXTS
         retention_seconds = retention_hours * 3600
         now = time.time()
 
@@ -257,8 +279,8 @@ class ImageCleanupTaskService:
                 path = Path(entry.path) if not isinstance(entry, Path) else entry
                 if path.is_dir():
                     continue
-                # 仅处理图片文件，跳过视频、.gitkeep 等
-                if path.suffix.lower() not in IMAGE_EXTS:
+                # 仅处理允许的扩展名，其它文件（.gitkeep 等）一律跳过
+                if path.suffix.lower() not in exts:
                     continue
                 stat = path.stat()
                 if now - stat.st_mtime < retention_seconds:
@@ -490,16 +512,32 @@ class ImageCleanupTaskService:
         for k in total:
             total[k] += face_stats[k]
 
-        # ===== 7. 公开接口临时媒体 TTL 清理（30 天，递归）=====
+        # ===== 7. 公开接口临时媒体 TTL 清理（30 天，递归，含视频）=====
         # 公开接口上传的图片/规格图/视频为临时媒体（media_id 一次性使用），按 mtime 超期删除
         ext_stats = self._clean_dir_ttl(
             static_root / "uploads" / "external_publish",
             "公开接口媒体",
             retention_hours=24 * 30,
             recursive=True,
+            allowed_exts=IMAGE_EXTS | VIDEO_EXTS,
         )
         for k in total:
             total[k] += ext_stats[k]
+
+        # ===== 8. 清理确认收货消息图片 uploads/confirm_receipt/（确认收货模块专属）=====
+        # 引用集合复用通用引用清单（超集引用对孤儿扫描是安全方向：只会更保守）
+        try:
+            confirm_referenced = await self._misc_referenced_filenames()
+        except Exception as e:
+            logger.error(f"【{self.task_name}】读取确认收货图片引用失败，跳过 confirm_receipt/ 目录清理: {e}")
+        else:
+            confirm_stats = self._clean_dir(
+                static_root / "uploads" / "confirm_receipt",
+                confirm_referenced,
+                "确认收货图片",
+            )
+            for k in total:
+                total[k] += confirm_stats[k]
 
         elapsed = time.time() - start_time
         freed_mb = total["freed"] / (1024 * 1024)
