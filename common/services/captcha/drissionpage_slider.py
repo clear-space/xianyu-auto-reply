@@ -25,6 +25,7 @@ from common.services.captcha.concurrency import concurrency_manager, account_bro
 from common.services.captcha.drissionpage_tracks import generate_tracks
 from common.services.captcha.drissionpage_motion import calculate_slide_distance, execute_tracks
 from common.utils.browser_utils import ensure_playwright_browser_path, get_chromium_executable_path
+from common.utils.data_paths import get_browser_data_root
 from common.utils.xianyu_utils import trans_cookies
 
 try:
@@ -80,8 +81,9 @@ class DrissionPageSliderService:
         self.pure_user_id = concurrency_manager._extract_pure_user_id(user_id)
 
         # 方案 A：复用 Playwright 引擎的同一本地化目录
-        self.user_data_dir = user_data_dir or os.path.join(
-            os.getcwd(), "browser_data", f"user_{self.pure_user_id}"
+        # （统一经 data_paths 解析为基于项目根的绝对路径，与滑块验证/清理任务共用）
+        self.user_data_dir = user_data_dir or str(
+            get_browser_data_root() / f"user_{self.pure_user_id}"
         )
         os.makedirs(self.user_data_dir, exist_ok=True)
 

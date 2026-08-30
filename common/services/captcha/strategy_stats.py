@@ -13,6 +13,8 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
+from common.utils.data_paths import get_trajectory_history_dir
+
 
 class RetryStrategyStats:
     """重试策略成功率统计管理器（单例模式）"""
@@ -39,7 +41,8 @@ class RetryStrategyStats:
             'attempt_3_fast': {'total': 0, 'success': 0, 'fail': 0},
             'attempt_3_slow': {'total': 0, 'success': 0, 'fail': 0},
         }
-        self.stats_file = 'logs/trajectory_history/strategy_stats.json'
+        # 统一经 data_paths 解析为基于项目根的绝对路径（此前为相对 CWD 路径，落点不一致）
+        self.stats_file = str(get_trajectory_history_dir() / "strategy_stats.json")
         self._load_stats()
         self._initialized = True
         logger.info("策略统计管理器初始化完成")

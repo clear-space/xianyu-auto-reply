@@ -318,6 +318,111 @@ class DatabaseInitializer:
             "true",
             "登录页是否展示默认账号密码提示",
         ),
+        (
+            "data_retention.enabled",
+            "true",
+            "统一数据保留清理总开关（false 时所有日志类数据停止自动清理）",
+        ),
+        (
+            "data_retention.cleanup_batch_size",
+            "1000",
+            "数据保留清理单批删除行数（分批删除避免长事务锁表）",
+        ),
+        (
+            "data_retention.max_batches_per_table",
+            "100",
+            "数据保留清理单表单轮最大批次数（批大小×上限=单轮最大删除行数）",
+        ),
+        (
+            "data_retention.token_renewal_log_days",
+            "30",
+            "Token续期日志保留天数（xy_scheduled_token_renewal_log）",
+        ),
+        (
+            "data_retention.cookies_refresh_log_days",
+            "30",
+            "COOKIES刷新日志保留天数（xy_scheduled_cookies_refresh_log）",
+        ),
+        (
+            "data_retention.auto_reply_message_log_days",
+            "30",
+            "自动回复/发货消息日志保留天数（xy_auto_reply_message_logs）",
+        ),
+        (
+            "data_retention.default_reply_record_days",
+            "30",
+            "默认回复发送记录保留天数（xy_default_reply_records）",
+        ),
+        (
+            "data_retention.account_login_log_days",
+            "30",
+            "账号登录日志保留天数（xy_account_login_logs）",
+        ),
+        (
+            "data_retention.publish_log_days",
+            "30",
+            "发布日志保留天数（xy_publish_logs）",
+        ),
+        (
+            "data_retention.risk_control_log_days",
+            "30",
+            "风控日志保留天数（xy_risk_control_logs）",
+        ),
+        (
+            "data_retention.token_cache_soft_expired_days",
+            "7",
+            "Token缓存软过期后物理删除缓冲天数（xy_token_cache）",
+        ),
+        (
+            "data_retention.ai_chat_message_days",
+            "30",
+            "AI对话消息保留天数（xy_ai_chat_messages）",
+        ),
+        (
+            "data_retention.goofish_crawl_item_days",
+            "30",
+            "采集商品保留天数（xy_goofish_crawl_items）",
+        ),
+        (
+            "data_retention.scheduled_task_log_days",
+            "30",
+            "各定时任务执行日志保留天数（补发货/补评价/擦亮/登录续期/接口续期/小红花/关闭通知/上新监控等）",
+        ),
+        (
+            "data_retention.cleanup_log_days",
+            "30",
+            "数据保留清理审计日志自身保留天数（xy_data_cleanup_log）",
+        ),
+        (
+            "data_retention.system_metric_days",
+            "30",
+            "系统运行指标明细保留天数（xy_system_metrics，分钟级采样）",
+        ),
+        (
+            "data_retention.system_metric_hourly_days",
+            "30",
+            "系统运行指标小时聚合保留天数（xy_system_metrics_hourly）",
+        ),
+        (
+            "data_retention.system_alert_days",
+            "30",
+            "系统告警事件保留天数（xy_system_alerts）",
+        ),
+        (
+            "system_info.alert_cpu_percent",
+            "90",
+            "系统信息看板CPU告警阈值(%)，连续3次采样超过阈值触发告警",
+        ),
+        (
+            "system_info.alert_mem_percent",
+            "90",
+            "系统信息看板内存告警阈值(%)，连续3次采样超过阈值触发告警",
+        ),
+        (
+            "system_info.alert_disk_percent",
+            "85",
+            "系统信息看板磁盘告警阈值(%)，连续3次采样超过阈值触发告警",
+        ),
     )
 
     DEFAULT_SCHEDULED_TASKS = (
@@ -515,7 +620,28 @@ class DatabaseInitializer:
             "图片清理",
             1200,
             True,
-            "定时扫描卡券与素材库专属图片目录，删除已删除对象遗留的孤儿图片（仅清理各自目录，不影响其它功能图片）",
+            "定时清理上传目录中的孤儿/超期图片：卡券、素材库、通用图片、图片关键词、默认回复、人脸截图、公开接口媒体（引用清单缺失或查询失败时跳过对应目录，绝不误删）",
+        ),
+        (
+            "data_retention_cleanup",
+            "数据保留清理任务",
+            3600,
+            True,
+            "统一清理各日志类表超过保留天数的历史数据（保留天数在系统设置-数据保留策略中配置，默认30天），并写清理审计日志",
+        ),
+        (
+            "stale_temp_cleanup",
+            "过期临时文件清理",
+            3600,
+            True,
+            "清理进程异常退出遗留的临时文件：滑块会话临时目录(>24小时)、发布临时图片(>24小时)、恢复上传残留(>7天)",
+        ),
+        (
+            "system_metrics_collect",
+            "系统运行指标采集",
+            60,
+            True,
+            "每分钟采集系统运行指标（CPU/内存/磁盘/网络/目录体积/MySQL/Redis/服务探活）写入指标表并做小时聚合与阈值告警，供系统信息看板展示",
         ),
     )
     
@@ -1510,6 +1636,93 @@ class DatabaseInitializer:
                 INDEX `idx_status` (`status`),
                 INDEX `idx_created_at` (`created_at`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据库备份日志表';
+        """,
+
+        # 38.4 数据保留清理审计日志表（记录统一数据保留引擎每次执行对各表的清理结果）
+        "xy_data_cleanup_log": """
+            CREATE TABLE IF NOT EXISTS `xy_data_cleanup_log` (
+                `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+                `table_name` VARCHAR(100) NOT NULL COMMENT '被清理的表名',
+                `deleted_rows` BIGINT NOT NULL DEFAULT 0 COMMENT '本次删除行数',
+                `remaining_rows` BIGINT DEFAULT NULL COMMENT '清理后剩余行数(取样)',
+                `duration_ms` INT DEFAULT NULL COMMENT '该表清理耗时(毫秒)',
+                `status` VARCHAR(20) NOT NULL DEFAULT 'success' COMMENT '状态：success/failed/skipped',
+                `error_message` VARCHAR(1000) DEFAULT NULL COMMENT '错误信息',
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                PRIMARY KEY (`id`),
+                INDEX `idx_table_name` (`table_name`),
+                INDEX `idx_created_at` (`created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据保留清理审计日志表';
+        """,
+
+        # 38.5 系统运行指标明细表（scheduler 的 system_metrics_collect 任务每分钟采样）
+        "xy_system_metrics": """
+            CREATE TABLE IF NOT EXISTS `xy_system_metrics` (
+                `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+                `source` VARCHAR(120) NOT NULL DEFAULT '' COMMENT '采集来源',
+                `cpu_percent` FLOAT DEFAULT NULL COMMENT 'CPU使用率(%)',
+                `cpu_per_core` TEXT COMMENT '每核CPU使用率(JSON数组)',
+                `mem_total` FLOAT DEFAULT NULL COMMENT '内存总量(字节)',
+                `mem_used` FLOAT DEFAULT NULL COMMENT '内存已用(字节)',
+                `mem_available` FLOAT DEFAULT NULL COMMENT '内存可用(字节)',
+                `mem_percent` FLOAT DEFAULT NULL COMMENT '内存使用率(%)',
+                `process_rss` FLOAT DEFAULT NULL COMMENT '采集进程RSS(字节)',
+                `load_avg` TEXT COMMENT '系统负载(JSON)',
+                `process_count` INT DEFAULT NULL COMMENT '系统进程数',
+                `disk` TEXT COMMENT '磁盘使用(JSON)',
+                `net` TEXT COMMENT '网络IO(JSON)',
+                `dirs` TEXT COMMENT '关键目录体积(JSON)',
+                `mysql` TEXT COMMENT 'MySQL指标(JSON)',
+                `redis` TEXT COMMENT 'Redis指标(JSON)',
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                PRIMARY KEY (`id`),
+                INDEX `idx_sm_source_created` (`source`, `created_at`),
+                INDEX `idx_created_at` (`created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统运行指标明细表';
+        """,
+
+        # 38.6 系统运行指标小时聚合表
+        "xy_system_metrics_hourly": """
+            CREATE TABLE IF NOT EXISTS `xy_system_metrics_hourly` (
+                `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+                `source` VARCHAR(120) NOT NULL DEFAULT '' COMMENT '采集来源',
+                `hour_start` DATETIME NOT NULL COMMENT '聚合窗口起始时间',
+                `sample_count` INT NOT NULL DEFAULT 0 COMMENT '样本数',
+                `cpu_avg` FLOAT DEFAULT NULL COMMENT 'CPU平均(%)',
+                `cpu_max` FLOAT DEFAULT NULL COMMENT 'CPU峰值(%)',
+                `mem_avg` FLOAT DEFAULT NULL COMMENT '内存平均(%)',
+                `mem_max` FLOAT DEFAULT NULL COMMENT '内存峰值(%)',
+                `disk` TEXT COMMENT '磁盘聚合(JSON)',
+                `net` TEXT COMMENT '网络聚合(JSON)',
+                `mysql` TEXT COMMENT 'MySQL聚合(JSON)',
+                `redis` TEXT COMMENT 'Redis聚合(JSON)',
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                PRIMARY KEY (`id`),
+                INDEX `idx_smh_source_hour` (`source`, `hour_start`),
+                INDEX `idx_created_at` (`created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统运行指标小时聚合表';
+        """,
+
+        # 38.7 系统告警事件表
+        "xy_system_alerts": """
+            CREATE TABLE IF NOT EXISTS `xy_system_alerts` (
+                `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+                `source` VARCHAR(120) NOT NULL DEFAULT '' COMMENT '告警来源',
+                `alert_type` VARCHAR(40) NOT NULL COMMENT '告警类型',
+                `level` VARCHAR(20) NOT NULL DEFAULT 'warning' COMMENT '级别：warning/critical',
+                `title` VARCHAR(255) NOT NULL COMMENT '告警标题',
+                `detail` TEXT COMMENT '告警详情(JSON)',
+                `status` VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '状态：active/resolved/acked',
+                `resolved_at` DATETIME DEFAULT NULL COMMENT '恢复时间',
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                PRIMARY KEY (`id`),
+                INDEX `idx_sa_status_created` (`status`, `created_at`),
+                INDEX `idx_created_at` (`created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统告警事件表';
         """,
 
         "xy_auto_reply_message_logs": """

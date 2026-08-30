@@ -24,6 +24,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.http_client import get_http_client
 from common.db.session import async_session_maker
+from common.services.data_retention_service import (
+    CONFIG_SCHEDULED_TASK_LOG_DAYS,
+    cleanup_created_at_table,
+)
 from common.models.scheduled_api_cookie_renew_log import ScheduledApiCookieRenewLog
 from common.models.xy_account import XYAccount
 from common.services.cookie_renew_api_service import cookie_renew_api_service
@@ -53,9 +57,6 @@ class ApiCookieRenewResult:
 
 class ApiCookieRenewTaskService:
     """接口续期Cookies定时任务服务。"""
-
-    # 接口续期日志保留天数，超过该天数的日志在每次任务执行时主动清理
-    LOG_RETENTION_DAYS = 10
 
     def __init__(self):
         self.task_name = "接口续期Cookies"
@@ -146,25 +147,18 @@ class ApiCookieRenewTaskService:
 
     async def _cleanup_expired_logs(self, session: AsyncSession) -> None:
         """
-        主动清理过期的接口续期日志
+        主动清理过期的接口续期日志（已迁移至统一数据保留引擎）。
 
-        删除 created_at 早于 (当前北京时间 - LOG_RETENTION_DAYS 天) 的日志记录，
-        避免日志表无限增长。使用参数化的 ORM delete 语句，避免 SQL 注入。
+        保留天数来自 xy_system_settings 的 data_retention.scheduled_task_log_days
+        （默认30天），分批删除逻辑复用 common/services/data_retention_service.py。
         """
         try:
-            cutoff_time = get_beijing_now_naive() - timedelta(days=self.LOG_RETENTION_DAYS)
-            stmt = sql_delete(ScheduledApiCookieRenewLog).where(
-                ScheduledApiCookieRenewLog.created_at < cutoff_time
+            await cleanup_created_at_table(
+                session,
+                "xy_scheduled_api_cookie_renew_log",
+                CONFIG_SCHEDULED_TASK_LOG_DAYS,
+                log_prefix=f"【{self.task_name}】",
             )
-            result = await session.execute(stmt)
-            await session.commit()
-
-            deleted_count = result.rowcount or 0
-            if deleted_count > 0:
-                logger.info(
-                    f"【{self.task_name}】已清理 {deleted_count} 条 {self.LOG_RETENTION_DAYS} 天前的接口续期日志"
-                    f"（清理时间界限: {cutoff_time}）"
-                )
         except Exception as e:
             logger.error(f"【{self.task_name}】清理过期日志失败: {e}")
             await session.rollback()

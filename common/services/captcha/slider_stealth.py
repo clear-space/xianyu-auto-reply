@@ -22,6 +22,7 @@ from loguru import logger
 
 from common.services.captcha.concurrency import concurrency_manager, account_browser_lock_manager
 from common.services.captcha.strategy_stats import strategy_stats
+from common.utils.data_paths import get_browser_data_root
 from common.services.captcha.browser_features import get_random_browser_features, get_stealth_script
 from common.services.captcha.trajectory import TrajectoryGenerator
 from common.services.captcha.slider_elements import SliderElementFinder
@@ -163,8 +164,11 @@ class PlaywrightSliderService:
         self._cdp_touch_enabled = False
         self._slider_profile_tempdir: Optional[tempfile.TemporaryDirectory] = None
 
-        # 持久化用户数据目录（参照旧框架）
-        self.user_data_dir = os.path.join(os.getcwd(), 'browser_data', f'user_{self.pure_user_id}')
+        # 持久化用户数据目录（统一经 data_paths 解析为基于项目根的绝对路径，
+        # 与 scheduler 的浏览器数据清理任务指向同一目录）
+        self.user_data_dir = str(
+            get_browser_data_root() / f"user_{self.pure_user_id}"
+        )
         os.makedirs(self.user_data_dir, exist_ok=True)
         logger.debug(f"【{self.pure_user_id}】使用用户数据目录: {self.user_data_dir}")
 
@@ -314,9 +318,7 @@ class PlaywrightSliderService:
             browser_features = get_random_browser_features()
 
             if add_stealth_script and self._slider_profile_tempdir is None:
-                slider_sessions_dir = os.path.join(
-                    os.getcwd(), 'browser_data', 'slider_sessions'
-                )
+                slider_sessions_dir = str(get_browser_data_root() / "slider_sessions")
                 os.makedirs(slider_sessions_dir, exist_ok=True)
                 self._slider_profile_tempdir = tempfile.TemporaryDirectory(
                     prefix=f"{self.pure_user_id}_",

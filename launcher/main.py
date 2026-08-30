@@ -25,11 +25,17 @@ def _resolve_project_root() -> Path:
 
 
 def _write_fatal_log(stage: str) -> None:
-    """记录启动期未捕获异常"""
+    """记录启动期未捕获异常（超过5MB轮转一份，最多保留2份，防止无限增长）"""
     try:
         log_dir = _resolve_project_root() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        with (log_dir / "launcher_error.log").open("a", encoding="utf-8") as f:
+        error_log = log_dir / "launcher_error.log"
+        max_size = 5 * 1024 * 1024
+        if error_log.exists() and error_log.stat().st_size > max_size:
+            backup_log = log_dir / "launcher_error.log.1"
+            backup_log.unlink(missing_ok=True)
+            error_log.replace(backup_log)
+        with error_log.open("a", encoding="utf-8") as f:
             f.write("=" * 60 + "\n")
             f.write(
                 f"[{datetime.datetime.now().isoformat(timespec='seconds')}] "

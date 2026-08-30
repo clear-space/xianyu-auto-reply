@@ -437,15 +437,18 @@ class CookieTokenManager:
             expire_at, ttl_hours = random_token_cache_expiry()
             
             async with async_session_maker() as session:
+                # 使用 VALUES 别名语法（AS new），避免 MySQL 8.0.20+ 的
+                # 'VALUES function' 弃用警告
                 await session.execute(
                     text("""
                         INSERT INTO xy_token_cache
                             (user_id, token, device_id, expire_at, renew_expire_at, created_at, updated_at)
                         VALUES (:user_id, :token, :device_id, :expire_at, NULL, NOW(), NOW())
-                        ON DUPLICATE KEY UPDATE 
-                            token = VALUES(token),
-                            device_id = VALUES(device_id),
-                            expire_at = VALUES(expire_at),
+                        AS new
+                        ON DUPLICATE KEY UPDATE
+                            token = new.token,
+                            device_id = new.device_id,
+                            expire_at = new.expire_at,
                             renew_expire_at = NULL,
                             updated_at = NOW()
                     """),

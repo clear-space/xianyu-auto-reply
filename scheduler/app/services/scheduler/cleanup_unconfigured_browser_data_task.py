@@ -16,6 +16,7 @@ from sqlalchemy import or_, select
 
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
+from common.utils.data_paths import get_browser_data_root
 
 
 class CleanupUnconfiguredBrowserDataTaskService:
@@ -23,11 +24,8 @@ class CleanupUnconfiguredBrowserDataTaskService:
 
     def __init__(self):
         self.task_name = "清理未配置账号密码的浏览器数据"
-        # browser_data目录位于websocket项目中
-        # scheduler/app/services/scheduler/cleanup_unconfigured_browser_data_task.py -> 项目根目录
-        current_file = Path(__file__).resolve()
-        project_root = current_file.parent.parent.parent.parent.parent
-        self.browser_data_dir = project_root / "websocket" / "browser_data"
+        # 统一经 data_paths 解析 browser_data 根目录（与滑块验证等写入方共用同一目录）
+        self.browser_data_dir = get_browser_data_root()
 
     async def execute(self):
         """执行清理任务"""

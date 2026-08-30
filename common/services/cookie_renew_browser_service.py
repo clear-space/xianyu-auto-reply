@@ -36,6 +36,7 @@ from common.services.captcha.concurrency import (
 )
 from common.utils.xianyu_utils import trans_cookies
 from common.utils.browser_utils import ensure_playwright_browser_path, get_chromium_executable_path
+from common.utils.data_paths import get_browser_data_root
 
 try:
     from playwright.sync_api import sync_playwright
@@ -362,7 +363,7 @@ class CookieRenewBrowserService:
 
         # 复用滑块验证的纯账号ID、持久化目录与账号级互斥锁键
         pure_user_id = concurrency_manager._extract_pure_user_id(account_id) if account_id else "unknown"
-        user_data_dir = os.path.join(os.getcwd(), "browser_data", f"user_{pure_user_id}")
+        user_data_dir = str(get_browser_data_root() / f"user_{pure_user_id}")
 
         slot_acquired = False
         account_lock_acquired = False

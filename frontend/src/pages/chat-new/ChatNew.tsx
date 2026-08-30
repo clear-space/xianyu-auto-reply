@@ -5,7 +5,7 @@
  * 支持多账号切换，基于WebSocket API获取数据
  */
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle, Ban, ImagePlus } from 'lucide-react'
+import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle, Ban, ImagePlus, BrainCircuit } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   getChatAccounts,
@@ -25,6 +25,7 @@ import {
   recallMessage,
   getOfficialBlacklistStatus,
   changeOfficialBlacklist,
+  clearAiConversation,
   type ChatAccount,
   type Conversation,
   type ChatMessage,
@@ -774,6 +775,28 @@ export function ChatNew() {
     }
   }
 
+  // 清空AI对话记录（xy_ai_chat_messages）：删除当前会话的AI上下文，AI将重新开始对话
+  const [clearingAi, setClearingAi] = useState(false)
+  const handleClearAiConversation = async () => {
+    if (!activeAccountId || !activeCid || clearingAi) return
+    const otherName = conversations.find((c) => c.cid === activeCid)?.otherUserName || '当前买家'
+    if (!(await requestConfirm({
+      title: '清空AI对话记录',
+      message: `确认清空与 ${otherName} 的AI对话记录吗？清空后AI将不再记得之前的对话内容，聊天消息本身不受影响。`,
+      confirmText: '清空',
+      type: 'warning',
+    }))) return
+    setClearingAi(true)
+    try {
+      const res = await clearAiConversation(activeAccountId, activeCid)
+      addToast({ message: res.message || 'AI对话记录已清空', type: 'success' })
+    } catch (e: any) {
+      addToast({ message: e.message || '清空AI对话记录失败', type: 'error' })
+    } finally {
+      setClearingAi(false)
+    }
+  }
+
   const handleRecallMessage = async (msg: ChatMessage) => {
     if (!activeAccountId || !msg.messageId || recallingMessageId) return
     if (!canRecallMessage(msg)) {
@@ -1312,10 +1335,16 @@ export function ChatNew() {
           </span>
           </div>
           {activeCid && (
-            <button onClick={handleBlacklistCustomer} disabled={blacklisting} className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-red-200 text-red-500 hover:bg-red-50 disabled:opacity-40" title={isOfficiallyBlocked ? '解除闲鱼官方黑名单' : '加入闲鱼官方黑名单'}>
-              {blacklisting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
-              {isOfficiallyBlocked ? '解除黑名单' : '加入黑名单'}
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button onClick={handleClearAiConversation} disabled={clearingAi} className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40" title="清空AI对话记录，AI将重新开始对话">
+                {clearingAi ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BrainCircuit className="w-3.5 h-3.5" />}
+                清空AI记录
+              </button>
+              <button onClick={handleBlacklistCustomer} disabled={blacklisting} className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-red-200 text-red-500 hover:bg-red-50 disabled:opacity-40" title={isOfficiallyBlocked ? '解除闲鱼官方黑名单' : '加入闲鱼官方黑名单'}>
+                {blacklisting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+                {isOfficiallyBlocked ? '解除黑名单' : '加入黑名单'}
+              </button>
+            </div>
           )}
         </div>
         {/* 消息区域 */}

@@ -24,6 +24,10 @@ from common.models.listing_monitor_category import ListingMonitorCategory
 from common.models.xy_account import XYAccount
 from common.models.user import User
 from common.services.listing_monitor_category_access import ensure_category_accessible
+from common.services.data_retention_service import (
+    CONFIG_SCHEDULED_TASK_LOG_DAYS,
+    get_retention_days,
+)
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 
 # 合法分页大小
@@ -31,9 +35,6 @@ _VALID_PAGE_SIZES = (10, 20, 50, 100)
 
 # 合法监控类型：listing-上新监控，price_drop-降价监控
 _VALID_MONITOR_TYPES = ("listing", "price_drop")
-
-# 监控日志保留天数：清空日志与定时自动清理均只删除该天数之前的数据
-LOG_RETENTION_DAYS = 10
 
 
 def _to_decimal(value: Any) -> Optional[Decimal]:
@@ -1076,7 +1077,10 @@ class ListingMonitorService:
         }
 
     async def clear_logs(self, owner_id: Optional[int]) -> Dict[str, Any]:
-        """清空监控日志：仅删除 LOG_RETENTION_DAYS 天之前的记录（日志表直接物理删除）。
+        """清空监控日志：仅删除超过保留天数的记录（日志表直接物理删除）。
+
+        保留天数来自 xy_system_settings 的 data_retention.scheduled_task_log_days（默认30天），
+        与调度器侧自动清理使用同一配置来源。
 
         Args:
             owner_id: 数据隔离范围；普通用户仅清理本人日志，管理员（None）清理全部。
@@ -1084,7 +1088,8 @@ class ListingMonitorService:
         Returns:
             {"deleted_count": 删除条数}
         """
-        cutoff_time = get_beijing_now_naive() - timedelta(days=LOG_RETENTION_DAYS)
+        retention_days = await get_retention_days(CONFIG_SCHEDULED_TASK_LOG_DAYS)
+        cutoff_time = get_beijing_now_naive() - timedelta(days=retention_days)
         conditions = [ListingMonitorLog.created_at < cutoff_time]
         if owner_id is not None:
             conditions.append(ListingMonitorLog.owner_id == owner_id)
@@ -1095,7 +1100,7 @@ class ListingMonitorService:
 
         deleted_count = result.rowcount or 0
         logger.info(
-            f"[商品监控日志] 已清空 {deleted_count} 条 {LOG_RETENTION_DAYS} 天前的监控日志"
+            f"[商品监控日志] 已清空 {deleted_count} 条 {retention_days} 天前的监控日志"
             f"（owner_id={owner_id}，清理时间界限: {cutoff_time}）"
         )
         return {"deleted_count": deleted_count}

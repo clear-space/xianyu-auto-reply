@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -30,6 +31,45 @@ from launcher.version import CURRENT_VERSION
 
 # 更新服务器地址（从 data/update_config.json 读取）
 _DEFAULT_UPDATE_URL = "https://xy-update.zhinianboke.com"
+
+# 更新临时目录中残留文件的保留天数：超过该天数的旧更新包/脚本/备份目录启动时自动清除
+_UPDATE_TEMP_RESIDUE_DAYS = 7
+
+
+def _get_update_temp_dir() -> Path:
+    """更新临时目录（%TEMP%/xianyu_update）。"""
+    return Path(tempfile.gettempdir()) / "xianyu_update"
+
+
+def cleanup_stale_update_residue() -> None:
+    """
+    启动时清扫更新临时目录中超过保留天数的残留文件。
+
+    覆盖场景：
+    - 下载完成后用户取消更新遗留的 zip（正常路径已即时删除，此处兜底）
+    - 下载中断的半成品文件
+    - 更新失败遗留的 do_update.bat 与 data_backup 目录
+
+    仅删除超过保留天数的文件/目录，保留最近一次更新失败现场供诊断。
+    任何异常均静默忽略（清理失败不影响启动）。
+    """
+    try:
+        temp_dir = _get_update_temp_dir()
+        if not temp_dir.is_dir():
+            return
+        cutoff = time.time() - _UPDATE_TEMP_RESIDUE_DAYS * 86400
+        for entry in temp_dir.iterdir():
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    if entry.is_dir():
+                        import shutil
+                        shutil.rmtree(entry, ignore_errors=True)
+                    else:
+                        entry.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _get_update_url() -> str:
@@ -147,7 +187,7 @@ def download_update(filename: str,
     download_url = f"{update_url}/{filename}"
 
     # 临时目录用于存放下载文件
-    temp_dir = Path(tempfile.gettempdir()) / "xianyu_update"
+    temp_dir = _get_update_temp_dir()
     temp_dir.mkdir(parents=True, exist_ok=True)
     local_path = temp_dir / filename
 
@@ -168,6 +208,11 @@ def download_update(filename: str,
                     if progress_callback and total > 0:
                         progress_callback(downloaded, total)
     except Exception as e:
+        # 下载失败时删除半成品文件，避免残留占用磁盘
+        try:
+            local_path.unlink(missing_ok=True)
+        except Exception:
+            pass
         result["error"] = f"下载失败: {str(e)}"
         return result
 
@@ -206,11 +251,11 @@ def apply_update(zip_path: str) -> dict:
         exe_name = "main.exe"
 
     # 生成更新bat脚本
-    bat_path = Path(tempfile.gettempdir()) / "xianyu_update" / "do_update.bat"
+    bat_path = _get_update_temp_dir() / "do_update.bat"
 
     # data目录路径（包含激活码、配置、数据库等用户数据）
     data_dir = app_dir / "data"
-    backup_dir = Path(tempfile.gettempdir()) / "xianyu_update" / "data_backup"
+    backup_dir = _get_update_temp_dir() / "data_backup"
 
     # bat脚本内容：停止所有服务 → 备份data → 解压覆盖 → 恢复data → 重启
     bat_content = f"""@echo off
@@ -241,11 +286,15 @@ echo 正在解压新版本...
 powershell -Command "Expand-Archive -Path '{zip_path}' -DestinationPath '{app_dir}' -Force"
 
 if %errorlevel% neq 0 (
-    echo 更新失败！请手动解压 {zip_path} 到 {app_dir}
+    echo 更新失败！请重新下载更新包后重试。
     REM 恢复备份
     if exist "{backup_dir}" (
         xcopy "{backup_dir}" "{data_dir}\\" /E /I /Q /Y >nul 2>nul
+        REM 数据已恢复，删除备份目录避免残留
+        rmdir /s /q "{backup_dir}" 2>nul
     )
+    REM 删除损坏的更新包，避免残留
+    del /q "{zip_path}" 2>nul
     pause
     exit /b 1
 )

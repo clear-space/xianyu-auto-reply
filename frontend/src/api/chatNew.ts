@@ -201,6 +201,21 @@ export const changeOfficialBlacklist = async (
   return res
 }
 
+/**
+ * 清空指定账号与指定买家的AI对话记录（xy_ai_chat_messages）。
+ * 对应后端 /api/v1/ai-conversation/{cookieId}/{chatId} DELETE 接口。
+ */
+export const clearAiConversation = async (
+  accountId: string,
+  cid: string,
+): Promise<{ success: boolean; message: string }> => {
+  const res = await del<{ success: boolean; message: string }>(
+    `/api/v1/ai-conversation/${accountId}/${encodeURIComponent(cid)}`,
+  )
+  if (!res.success) throw new Error(res.message || '清空AI对话记录失败')
+  return res
+}
+
 export const getAccountProfile = async (
   accountId: string,
   cid: string,

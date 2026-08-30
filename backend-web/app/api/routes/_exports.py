@@ -77,6 +77,7 @@ from . import (
     search,
     shared_scan,
     system_control,
+    system_info,
     system_settings,
     token_renewal_logs,
     upload,
@@ -135,6 +136,7 @@ api_router.include_router(payment.router, tags=["支付管理"])  # 已定义pre
 # AI回复
 api_router.include_router(ai.router, prefix="/ai-reply-settings", tags=["AI回复"])
 api_router.include_router(ai.test_router, tags=["AI回复测试"])  # ai.py已定义prefix="/ai-reply-test"
+api_router.include_router(ai.conversation_router, tags=["AI对话"])  # conversation_router已定义prefix="/ai-conversation"
 
 # 消息和回复
 api_router.include_router(message.router, prefix="/messages", tags=["消息管理"])
@@ -152,6 +154,7 @@ api_router.include_router(auto_rate.router, prefix="/auto-rate", tags=["自动�
 # 系统设置
 api_router.include_router(system_settings.router, prefix="/system-settings", tags=["系统设置"])
 api_router.include_router(system_control.router, tags=["系统管理"])  # 已定义prefix="/system-control"
+api_router.include_router(system_info.router, prefix="/admin/system-info", tags=["系统信息"])
 api_router.include_router(announcements.router, prefix="/announcements", tags=["公告管理"])
 api_router.include_router(popup_announcements.router, prefix="/popup-announcements", tags=["弹窗公告"])
 api_router.include_router(feedback.router, prefix="/feedbacks", tags=["反馈管理"])

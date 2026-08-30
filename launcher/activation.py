@@ -128,6 +128,24 @@ def verify_activation_code(machine_id: str, activation_code: str) -> dict:
     }
 
 
+def _compute_license_hash(machine_id: str, activation_code: str, expire_ts: int,
+                          used_renew_codes: list = None, last_renew_ts: int = 0) -> str:
+    """计算激活文件防篡改哈希（v2：覆盖全部字段，含已用续期码与续期时间）。"""
+    codes = ",".join(sorted(str(c) for c in (used_renew_codes or [])))
+    return hashlib.sha256(
+        f"{machine_id}:{activation_code}:{expire_ts}:{codes}:{last_renew_ts}:{_SECRET_SALT}"
+        .encode("utf-8")
+    ).hexdigest()[:16].upper()
+
+
+def _compute_license_hash_v1(machine_id: str, activation_code: str, expire_ts: int) -> str:
+    """旧版激活文件哈希（仅覆盖三个核心字段，用于兼容升级前的已激活文件）。"""
+    return hashlib.sha256(
+        f"{machine_id}:{activation_code}:{expire_ts}:{_SECRET_SALT}"
+        .encode("utf-8")
+    ).hexdigest()[:16].upper()
+
+
 def save_license(machine_id: str, activation_code: str,
                  expire_ts: int, used_renew_codes: list = None,
                  last_renew_ts: int = 0) -> bool:
@@ -144,10 +162,10 @@ def save_license(machine_id: str, activation_code: str,
         True保存成功，False保存失败
     """
     try:
-        check_hash = hashlib.sha256(
-            f"{machine_id}:{activation_code}:{expire_ts}:{_SECRET_SALT}"
-            .encode("utf-8")
-        ).hexdigest()[:16].upper()
+        check_hash = _compute_license_hash(
+            machine_id, activation_code.upper(), expire_ts,
+            used_renew_codes, last_renew_ts,
+        )
 
         data = {
             "machine_id": machine_id,
@@ -199,14 +217,30 @@ def load_and_verify_license(current_machine_id: str) -> dict:
     stored_code = data.get("activation_code", "")
     stored_expire = data.get("expire_ts", 0)
     stored_hash = data.get("check_hash", "")
+    stored_renew_codes = data.get("used_renew_codes") or []
+    stored_last_renew_ts = data.get("last_renew_ts") or 0
 
-    # 校验文件完整性（防篡改）
-    expected_hash = hashlib.sha256(
-        f"{stored_mid}:{stored_code}:{stored_expire}:{_SECRET_SALT}"
-        .encode("utf-8")
-    ).hexdigest()[:16].upper()
+    # 校验文件完整性（防篡改）：
+    # 优先按 v2 哈希（覆盖全部字段）校验；旧版文件（哈希仅覆盖三个核心字段）
+    # 按 v1 哈希兼容校验，校验通过后自动升级为 v2 格式
+    expected_hash_v2 = _compute_license_hash(
+        stored_mid, stored_code, stored_expire,
+        stored_renew_codes, stored_last_renew_ts,
+    )
+    expected_hash_v1 = _compute_license_hash_v1(stored_mid, stored_code, stored_expire)
 
-    if stored_hash != expected_hash:
+    if stored_hash == expected_hash_v2:
+        pass
+    elif stored_hash == expected_hash_v1:
+        # 旧版文件兼容通过，懒升级为 v2 哈希（失败不影响校验结果）
+        try:
+            save_license(
+                stored_mid, stored_code, stored_expire,
+                stored_renew_codes, stored_last_renew_ts,
+            )
+        except Exception:
+            pass
+    else:
         return {**_fail, "message": "激活文件已被篡改，请重新激活"}
 
     # 检查机器码（同机兼容：允许不同生成方式下得到的候选机器码）

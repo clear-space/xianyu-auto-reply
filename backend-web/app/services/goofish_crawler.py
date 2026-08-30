@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.session import async_session_maker
@@ -255,8 +255,6 @@ class GoofishCrawlManager:
         items: list[Dict[str, Any]],
     ) -> int:
         """保存采集结果"""
-        from sqlalchemy.dialects.mysql import insert as mysql_insert
-        
         now = datetime.now(timezone.utc)
         values: list[Dict[str, Any]] = []
         
@@ -283,23 +281,39 @@ class GoofishCrawlManager:
         
         if not values:
             return 0
-        
-        stmt = mysql_insert(GoofishCrawlItem).values(values)
-        stmt = stmt.on_duplicate_key_update(
-            title=stmt.inserted.title,
-            price=stmt.inserted.price,
-            area=stmt.inserted.area,
-            seller_name=stmt.inserted.seller_name,
-            item_url=stmt.inserted.item_url,
-            main_image=stmt.inserted.main_image,
-            publish_time=stmt.inserted.publish_time,
-            want_count=stmt.inserted.want_count,
-            view_count=stmt.inserted.view_count,
-            description=stmt.inserted.description,
-            detail_error=stmt.inserted.detail_error,
-            fetched_at=stmt.inserted.fetched_at,
-        )
-        await session.execute(stmt)
+
+        # 使用 VALUES 别名语法（AS new）避免 MySQL 8.0.20+ 'VALUES function' 弃用警告
+        # （SQLAlchemy 的 on_duplicate_key_update 仍生成 VALUES() 写法）。
+        # 分批执行（每批 50 行），避免单条 SQL 过长。
+        columns = [
+            "job_id", "item_id", "title", "price", "area", "seller_name",
+            "item_url", "main_image", "publish_time", "want_count",
+            "view_count", "description", "detail_error", "fetched_at",
+        ]
+        update_columns = [
+            "title", "price", "area", "seller_name", "item_url",
+            "main_image", "publish_time", "want_count", "view_count",
+            "description", "detail_error", "fetched_at",
+        ]
+        update_clause = ", ".join(f"`{c}` = new.`{c}`" for c in update_columns)
+        batch_size = 50
+        for start in range(0, len(values), batch_size):
+            batch = values[start:start + batch_size]
+            rows_sql = ", ".join(
+                f"({', '.join(f':{c}_{idx}' for c in columns)})"
+                for idx in range(len(batch))
+            )
+            params: dict = {}
+            for idx, row in enumerate(batch):
+                for c in columns:
+                    params[f"{c}_{idx}"] = row.get(c)
+            statement = text(
+                f"INSERT INTO xy_goofish_crawl_items "
+                f"({', '.join(f'`{c}`' for c in columns)}) "
+                f"VALUES {rows_sql} AS new "
+                f"ON DUPLICATE KEY UPDATE {update_clause}"
+            )
+            await session.execute(statement, params)
         await session.commit()
         return len(values)
     

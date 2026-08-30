@@ -11,6 +11,7 @@ from loguru import logger
 
 from common.models.card import Card
 from common.services.card_matcher import CardMatcher
+from common.utils.image_utils import delete_static_file
 from common.utils.response_field import extract_card_api_response_content
 
 
@@ -600,6 +601,23 @@ class CardService:
 
         user_id 为 None 时不限制归属（管理员语义，可删除任意卡券）。
         """
+        # 删除前先取出图片 URL（image_url + image_urls），DB 删除后同步删除本地图片文件
+        fetch_stmt = select(Card.image_url, Card.image_urls).where(Card.id == card_id)
+        if user_id is not None:
+            fetch_stmt = fetch_stmt.where(Card.user_id == user_id)
+        fetch_result = await self.session.execute(fetch_stmt)
+        image_urls: List[str] = []
+        for image_url, image_urls_json in fetch_result.fetchall():
+            if image_url:
+                image_urls.append(image_url)
+            if image_urls_json:
+                try:
+                    urls = json.loads(image_urls_json)
+                except (ValueError, TypeError):
+                    urls = [image_urls_json]
+                if isinstance(urls, list):
+                    image_urls.extend(str(u) for u in urls if u)
+
         # 先删除关联表记录
         matcher = CardMatcher(self.session)
         rel_count = await matcher.delete_relations_by_card_id(card_id)
@@ -611,6 +629,10 @@ class CardService:
             stmt = stmt.where(Card.user_id == user_id)
         result = await self.session.execute(stmt)
         await self.session.commit()
+
+        # 同步删除本地图片文件（仅 /static/uploads/ 下的本地文件，失败仅记录日志）
+        for image_url in image_urls:
+            delete_static_file(image_url)
         return result.rowcount > 0
 
     async def batch_delete_cards(self, card_ids: List[int], user_id: int | None) -> int:
@@ -618,6 +640,23 @@ class CardService:
 
         user_id 为 None 时不限制归属（管理员语义，可删除任意卡券）。
         """
+        # 删除前先取出图片 URL，DB 删除后同步删除本地图片文件
+        fetch_stmt = select(Card.image_url, Card.image_urls).where(Card.id.in_(card_ids))
+        if user_id is not None:
+            fetch_stmt = fetch_stmt.where(Card.user_id == user_id)
+        fetch_result = await self.session.execute(fetch_stmt)
+        image_urls: List[str] = []
+        for image_url, image_urls_json in fetch_result.fetchall():
+            if image_url:
+                image_urls.append(image_url)
+            if image_urls_json:
+                try:
+                    urls = json.loads(image_urls_json)
+                except (ValueError, TypeError):
+                    urls = [image_urls_json]
+                if isinstance(urls, list):
+                    image_urls.extend(str(u) for u in urls if u)
+
         # 先批量删除关联表记录
         matcher = CardMatcher(self.session)
         for card_id in card_ids:
@@ -630,6 +669,10 @@ class CardService:
             stmt = stmt.where(Card.user_id == user_id)
         result = await self.session.execute(stmt)
         await self.session.commit()
+
+        # 同步删除本地图片文件（失败仅记录日志，不影响删除结果）
+        for image_url in image_urls:
+            delete_static_file(image_url)
         return result.rowcount
 
     async def batch_save_and_bind(

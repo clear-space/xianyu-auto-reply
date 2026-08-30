@@ -152,6 +152,8 @@ class ServiceManager:
         self._stopped = False
         self._service_errors: dict[str, str] = {}
         self._log_handles: dict[str, object] = {}
+        # 数据库/Redis 密码等敏感配置：不写入 .env 文件，仅通过子进程环境变量传递
+        self._service_secret_env: dict[str, str] = {}
     
     def _get_python_exe(self) -> str:
         """
@@ -188,6 +190,14 @@ class ServiceManager:
         # 否则 scheduler 写入的备份文件 backend-web 无法读取下载（本地源码模式各服务 cwd 不同）
         backup_dir = (self.project_root / "backups").as_posix()
 
+        # 安全设计：密码等敏感字段不写入 .env 文件（磁盘不留明文密码），
+        # 仅保存在内存中，启动子进程时通过环境变量传递
+        # （pydantic-settings 环境变量优先级高于 .env，子服务无需改动即可读取）
+        self._service_secret_env = {
+            "MYSQL_PASSWORD": str(config.get("mysql_password", "")),
+            "REDIS_PASSWORD": str(config.get("redis_password", "")),
+        }
+
         # backend-web .env
         backend_env = (
             f"ENVIRONMENT=production\n"
@@ -195,11 +205,9 @@ class ServiceManager:
             f"MYSQL_HOST={config['mysql_host']}\n"
             f"MYSQL_PORT={config['mysql_port']}\n"
             f"MYSQL_USER={config['mysql_user']}\n"
-            f"MYSQL_PASSWORD={config['mysql_password']}\n"
             f"MYSQL_DATABASE={config['mysql_database']}\n"
             f"REDIS_HOST={config['redis_host']}\n"
             f"REDIS_PORT={config['redis_port']}\n"
-            f"REDIS_PASSWORD={config['redis_password']}\n"
             f"REDIS_DB={config['redis_db']}\n"
             f"BACKEND_WEB_PORT=8089\n"
             f"JWT_ALGORITHM=HS256\n"
@@ -221,11 +229,9 @@ class ServiceManager:
             f"MYSQL_HOST={config['mysql_host']}\n"
             f"MYSQL_PORT={config['mysql_port']}\n"
             f"MYSQL_USER={config['mysql_user']}\n"
-            f"MYSQL_PASSWORD={config['mysql_password']}\n"
             f"MYSQL_DATABASE={config['mysql_database']}\n"
             f"REDIS_HOST={config['redis_host']}\n"
             f"REDIS_PORT={config['redis_port']}\n"
-            f"REDIS_PASSWORD={config['redis_password']}\n"
             f"REDIS_DB={config['redis_db']}\n"
             f"WEBSOCKET_PORT=8090\n"
             f"MAX_CAPTCHA_CONCURRENT=1\n"
@@ -243,11 +249,9 @@ class ServiceManager:
             f"MYSQL_HOST={config['mysql_host']}\n"
             f"MYSQL_PORT={config['mysql_port']}\n"
             f"MYSQL_USER={config['mysql_user']}\n"
-            f"MYSQL_PASSWORD={config['mysql_password']}\n"
             f"MYSQL_DATABASE={config['mysql_database']}\n"
             f"REDIS_HOST={config['redis_host']}\n"
             f"REDIS_PORT={config['redis_port']}\n"
-            f"REDIS_PASSWORD={config['redis_password']}\n"
             f"REDIS_DB={config['redis_db']}\n"
             f"SCHEDULER_PORT=8091\n"
             f"REDELIVERY_INTERVAL=5\n"
@@ -302,6 +306,10 @@ class ServiceManager:
             env["PYTHONPATH"] = str(self.project_root)
             # 确保使用UTF-8编码
             env["PYTHONIOENCODING"] = "utf-8"
+            # 注入数据库/Redis 密码（.env 中已不含密码，仅经子进程环境变量传递，不落盘）
+            for secret_key, secret_value in self._service_secret_env.items():
+                if secret_value:
+                    env[secret_key] = secret_value
             from launcher.browser_setup import ensure_playwright_browser_path
             browser_dir = ensure_playwright_browser_path()
             if browser_dir:

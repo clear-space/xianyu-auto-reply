@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from common.utils.data_paths import get_trajectory_history_dir
+
 
 class HistoryManager:
     """滑块验证历史记录管理器"""
@@ -28,7 +30,10 @@ class HistoryManager:
         self.user_id = user_id
         self.pure_user_id = self._extract_pure_user_id(user_id)
         self.enable_learning = enable_learning
-        self.success_history_file = f"logs/trajectory_history/{self.pure_user_id}_success.json"
+        # 统一经 data_paths 解析为基于项目根的绝对路径（此前为相对 CWD 路径，落点不一致）
+        self.success_history_file = str(
+            get_trajectory_history_dir() / f"{self.pure_user_id}_success.json"
+        )
 
     def _extract_pure_user_id(self, user_id: str) -> str:
         """提取纯用户ID"""

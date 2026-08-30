@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.xy_keyword_rule import XYKeywordRule
+from common.utils.image_utils import delete_static_file
 
 
 class KeywordService:
@@ -269,6 +270,21 @@ class KeywordService:
         Returns:
             是否删除成功
         """
+        # 删除前先取出匹配行的图片 URL（图片关键词），DB 删除后同步删除本地图片文件
+        fetch_stmt = select(XYKeywordRule.id, XYKeywordRule.image_url).where(
+            XYKeywordRule.owner_id == account.owner_id,
+            XYKeywordRule.account_pk == account.id,
+        )
+        if rule_id is not None:
+            fetch_stmt = fetch_stmt.where(XYKeywordRule.id == rule_id)
+        else:
+            fetch_stmt = fetch_stmt.where(
+                XYKeywordRule.keyword == keyword,
+                XYKeywordRule.item_id == (item_id if item_id else None),
+            )
+        fetch_result = await self.session.execute(fetch_stmt)
+        image_urls = [image_url for _, image_url in fetch_result.fetchall() if image_url]
+
         stmt = delete(XYKeywordRule).where(
             XYKeywordRule.owner_id == account.owner_id,
             XYKeywordRule.account_pk == account.id,
@@ -282,6 +298,11 @@ class KeywordService:
             )
         result = await self.session.execute(stmt)
         await self.session.commit()
+
+        # 同步删除本地图片文件（失败仅记录日志，不影响删除结果）
+        for image_url in image_urls:
+            delete_static_file(image_url)
+
         return result.rowcount > 0
 
     async def list_keywords_by_account(self, account_id: str) -> list[XYKeywordRule]:

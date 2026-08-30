@@ -293,6 +293,22 @@ export interface SystemSettings {
   'withdraw.min_amount'?: string
   // 日志配置
   'log.retention_days'?: string
+  // 数据保留策略（统一数据保留引擎）
+  'data_retention.enabled'?: boolean
+  'data_retention.cleanup_batch_size'?: string
+  'data_retention.max_batches_per_table'?: string
+  'data_retention.token_renewal_log_days'?: string
+  'data_retention.cookies_refresh_log_days'?: string
+  'data_retention.auto_reply_message_log_days'?: string
+  'data_retention.default_reply_record_days'?: string
+  'data_retention.account_login_log_days'?: string
+  'data_retention.publish_log_days'?: string
+  'data_retention.risk_control_log_days'?: string
+  'data_retention.token_cache_soft_expired_days'?: string
+  'data_retention.ai_chat_message_days'?: string
+  'data_retention.goofish_crawl_item_days'?: string
+  'data_retention.scheduled_task_log_days'?: string
+  'data_retention.cleanup_log_days'?: string
   // 账号安全设置
   'account.face_verify_timeout_disable'?: boolean
   // 账号密码登录方式

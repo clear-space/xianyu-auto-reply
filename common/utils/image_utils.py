@@ -9,10 +9,58 @@ import hashlib
 import os
 import uuid
 from io import BytesIO
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from loguru import logger
 from PIL import Image
+
+
+def _resolve_static_root() -> Path:
+    """解析静态文件根目录（与 scheduler 图片清理任务保持一致）。
+
+    - 设置了 STATIC_DIR（Docker 共享卷）→ 按其解析（相对路径基于 cwd）
+    - 未设置 → 项目根/backend-web/static（本地源码部署）
+    """
+    static_env = os.environ.get("STATIC_DIR", "")
+    if static_env:
+        root = Path(static_env)
+        if not root.is_absolute():
+            root = Path(os.getcwd()) / root
+        return root
+    return Path(__file__).resolve().parents[2] / "backend-web" / "static"
+
+
+def delete_static_file(url_path: str) -> bool:
+    """删除 static 目录下的本地上传文件（URL 形如 /static/uploads/...）。
+
+    供删除业务对象（关键词/默认回复/卡券/收款码等）时级联删除其图片文件使用。
+    安全设计：
+    - 仅处理 /static/uploads/ 前缀的本地文件（CDN/外链 URL 一律忽略）
+    - 解析后校验目标必须位于 static 根目录内（防路径穿越）
+    - 删除失败仅记录日志，绝不抛出（不影响业务主流程）
+    """
+    try:
+        if not url_path:
+            return False
+        text = str(url_path)
+        prefix = "/static/uploads/"
+        if not text.startswith(prefix):
+            return False
+        rel = text[len(prefix):]
+        static_root = _resolve_static_root().resolve()
+        target = (static_root / "uploads" / rel).resolve()
+        if static_root not in target.parents:
+            logger.warning(f"删除本地文件被拒绝（路径越界）: {url_path}")
+            return False
+        if target.is_file():
+            target.unlink()
+            logger.info(f"本地文件删除成功: {rel}")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"删除本地文件失败 {url_path}: {e}")
+        return False
 
 
 class ImageManager:

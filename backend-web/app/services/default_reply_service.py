@@ -7,6 +7,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.default_reply import DefaultReply, DefaultReplyRecord
+from common.utils.image_utils import delete_static_file
 
 
 class DefaultReplyService:
@@ -81,12 +82,23 @@ class DefaultReplyService:
 
     async def delete_default_reply(self, account_id: str) -> bool:
         """删除默认回复设置（账号级别，item_id为空）"""
+        # 删除前先取出回复图片 URL，DB 删除后同步删除本地图片文件
+        fetch_stmt = select(DefaultReply.reply_image).where(
+            DefaultReply.account_id == account_id,
+            DefaultReply.item_id.is_(None),
+        )
+        fetch_result = await self.session.execute(fetch_stmt)
+        image_urls = [reply_image for (reply_image,) in fetch_result.fetchall() if reply_image]
+
         stmt = delete(DefaultReply).where(
             DefaultReply.account_id == account_id,
             DefaultReply.item_id.is_(None)  # 账号级别默认回复，item_id为空
         )
         result = await self.session.execute(stmt)
         await self.session.commit()
+
+        for image_url in image_urls:
+            delete_static_file(image_url)
         return result.rowcount > 0
 
     async def get_all_default_replies(self, account_ids: list[str]) -> Dict[str, Dict[str, Any]]:
@@ -210,12 +222,23 @@ class DefaultReplyService:
 
     async def delete_item_default_reply(self, account_id: str, item_id: str) -> bool:
         """删除商品级别的默认回复设置"""
+        # 删除前先取出回复图片 URL，DB 删除后同步删除本地图片文件
+        fetch_stmt = select(DefaultReply.reply_image).where(
+            DefaultReply.account_id == account_id,
+            DefaultReply.item_id == item_id,
+        )
+        fetch_result = await self.session.execute(fetch_stmt)
+        image_urls = [reply_image for (reply_image,) in fetch_result.fetchall() if reply_image]
+
         stmt = delete(DefaultReply).where(
             DefaultReply.account_id == account_id,
             DefaultReply.item_id == item_id
         )
         result = await self.session.execute(stmt)
         await self.session.commit()
+
+        for image_url in image_urls:
+            delete_static_file(image_url)
         return result.rowcount > 0
 
     async def check_item_user_replied(self, account_id: str, item_id: str, user_id: str) -> bool:

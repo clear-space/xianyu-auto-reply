@@ -878,6 +878,22 @@ async def update_scheduled_task(
         }
 
 
+# 触发调度任务专用的长超时 HTTP 客户端：
+# 数据库备份（1~5分钟）、数据保留清理（大数据量时数十秒）等任务的触发接口会
+# 等待任务执行完毕才返回，默认 30 秒超时会导致「任务仍在执行但前端误报失败」。
+# 超时放宽到 10 分钟；不自动重试（重试会重复触发同一任务，虽然任务自带执行锁）。
+_trigger_http_client = None
+
+
+def _get_trigger_http_client():
+    """获取触发调度任务专用的长超时客户端（懒加载单例）。"""
+    global _trigger_http_client
+    if _trigger_http_client is None:
+        from app.core.http_client import HTTPClient
+        _trigger_http_client = HTTPClient(timeout=600, max_retries=1)
+    return _trigger_http_client
+
+
 @router.post("/scheduled-tasks/{task_code}/trigger")
 async def trigger_scheduled_task(
     task_code: str,
@@ -885,16 +901,15 @@ async def trigger_scheduled_task(
 ) -> dict:
     """手动触发定时任务执行（管理员专用）"""
     from loguru import logger
-    from app.core.http_client import get_http_client
     from app.core.config import get_settings
-    
+
     settings = get_settings()
-    
+
     try:
-        http_client = get_http_client()
+        http_client = _get_trigger_http_client()
         url = f"{settings.scheduler_service_url}/internal/tasks/{task_code}/trigger"
         response = await http_client.post(url)
-        
+
         if response.get("success"):
             logger.info(f"[定时任务] 手动触发任务成功: {task_code}")
             return {

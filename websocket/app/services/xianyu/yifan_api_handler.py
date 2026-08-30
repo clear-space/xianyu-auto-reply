@@ -186,15 +186,15 @@ class YifanApiHandler:
                             if order_id and order_no:
                                 try:
                                     from common.db.compat import db_manager
-                                    # 更新订单的亦凡订单号和chat_id
+                                    # 更新订单的亦凡订单号（参数名需与 db_manager.update_order_yifan_status
+                                    # 实现保持一致：yifan_order_no；此前传入 yifan_orderno 导致空写）
                                     db_manager.update_order_yifan_status(
                                         order_id=order_id,
-                                        yifan_orderno=order_no,
-                                        delivery_status='processing'
+                                        yifan_order_no=order_no,
                                     )
                                     if chat_id:
                                         db_manager.update_order_chat_id(order_id, chat_id)
-                                    logger.info(f"已记录亦凡订单信息: order_id={order_id}, yifan_orderno={order_no}")
+                                    logger.info(f"已记录亦凡订单信息: order_id={order_id}, yifan_order_no={order_no}")
                                 except Exception as e:
                                     logger.error(f"记录亦凡订单信息失败: {e}")
                             

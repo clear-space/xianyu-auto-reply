@@ -36,6 +36,7 @@ from loguru import logger
 
 from common.services.captcha.slider_stealth import URL_EXPIRED, CAPTCHA_NOT_REQUIRED
 from common.services.captcha.weighted_scheduler import real_mouse_scheduler
+from common.utils.data_paths import get_browser_data_root
 from common.services.captcha.real_mouse_coordinates import (
     build_geometry_mapper,
     compute_slider_distance,
@@ -87,9 +88,8 @@ _LEGACY_BUSINESS_CAPTURE_DISTANCE_PX = 258.0
 # while samples with tails of 83px or more consistently reduced pass rate.
 _MAX_BUSINESS_CAPTURE_OVERSHOOT_PX = 80.0
 # 真人鼠标模式专用固定目录：本地与远程请求共用，用于复用和精确识别 Chrome 进程。
-_REAL_MOUSE_BROWSER_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "browser_data", "real_mouse_shared")
-)
+# （统一经 data_paths 解析为基于项目根的绝对路径，与其它 browser_data 写入方/清理方一致）
+_REAL_MOUSE_BROWSER_DIR = str(get_browser_data_root() / "real_mouse_shared")
 _REAL_MOUSE_BROWSER_LOCK = os.path.join(_REAL_MOUSE_BROWSER_DIR, "browser.lock")
 
 

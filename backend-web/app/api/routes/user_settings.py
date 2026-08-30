@@ -18,7 +18,7 @@ from app.services.card_secret_key_service import CardSecretKeyService
 from common.models.user import User
 from common.models.user_setting import UserSetting
 from common.schemas.common import ApiResponse
-from common.utils.image_utils import image_manager
+from common.utils.image_utils import delete_static_file, image_manager
 
 from common.utils.time_utils import safe_isoformat
 router = APIRouter(tags=["用户设置"])
@@ -208,6 +208,16 @@ async def upload_payment_qrcode(
     image_url = image_manager.save_image(image_data, file.filename)
     if not image_url:
         return {'success': False, 'message': '图片保存失败，请检查格式是否为 JPG/PNG/WEBP'}
+
+    # 更换收款码时删除旧收款码图片文件（先查旧值，新文件已落盘不受影响）
+    old_stmt = select(UserSetting.value).where(
+        UserSetting.user_id == current_user.id,
+        UserSetting.key == 'payment_qrcode',
+    )
+    old_result = await session.execute(old_stmt)
+    old_image_url = old_result.scalar_one_or_none()
+    if old_image_url and old_image_url != image_url:
+        delete_static_file(old_image_url)
 
     # 保存 payment_qrcode 和 payment_type 到用户设置
     for key, value, desc in [

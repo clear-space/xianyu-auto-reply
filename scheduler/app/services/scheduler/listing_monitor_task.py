@@ -20,6 +20,10 @@ from loguru import logger
 from sqlalchemy import delete, select
 
 from common.db.session import async_session_maker
+from common.services.data_retention_service import (
+    CONFIG_SCHEDULED_TASK_LOG_DAYS,
+    cleanup_created_at_table,
+)
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
 from common.models.listing_monitor_task import ListingMonitorTask
@@ -98,9 +102,6 @@ def _ms_to_beijing_naive(publish_time_ms: Optional[str]) -> Optional[datetime]:
 
 class ListingMonitorTaskService:
     """商品监控定时任务服务"""
-
-    # 监控日志保留天数，超过该天数的日志在每次任务执行时主动清理
-    LOG_RETENTION_DAYS = 10
 
     def __init__(self, task_name: str = "商品监控任务"):
         self.task_name = task_name
@@ -208,25 +209,18 @@ class ListingMonitorTaskService:
             return list(result.scalars().all())
 
     async def _cleanup_expired_logs(self) -> None:
-        """主动清理过期的监控日志。
+        """主动清理过期的监控日志（已迁移至统一数据保留引擎）。
 
-        删除 created_at 早于 (当前北京时间 - LOG_RETENTION_DAYS 天) 的日志记录，
-        避免日志表无限增长。使用参数化的 ORM delete 语句，避免 SQL 注入。
+        保留天数来自 xy_system_settings 的 data_retention.scheduled_task_log_days
+        （默认30天），分批删除逻辑复用 common/services/data_retention_service.py。
         """
         try:
-            cutoff_time = get_beijing_now_naive() - timedelta(days=self.LOG_RETENTION_DAYS)
             async with async_session_maker() as session:
-                stmt = delete(ListingMonitorLog).where(
-                    ListingMonitorLog.created_at < cutoff_time
-                )
-                result = await session.execute(stmt)
-                await session.commit()
-                deleted_count = result.rowcount or 0
-
-            if deleted_count > 0:
-                logger.info(
-                    f"【{self.task_name}】已清理 {deleted_count} 条 {self.LOG_RETENTION_DAYS} 天前的监控日志"
-                    f"（清理时间界限: {cutoff_time}）"
+                await cleanup_created_at_table(
+                    session,
+                    "xy_listing_monitor_logs",
+                    CONFIG_SCHEDULED_TASK_LOG_DAYS,
+                    log_prefix=f"【{self.task_name}】",
                 )
         except Exception as e:  # noqa: BLE001
             logger.error(f"【{self.task_name}】清理过期日志失败: {e}")

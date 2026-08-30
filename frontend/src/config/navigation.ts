@@ -1,5 +1,6 @@
 import type React from 'react'
 import {
+  Activity,
   AlertTriangle,
   Ban,
   Clock,
@@ -183,6 +184,7 @@ export const adminNavItems: NavEntry[] = [
       { key: 'admin-db-restore', icon: RotateCcw, label: '数据库恢复', path: '/admin/db-restore', adminOnly: true },
     ],
   },
+  { key: 'admin-system-info', icon: Activity, label: '系统信息', path: '/admin/system-info', adminOnly: true },
   { key: 'admin-scheduled-tasks', icon: Timer, label: '定时任务', path: '/admin/scheduled-tasks', adminOnly: true },
   { key: 'admin-announcements', icon: Megaphone, label: '公告管理', path: '/admin/announcements', adminOnly: true },
   {

@@ -21,6 +21,10 @@ from sqlalchemy import delete as sql_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.session import async_session_maker
+from common.services.data_retention_service import (
+    CONFIG_SCHEDULED_TASK_LOG_DAYS,
+    cleanup_created_at_table,
+)
 from common.models.xy_account import XYAccount
 from common.models.xy_order import XYOrder
 from common.models.scheduled_rate_log import ScheduledRateLog
@@ -87,10 +91,7 @@ class RateTask:
     
     # 订单处理间隔（秒）
     ORDER_PROCESS_DELAY = 2.0
-    
-    # 补评价日志保留天数，超过该天数的日志在每次任务执行时主动清理
-    LOG_RETENTION_DAYS = 10
-    
+        
     async def execute(self) -> str:
         """
         执行补评价任务
@@ -270,25 +271,18 @@ class RateTask:
     
     async def _cleanup_expired_logs(self, session: AsyncSession) -> None:
         """
-        主动清理过期的补评价日志
+        主动清理过期的补评价日志（已迁移至统一数据保留引擎）。
 
-        删除 created_at 早于 (当前北京时间 - LOG_RETENTION_DAYS 天) 的日志记录，
-        避免日志表无限增长。使用参数化的 ORM delete 语句，避免 SQL 注入。
+        保留天数来自 xy_system_settings 的 data_retention.scheduled_task_log_days
+        （默认30天），分批删除逻辑复用 common/services/data_retention_service.py。
         """
         try:
-            cutoff_time = get_beijing_now_naive() - timedelta(days=self.LOG_RETENTION_DAYS)
-            stmt = sql_delete(ScheduledRateLog).where(
-                ScheduledRateLog.created_at < cutoff_time
+            await cleanup_created_at_table(
+                session,
+                "xy_scheduled_rate_log",
+                CONFIG_SCHEDULED_TASK_LOG_DAYS,
+                log_prefix="[定时补评价]",
             )
-            result = await session.execute(stmt)
-            await session.commit()
-
-            deleted_count = result.rowcount or 0
-            if deleted_count > 0:
-                logger.info(
-                    f"[定时补评价] 已清理 {deleted_count} 条 {self.LOG_RETENTION_DAYS} 天前的补评价日志"
-                    f"（清理时间界限: {cutoff_time}）"
-                )
         except Exception as e:
             logger.error(f"[定时补评价] 清理过期日志失败: {e}")
             await session.rollback()

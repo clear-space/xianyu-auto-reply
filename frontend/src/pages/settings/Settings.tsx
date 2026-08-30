@@ -35,6 +35,7 @@ import { ThemeAppearanceSettingsCard } from './ThemeAppearanceSettingsCard'
 import { ThemeFontSettingsCard } from './ThemeFontSettingsCard'
 import { ServiceRestartCard } from './ServiceRestartCard'
 import { PasswordLoginModeSetting } from './PasswordLoginModeSetting'
+import { DataRetentionSettingsCard } from './DataRetentionSettingsCard'
 import { SliderModeSetting } from './SliderModeSetting'
 import { TokenApiModeSetting } from './TokenApiModeSetting'
 import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
@@ -597,6 +598,11 @@ export function Settings() {
 
       {/* 服务管理：消息服务 / 后端服务 / 定时任务服务 重启（仅管理员可见，置于最上方） */}
       {user?.is_admin && <ServiceRestartCard />}
+
+      {/* 数据保留策略（仅管理员可见）：统一数据保留引擎的保留天数与执行参数配置 */}
+      {user?.is_admin && (
+        <DataRetentionSettingsCard settings={settings} setSettings={setSettings} />
+      )}
 
       {/* 基础设置 + SMTP邮件配置（仅管理员可见） */}
       {user?.is_admin && (

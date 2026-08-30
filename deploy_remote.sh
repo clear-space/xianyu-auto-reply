@@ -228,6 +228,7 @@ services:
       - CAPTCHA_DRISSIONPAGE_HEADLESS=${CAPTCHA_DRISSIONPAGE_HEADLESS:-true}
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
+      - DATA_ROOT=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
@@ -275,6 +276,7 @@ services:
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
+      - DATA_ROOT=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
@@ -284,6 +286,7 @@ services:
       - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs
       - ./xianyu_auto_reply/static:/app/static:ro
       - ./xianyu_auto_reply/backups:/app/backups
+      - ./xianyu_auto_reply/browser_data:/app/browser_data
     ports:
       - "${SCHEDULER_PORT:-8091}:8091"
     networks:

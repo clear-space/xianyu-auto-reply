@@ -339,12 +339,30 @@ class DbBackupTaskService:
             logger.warning(f"【{self.task_name}】读取保留天数配置失败，使用默认值: {exc}")
         return _DEFAULT_RETENTION_DAYS
 
+    @staticmethod
+    def _parse_backup_file_time(file_name: str) -> Optional[datetime]:
+        """从备份文件名解析生成时间（backup_{db}_{YYYYMMDD_HHMMSS}.sql.gz）。
+
+        解析失败返回 None（如历史命名不规范的文件）。
+        """
+        stem = file_name.removesuffix(".sql.gz")
+        # 形如 backup_xianyu_auto_reply_20260820_153045，时间戳为最后两段
+        parts = stem.rsplit("_", 2)
+        if len(parts) == 3:
+            try:
+                return datetime.strptime(f"{parts[1]}_{parts[2]}", "%Y%m%d_%H%M%S")
+            except ValueError:
+                return None
+        return None
+
     async def _cleanup_expired_backups(self) -> None:
         """清理过期的备份文件与备份日志记录。
 
         说明：
         - 仅删除备份文件与备份日志记录，绝不触碰任何业务数据表
-        - 文件删除依据文件修改时间，日志删除依据 created_at
+        - 文件删除采用双条件：文件名时间戳与文件 mtime 均早于截止时间才删除
+          （取两者中较新的作为有效时间，防止复制等操作刷新 mtime 后误删）
+        - 日志删除依据 created_at
         - 任意一步失败均不影响本次备份主流程
         - 保留天数从 xy_system_settings 读取（key: db_backup.retention_days），
           默认 10 天
@@ -352,15 +370,23 @@ class DbBackupTaskService:
         retention_days = await self._get_retention_days()
         cutoff = get_beijing_now() - timedelta(days=retention_days)
 
-        # 1. 删除过期备份文件
+        # 1. 删除过期备份文件（双条件：文件名时间戳 + mtime 均超期）
         try:
             backup_root = get_backup_root()
             if backup_root.is_dir():
-                cutoff_ts = cutoff.timestamp()
                 removed = 0
                 for file in backup_root.glob("backup_*.sql.gz"):
                     try:
-                        if file.is_file() and file.stat().st_mtime < cutoff_ts:
+                        if not file.is_file():
+                            continue
+                        file_time = self._parse_backup_file_time(file.name)
+                        # 有效时间取「文件名时间戳与 mtime 中较新者」，
+                        # 两者均早于截止时间才允许删除
+                        candidate_times = [file.stat().st_mtime]
+                        if file_time is not None:
+                            candidate_times.append(file_time.timestamp())
+                        effective_ts = max(candidate_times)
+                        if effective_ts < cutoff.timestamp():
                             file.unlink()
                             removed += 1
                     except Exception as file_exc:

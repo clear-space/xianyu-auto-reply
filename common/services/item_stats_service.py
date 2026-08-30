@@ -193,19 +193,20 @@ async def snapshot_account_stats(
              :show_pv_7d, :show_uv_7d, :ipv_7d, :ipv_uv_7d, :chat_uv_7d,
              :pay_ord_cnt_7d, :pay_byr_cnt_7d, :pay_amt_7d, :ipv_pay_ucvr_7d,
              :want_count, :days_on_shelf, :post_dt, NOW(), NOW())
+        AS new
         ON DUPLICATE KEY UPDATE
-             show_pv_1d = VALUES(show_pv_1d), show_uv_1d = VALUES(show_uv_1d),
-             ipv_1d = VALUES(ipv_1d), ipv_uv_1d = VALUES(ipv_uv_1d),
-             chat_uv_1d = VALUES(chat_uv_1d),
-             pay_ord_cnt_1d = VALUES(pay_ord_cnt_1d), pay_byr_cnt_1d = VALUES(pay_byr_cnt_1d),
-             pay_amt_1d = VALUES(pay_amt_1d), ipv_pay_ucvr_1d = VALUES(ipv_pay_ucvr_1d),
-             show_pv_7d = VALUES(show_pv_7d), show_uv_7d = VALUES(show_uv_7d),
-             ipv_7d = VALUES(ipv_7d), ipv_uv_7d = VALUES(ipv_uv_7d),
-             chat_uv_7d = VALUES(chat_uv_7d),
-             pay_ord_cnt_7d = VALUES(pay_ord_cnt_7d), pay_byr_cnt_7d = VALUES(pay_byr_cnt_7d),
-             pay_amt_7d = VALUES(pay_amt_7d), ipv_pay_ucvr_7d = VALUES(ipv_pay_ucvr_7d),
-             want_count = IF(VALUES(want_count) IS NULL, want_count, VALUES(want_count)),
-             days_on_shelf = VALUES(days_on_shelf), post_dt = VALUES(post_dt),
+             show_pv_1d = new.show_pv_1d, show_uv_1d = new.show_uv_1d,
+             ipv_1d = new.ipv_1d, ipv_uv_1d = new.ipv_uv_1d,
+             chat_uv_1d = new.chat_uv_1d,
+             pay_ord_cnt_1d = new.pay_ord_cnt_1d, pay_byr_cnt_1d = new.pay_byr_cnt_1d,
+             pay_amt_1d = new.pay_amt_1d, ipv_pay_ucvr_1d = new.ipv_pay_ucvr_1d,
+             show_pv_7d = new.show_pv_7d, show_uv_7d = new.show_uv_7d,
+             ipv_7d = new.ipv_7d, ipv_uv_7d = new.ipv_uv_7d,
+             chat_uv_7d = new.chat_uv_7d,
+             pay_ord_cnt_7d = new.pay_ord_cnt_7d, pay_byr_cnt_7d = new.pay_byr_cnt_7d,
+             pay_amt_7d = new.pay_amt_7d, ipv_pay_ucvr_7d = new.ipv_pay_ucvr_7d,
+             want_count = IF(new.want_count IS NULL, want_count, new.want_count),
+             days_on_shelf = new.days_on_shelf, post_dt = new.post_dt,
              updated_at = NOW()
         """
     )

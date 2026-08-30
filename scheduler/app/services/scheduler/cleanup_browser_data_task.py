@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
+from common.utils.data_paths import get_browser_data_root
 from common.utils.time_utils import get_beijing_now_naive
 
 # 禁用账号超过该天数（基于更新时间）后才清理其浏览器数据
@@ -27,11 +28,8 @@ class CleanupBrowserDataTaskService:
     
     def __init__(self):
         self.task_name = "清理被禁用账号浏览器数据"
-        # browser_data目录位于websocket项目中
-        # scheduler/app/services/scheduler/cleanup_browser_data_task.py -> 项目根目录
-        current_file = Path(__file__).resolve()
-        project_root = current_file.parent.parent.parent.parent.parent
-        self.browser_data_dir = project_root / "websocket" / "browser_data"
+        # 统一经 data_paths 解析 browser_data 根目录（与滑块验证等写入方共用同一目录）
+        self.browser_data_dir = get_browser_data_root()
     
     async def execute(self):
         """执行清理任务"""

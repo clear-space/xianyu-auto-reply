@@ -23,6 +23,7 @@ services:
       - --max-connect-errors=100000
       - --max-allowed-packet=256M
       - --default-time-zone=+08:00
+      - --expire-logs-days=7
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
@@ -151,6 +152,7 @@ services:
       - CAPTCHA_DRISSIONPAGE_HEADLESS=${CAPTCHA_DRISSIONPAGE_HEADLESS:-true}
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
+      - DATA_ROOT=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
@@ -204,6 +206,7 @@ services:
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
+      - DATA_ROOT=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
@@ -213,6 +216,7 @@ services:
       - scheduler_logs:/app/scheduler/logs
       - static-files:/app/static
       - backup-files:/app/backups
+      - browser_data:/app/browser_data
     ports:
       - "${SCHEDULER_PORT:-8091}:8091"
     networks:

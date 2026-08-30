@@ -507,6 +507,12 @@ def _on_download_done(app, dlg, result):
 
     msg = "下载完成！点击确定将关闭程序并自动更新，更新完成后会自动重启。"
     if not messagebox.askokcancel("确认更新", msg):
+        # 用户取消更新：删除已下载的更新包，避免临时目录残留
+        try:
+            from pathlib import Path
+            Path(result["file_path"]).unlink(missing_ok=True)
+        except Exception:
+            pass
         return
 
     # 生成更新脚本并退出

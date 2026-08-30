@@ -12,7 +12,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, update
+from sqlalchemy import or_, text, update
 from sqlalchemy.dialects.mysql import insert
 
 from common.db.session import async_session_maker
@@ -175,20 +175,31 @@ async def upsert_token_cache(
     for attempt in range(1, attempts + 1):
         try:
             async with async_session_maker() as session:
-                statement = insert(TokenCache).values(
-                    user_id=clean_user_id,
-                    token=clean_token,
-                    device_id=clean_device_id,
-                    expire_at=expire_at,
+                # 使用 VALUES 别名语法（AS new），避免 MySQL 8.0.20+ 的
+                # 'VALUES function' 弃用警告（SQLAlchemy ORM 的
+                # on_duplicate_key_update 仍生成 VALUES() 写法）
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO xy_token_cache
+                            (user_id, token, device_id, expire_at, renew_expire_at, created_at, updated_at)
+                        VALUES (:user_id, :token, :device_id, :expire_at, NULL, NOW(), NOW())
+                        AS new
+                        ON DUPLICATE KEY UPDATE
+                            token = new.token,
+                            device_id = new.device_id,
+                            expire_at = new.expire_at,
+                            renew_expire_at = NULL,
+                            updated_at = NOW()
+                        """
+                    ),
+                    {
+                        "user_id": clean_user_id,
+                        "token": clean_token,
+                        "device_id": clean_device_id,
+                        "expire_at": expire_at,
+                    },
                 )
-                statement = statement.on_duplicate_key_update(
-                    token=statement.inserted.token,
-                    device_id=statement.inserted.device_id,
-                    expire_at=statement.inserted.expire_at,
-                    renew_expire_at=None,
-                    updated_at=get_beijing_now_naive(),
-                )
-                await session.execute(statement)
                 await session.commit()
             break
         except Exception as exc:

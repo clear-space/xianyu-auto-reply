@@ -16,6 +16,31 @@ from app.services.ai_reply_service import AIReplySettingsService
 
 router = APIRouter(tags=["ai"])
 test_router = APIRouter(prefix="/ai-reply-test", tags=["ai"])
+conversation_router = APIRouter(prefix="/ai-conversation", tags=["ai"])
+
+
+@conversation_router.delete("/{cookie_id}/{chat_id}", response_model=ApiResponse)
+async def clear_ai_conversation(
+    cookie_id: str,
+    chat_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    conversation_service=Depends(deps.get_ai_conversation_service),
+) -> ApiResponse:
+    """清空指定账号与指定买家的AI对话记录。
+
+    管理员可清任意账号，普通用户仅能清理本人账号的对话。
+    （此前 clear_conversation 已实现但无任何调用方，本接口将其正式接线）
+    """
+    owner_id, _ = resolve_owner_scope(current_user)
+    account = await account_service.get_account_for_user(owner_id, cookie_id)
+    if not account:
+        return ApiResponse(success=False, message="账号不存在")
+
+    ok = await conversation_service.clear_conversation(chat_id, cookie_id)
+    if not ok:
+        return ApiResponse(success=False, message="清空AI对话记录失败")
+    return ApiResponse(success=True, message="AI对话记录已清空")
 
 
 @router.get("", response_model=dict[str, AIReplySettings])
