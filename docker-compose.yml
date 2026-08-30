@@ -111,9 +111,9 @@ services:
       - backup-files:/app/backups
       # 发布临时图片目录与 scheduler 共享：后端崩溃残留由 scheduler 的过期临时文件清理任务回收
       - publish_images_tmp:/tmp/xianyu_publish_images
-      # 只读挂载另两个服务的日志目录，供系统信息接口统计日志文件大小
-      - websocket_logs:/app/websocket/logs:ro
-      - scheduler_logs:/app/scheduler/logs:ro
+      # 挂载另两个服务的日志目录：统计日志大小 + 管理员清空日志接口需要写权限
+      - websocket_logs:/app/websocket/logs
+      - scheduler_logs:/app/scheduler/logs
     ports:
       - "${BACKEND_WEB_PORT:-8089}:8089"
     networks:

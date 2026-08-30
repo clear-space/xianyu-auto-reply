@@ -441,13 +441,32 @@ async def get_system_logs(
 
 @router.post("/logs/clear", response_model=ApiResponse)
 async def clear_system_logs(
+    service: str = Query("backend-web"),
     _: User = Depends(deps.get_current_admin_user),
 ) -> ApiResponse:
-    """清空系统日志"""
-    backend_dir = Path(__file__).resolve().parents[3]
-    log_dir = backend_dir / "logs"
-    
+    """清空指定服务的日志文件（backend-web / websocket / scheduler）。
+
+    Docker 部署下 backend-web 容器只读挂载了另两个服务的日志目录，
+    此接口清空需要可写挂载（compose 已配置为可写）。
+    说明：清空为截断内容而非删除文件；被清空的服务进程（loguru）持有文件句柄，
+    Linux 下截断后其后续写入从原偏移继续（稀疏文件），属既有行为。
+    """
+    allowed_services = {"backend-web", "websocket", "scheduler"}
+    if service not in allowed_services:
+        return ApiResponse(success=False, message="服务名无效，仅支持 backend-web/websocket/scheduler")
+
+    # 基于文件位置解析各服务日志目录（与 cwd 无关，Docker/EXE/源码模式一致）：
+    # admin.py 位于 {项目根}/backend-web/app/api/routes/，parents[3]=backend-web，
+    # parents[4]=项目根
+    routes_dir = Path(__file__).resolve().parents[0]
+    if service == "backend-web":
+        log_dir = routes_dir.parents[2] / "logs"          # backend-web/logs
+    else:
+        log_dir = routes_dir.parents[3] / service / "logs"  # 项目根/{service}/logs
+
     try:
+        if not log_dir.exists():
+            return ApiResponse(success=True, message="该服务的日志目录不存在")
         cleared = 0
         for log_file in log_dir.glob("*.log"):
             # 清空文件内容而不是删除

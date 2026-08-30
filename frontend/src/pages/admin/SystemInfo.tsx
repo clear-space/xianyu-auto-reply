@@ -290,7 +290,15 @@ export function SystemInfo() {
     },
     logs: {
       title: '清空系统日志',
-      message: '仅清空 backend-web 服务的日志文件；websocket/scheduler 日志按100MB轮转+保留天数自动清理，是否继续？',
+      message: '清空 backend-web 服务的日志文件（截断内容，服务继续写入新日志），是否继续？',
+    },
+    'logs-websocket': {
+      title: '清空 websocket 日志',
+      message: '清空 websocket 服务的日志文件（截断内容，服务继续写入新日志），是否继续？',
+    },
+    'logs-scheduler': {
+      title: '清空 scheduler 日志',
+      message: '清空 scheduler 服务的日志文件（截断内容，服务继续写入新日志），是否继续？',
     },
   }
 
@@ -307,10 +315,15 @@ export function SystemInfo() {
 
     setBusyAction(actionKey)
     try {
-      if (actionKey === 'logs') {
-        const res = await clearSystemLogs()
+      if (actionKey === 'logs' || actionKey === 'logs-websocket' || actionKey === 'logs-scheduler') {
+        const serviceMap: Record<string, string> = {
+          'logs': 'backend-web',
+          'logs-websocket': 'websocket',
+          'logs-scheduler': 'scheduler',
+        }
+        const res = await clearSystemLogs(serviceMap[actionKey])
         if (!res.success) throw new Error(res.message || '清空日志失败')
-        addToast({ type: 'success', message: '系统日志已清空' })
+        addToast({ type: 'success', message: res.message || '日志已清空' })
       } else {
         const taskCode = SINGLE_CLEANUP_TASKS[actionKey]
         const result = await triggerScheduledTask(taskCode)
@@ -404,8 +417,10 @@ export function SystemInfo() {
       '浏览器数据': { action: 'browser', label: '清理', title: '仅清理禁用超10天账号的数据（启用账号登录态保留）' },
       '数据库备份': { action: 'backup', label: '备份并清理', title: '先执行一次全库备份再删过期备份（耗时较长）' },
       // 注意：「日志」行（根日志目录，launcher 日志/轨迹统计）无清理按钮——
-      // launcher 日志自动轮转、轨迹统计自限，且清空 backend-web 日志与行内容不符
-      '服务日志(backend-web)': { action: 'logs', label: '清理', title: '仅清空 backend-web 日志文件（其它服务日志按轮转自动清理）' },
+      // launcher 日志自动轮转、轨迹统计自限
+      '服务日志(backend-web)': { action: 'logs', label: '清理', title: '清空 backend-web 服务日志文件' },
+      '服务日志(websocket)': { action: 'logs-websocket', label: '清理', title: '清空 websocket 服务日志文件' },
+      '服务日志(scheduler)': { action: 'logs-scheduler', label: '清理', title: '清空 scheduler 服务日志文件' },
     }
     for (const [name, info] of Object.entries(storage?.dirs ?? {})) {
       const mapping = dirActions[name]

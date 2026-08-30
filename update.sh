@@ -198,8 +198,9 @@ services:
       - ./xianyu_auto_reply/static:/app/static
       - ./xianyu_auto_reply/backups:/app/backups
       - ./xianyu_auto_reply/tmp/publish_images:/tmp/xianyu_publish_images
-      - ./xianyu_auto_reply/logs/websocket:/app/websocket/logs:ro
-      - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs:ro
+      # 挂载另两个服务的日志目录：统计日志大小 + 管理员清空日志接口需要写权限
+      - ./xianyu_auto_reply/logs/websocket:/app/websocket/logs
+      - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs
     ports:
       - "${BACKEND_WEB_PORT:-8089}:8089"
     networks:

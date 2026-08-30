@@ -136,9 +136,9 @@ export const getSystemLogs = async (params?: { page?: number; limit?: number; le
   return { success: true, data: logs, total: result.total }
 }
 
-// 清空系统日志
-export const clearSystemLogs = (): Promise<ApiResponse> => {
-  return post(`${ADMIN_PREFIX}/logs/clear`)
+// 清空系统日志（service: backend-web/websocket/scheduler，默认 backend-web）
+export const clearSystemLogs = (service: string = 'backend-web'): Promise<ApiResponse> => {
+  return post(`${ADMIN_PREFIX}/logs/clear?service=${encodeURIComponent(service)}`)
 }
 
 // 测试远程过滑块服务连通性（服务端代理，规避跨域）
