@@ -403,7 +403,8 @@ export function SystemInfo() {
       '上传文件': { action: 'files', label: '清理', title: '清理孤儿/超期图片' },
       '浏览器数据': { action: 'browser', label: '清理', title: '仅清理禁用超10天账号的数据（启用账号登录态保留）' },
       '数据库备份': { action: 'backup', label: '备份并清理', title: '先执行一次全库备份再删过期备份（耗时较长）' },
-      '日志': { action: 'logs', label: '清理', title: '仅清空 backend-web 日志文件（其它服务日志按轮转自动清理）' },
+      // 注意：「日志」行（根日志目录，launcher 日志/轨迹统计）无清理按钮——
+      // launcher 日志自动轮转、轨迹统计自限，且清空 backend-web 日志与行内容不符
       '服务日志(backend-web)': { action: 'logs', label: '清理', title: '仅清空 backend-web 日志文件（其它服务日志按轮转自动清理）' },
     }
     for (const [name, info] of Object.entries(storage?.dirs ?? {})) {

@@ -255,8 +255,12 @@ def get_default_monitor_dirs() -> Dict[str, Path]:
 
     dirs["浏览器数据"] = get_browser_data_root()
 
-    # 根日志目录（launcher 日志、滑块轨迹历史等）
-    dirs["日志"] = get_project_root() / "logs"
+    # 根日志目录（launcher 日志、滑块轨迹历史等）——存在才登记：
+    # Docker 下各服务日志均挂载在独立的服务日志卷，/app/logs 不存在，
+    # 若不判断会显示一行永远为 0 的「日志」
+    root_logs = get_project_root() / "logs"
+    if root_logs.is_dir():
+        dirs["日志"] = root_logs
     # 各服务日志目录（存在才登记，兼容 Docker 容器内未挂载其它服务日志卷的情况）
     for service in ("backend-web", "websocket", "scheduler"):
         service_logs = get_project_root() / service / "logs"

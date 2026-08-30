@@ -300,7 +300,7 @@ services:
       - TZ=Asia/Shanghai
     volumes:
       - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs
-      - ./xianyu_auto_reply/static:/app/static:ro
+      - ./xianyu_auto_reply/static:/app/static
       - ./xianyu_auto_reply/backups:/app/backups
       - ./xianyu_auto_reply/browser_data:/app/browser_data
       # 只读挂载另两个服务的日志目录，供系统指标采集统计全部日志体积
