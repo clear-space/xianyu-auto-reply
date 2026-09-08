@@ -704,7 +704,7 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
     <div className="modal-overlay" onClick={onClose}>
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
-        className="modal-content max-w-2xl max-h-[85vh] flex flex-col"
+        className="modal-content max-w-6xl max-h-[85vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         <div className="modal-header">
