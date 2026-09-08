@@ -650,7 +650,7 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
   // 下架预览的账号范围：空集合 = 全部账号
   const [accounts, setAccounts] = useState<AccountDetail[]>([])
   const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set())
-  // 预览前先同步闲鱼最新商品（本地快照可能落后于闲鱼）
+  // 预览前先同步闲鱼最新商品与运营指标（曝光/浏览/咨询/成交/转化/想要，本地快照可能落后于闲鱼）
   const [refreshBeforePreview, setRefreshBeforePreview] = useState(false)
 
   const isDelist = initial.algorithm_type === 'delist_weight'
@@ -748,7 +748,7 @@ function WeightAlgorithmPreviewModal({ initial, onClose }: {
                 <input type="checkbox" className="w-4 h-4 text-blue-600 rounded"
                   checked={refreshBeforePreview} onChange={() => setRefreshBeforePreview(v => !v)} />
                 <span className="text-xs text-slate-500 dark:text-slate-400">
-                  预览前先从闲鱼同步最新商品（商品较多时较慢；同步失败自动回退本地数据）
+                  预览前先从闲鱼同步最新商品与运营数据（曝光/浏览/咨询/成交/转化/想要；商品较多时较慢，同步失败自动回退本地数据）
                 </span>
               </label>
             )}

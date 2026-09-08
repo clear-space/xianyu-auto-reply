@@ -30,8 +30,11 @@ from common.models.xy_account import XYAccount
 from common.services.xianyu_mtop import mtop_call
 from common.utils.time_utils import BEIJING_TZ, get_beijing_now
 
-# 数据罗盘商品列表接口（一次性全量在售商品，pageSize=300）
+# 数据罗盘商品列表接口（在售商品，pageSize=300；超过单页时自动翻页采集）
 DATACOMPASS_ITEM_LIST_API = "mtop.alibaba.idle.seller.pc.datacompass.item.list"
+# 数据罗盘单页大小与翻页防呆上限
+DATACOMPASS_PAGE_SIZE = 300
+DATACOMPASS_MAX_PAGES = 20
 # 闲鱼 H5 商品详情接口（累计想要数）
 ITEM_DETAIL_API = "mtop.taobao.idle.awesome.detail"
 
@@ -70,7 +73,7 @@ async def fetch_item_stats_list(
     seller_id: str,
     date_type: str,
 ) -> Optional[List[Dict[str, Any]]]:
-    """批量获取在售商品指标列表（数据罗盘商品接口）
+    """批量获取在售商品指标列表（数据罗盘商品接口，自动翻页）
 
     Args:
         cookies_str: 账号 Cookie
@@ -78,29 +81,64 @@ async def fetch_item_stats_list(
         date_type: recent1d / recent7d
 
     Returns:
-        商品指标行列表，失败返回 None
+        商品指标行列表（按 itmId 去重、保持首见顺序），失败返回 None。
+        旧实现只拉第 1 页，超过 300 件在售的商品永远采不到指标；
+        现在按 page 递增翻页，带三重终止保护（空页/页尾/接口不分页时无新增）。
     """
-    result = await mtop_call(
-        seller_id,
-        cookies_str,
-        DATACOMPASS_ITEM_LIST_API,
-        "1.0",
-        {
-            "selectedSellerId": seller_id,
-            "dateType": date_type,
-            "page": 1,
-            "pageSize": 300,
-        },
-        # 数据罗盘是卖家工作台专属接口，需要 COMMONPRO 站点上下文请求头（实调验证，缺失时返回无权限）
-        extra_headers={"idle_site_biz_code": "COMMONPRO", "idle_user_group_member_id": ""},
-        referer="https://seller.goofish.com/?site=COMMONPRO",
-    )
-    if not result.get("success"):
-        logger.warning(f"【{seller_id}】商品指标列表获取失败({date_type}): {result.get('error')}")
-        return None
-    data = (result.get("res") or {}).get("data") or {}
-    inner = data.get("data") or {}
-    rows = inner.get("list") or []
+    rows_by_id: Dict[str, Dict[str, Any]] = {}
+    for page in range(1, DATACOMPASS_MAX_PAGES + 1):
+        result = await mtop_call(
+            seller_id,
+            cookies_str,
+            DATACOMPASS_ITEM_LIST_API,
+            "1.0",
+            {
+                "selectedSellerId": seller_id,
+                "dateType": date_type,
+                "page": page,
+                "pageSize": DATACOMPASS_PAGE_SIZE,
+            },
+            # 数据罗盘是卖家工作台专属接口，需要 COMMONPRO 站点上下文请求头（实调验证，缺失时返回无权限）
+            extra_headers={"idle_site_biz_code": "COMMONPRO", "idle_user_group_member_id": ""},
+            referer="https://seller.goofish.com/?site=COMMONPRO",
+        )
+        if not result.get("success"):
+            if page == 1:
+                logger.warning(f"【{seller_id}】商品指标列表获取失败({date_type}): {result.get('error')}")
+                return None
+            logger.warning(
+                f"【{seller_id}】商品指标列表第 {page} 页获取失败({date_type})，"
+                f"返回已采集 {len(rows_by_id)} 件: {result.get('error')}"
+            )
+            break
+        data = (result.get("res") or {}).get("data") or {}
+        inner = data.get("data") or {}
+        rows = inner.get("list") or []
+        if not rows:
+            break
+        page_by_id = {str(r.get("itmId")): r for r in rows if r.get("itmId") not in (None, "")}
+        new_ids = [iid for iid in page_by_id if iid not in rows_by_id]
+        if not new_ids:
+            # 防呆：接口忽略 page 参数时每页返回相同数据，无新增即终止，避免空转
+            logger.warning(
+                f"【{seller_id}】数据罗盘({date_type})第 {page} 页无新增商品"
+                f"（疑似接口不分页），停止翻页，已采集 {len(rows_by_id)} 件"
+            )
+            break
+        for iid in new_ids:
+            rows_by_id[iid] = page_by_id[iid]
+        if len(rows) < DATACOMPASS_PAGE_SIZE:
+            break
+        if inner.get("hasNextPage") is False:
+            break
+
+    rows = list(rows_by_id.values())
+    if rows and "ipvPayUcvr" not in rows[0]:
+        # 诊断：转化率字段缺失时打印首行全部字段名，便于核对接口真实返回
+        logger.warning(
+            f"【{seller_id}】数据罗盘({date_type})返回行缺少 ipvPayUcvr 字段，"
+            f"实际字段: {sorted(rows[0].keys())}"
+        )
     logger.info(f"【{seller_id}】商品指标列表({date_type})获取成功，共 {len(rows)} 件")
     return rows
 
@@ -119,7 +157,12 @@ async def fetch_item_want_count(cookies_str: str, seller_id: str, item_id: str) 
     data = (result.get("res") or {}).get("data") or {}
     item_do = data.get("itemDO") or {}
     want = item_do.get("wantCnt")
-    return int(want) if isinstance(want, (int, float, str)) and str(want).isdigit() else None
+    parsed = _parse_want_count(want)
+    if parsed is None and want is not None:
+        logger.warning(
+            f"【{seller_id}】商品 {item_id} 想要数解析失败，原始值: {str(want)[:32]!r}"
+        )
+    return parsed
 
 
 def _to_int(value: Any) -> Optional[int]:
@@ -192,6 +235,33 @@ def _to_yyyymmdd(value: Any) -> Optional[str]:
         except ValueError:
             continue
     return s
+
+
+def _parse_want_count(want: Any) -> Optional[int]:
+    """解析详情接口的累计想要数
+
+    兼容纯数字、千分位（1,234）、带 + 号（500+）、中文万（1.2万）、英文 w（1.2w）；
+    无值/占位符/无法识别返回 None。详情接口对过万数值可能返回 "1.2万" 类格式，
+    旧的 isdigit() 判定会把这些真实值误判为失败。
+    """
+    if want is None or isinstance(want, bool):
+        return None
+    if isinstance(want, (int, float)):
+        return int(want)
+    s = str(want).strip()
+    if not s or s in ("-", "--", "null", "None", "none"):
+        return None
+    multiplier = 1
+    if s.endswith("万") or s.lower().endswith("w"):
+        multiplier = 10000
+        s = s[:-1].strip()
+    s = s.replace(",", "").replace("+", "").strip()
+    if not s:
+        return None
+    try:
+        return int(float(s) * multiplier)
+    except (TypeError, ValueError):
+        return None
 
 
 async def snapshot_account_stats(

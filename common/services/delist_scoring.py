@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import bisect
 import math
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from loguru import logger
 from sqlalchemy import and_, func, select
 
 # 系统默认下架权重参数（规则未选择算法时使用）
@@ -233,7 +235,8 @@ async def compute_delist_scores(
             ).scalars().all()
             latest_map = {str(r.item_id): r for r in latest_rows}
 
-            # 历史序列（近 30 天，用于连续无成交天数推算）
+            # 历史序列（近 30 天，用于连续无成交天数推算；日期下界避免全量历史拉取）
+            hist_cutoff = (get_beijing_now() - timedelta(days=30)).strftime("%Y%m%d")
             hist_rows = (
                 await session.execute(
                     select(
@@ -245,6 +248,7 @@ async def compute_delist_scores(
                     .where(
                         ItemStatsDaily.account_id == account_id,
                         ItemStatsDaily.item_id.in_(item_ids),
+                        ItemStatsDaily.stat_date >= hist_cutoff,
                     )
                     .order_by(ItemStatsDaily.item_id, ItemStatsDaily.stat_date.desc())
                 )
@@ -277,7 +281,6 @@ async def compute_delist_scores(
             # 连续无成交天数：从最新快照往回数 pay_ord_cnt_1d==0；遇成交或日期断档停止
             hist = _hist_sorted(key)
             no_sale_days = 0
-            from datetime import datetime, timedelta
 
             if hist:
                 cur = datetime.strptime(hist[0][0], "%Y%m%d")
@@ -292,18 +295,37 @@ async def compute_delist_scores(
 
             # 累计想要（与商品列表「想要」列同口径：最新快照的 want_count）
             want_total = latest.want_count
+            # 转化率：历史脏数据（"-"/空串）归一为 None，与列表接口清洗口径一致
+            ucvr_raw = latest.ipv_pay_ucvr_7d
+            ucvr = None if ucvr_raw in (None, "", "-") else ucvr_raw
 
             signals_rows.append({
                 "item": row, "no_data": False,
                 "age_days": age_days, "no_sale_days": no_sale_days,
                 "show_pv": latest.show_pv_7d, "ipv": latest.ipv_7d,
                 "chat_uv": latest.chat_uv_7d, "pay_ord_cnt": latest.pay_ord_cnt_7d,
-                "ucvr": latest.ipv_pay_ucvr_7d,
+                "ucvr": ucvr,
                 "want_total": want_total,
                 "polished": bool(row.is_polished),
             })
 
         # ---------- 账号内归一化 ----------
+        # 数据缺失透明化：某信号在账号内全部缺失时，归一化后全员同值（≈0.5），
+        # 对应权重实际对排序无区分作用——告警提醒，避免管理员以为该因子在生效
+        for label, key in (
+            ("近7天曝光", "show_pv"),
+            ("近7天浏览", "ipv"),
+            ("近7天咨询", "chat_uv"),
+            ("近7天成交", "pay_ord_cnt"),
+            ("近7天转化率", "ucvr"),
+            ("累计想要", "want_total"),
+        ):
+            if all(s[key] is None for s in signals_rows):
+                logger.warning(
+                    f"【下架权重】账号 {account_id} 的{label}信号全部缺失，"
+                    f"对应权重被中性化（归一化全员同值），对排序无区分作用"
+                )
+
         metric_defs = [
             ("age", lambda s: float(s["age_days"])),
             ("no_sale", lambda s: float(s["no_sale_days"])),

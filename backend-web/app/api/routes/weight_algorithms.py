@@ -256,9 +256,15 @@ async def preview_weight_algorithm(
     current_user: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
     account_ids: Optional[str] = Query(None, description="逗号分隔的账号ID列表（下架加权用），不传=全部账号"),
-    refresh: bool = Query(False, description="预览前先从闲鱼同步最新商品（下架加权用，较慢）"),
+    refresh: bool = Query(False, description="预览前先从闲鱼同步最新商品与运营指标（下架加权用，较慢）"),
 ) -> dict:
-    """预览算法效果：热度加权对全部素材、下架加权对全部在售商品计算权重，附信号明细与逐项分值"""
+    """预览算法效果：热度加权对全部素材、下架加权对全部在售商品计算权重，附信号明细与逐项分值
+
+    下架加权数据口径：与商品管理列表共用 xy_item_stats_daily 快照数据源。
+    refresh=false 时纯读本地数据、不请求闲鱼；refresh=true 时先同步商品目录，
+    再采集所选账号运营指标快照（数据罗盘+想要数）回写同一数据源，
+    预览与商品管理列表同时生效；同步失败自动回退本地旧数据。
+    """
     from app.services.product_publish_service import ProductMaterialService
     from common.services.material_scoring import (
         compute_material_weight_details,
@@ -308,6 +314,8 @@ async def preview_weight_algorithm(
             sync_accounts = [
                 a for a in acc_rows if allowed_pks is None or a.id in allowed_pks
             ]
+            # 提前提取账号字段：商品同步会在本会话提交，之后 ORM 属性可能过期不可访问
+            sync_account_meta = [(a.account_id, a.cookie) for a in sync_accounts]
             if sync_accounts:
                 try:
                     item_svc = ItemService(session)
@@ -320,6 +328,48 @@ async def preview_weight_algorithm(
                     )
                 except Exception as exc:
                     logger.warning(f"[权重算法预览] 预览前同步商品失败（回退本地数据）: {exc}")
+
+                # 同步运营指标快照（数据罗盘 + 想要数）：与商品管理列表共用
+                # xy_item_stats_daily 数据源，刷新后预览与商品管理列表同时生效；
+                # 单账号失败仅告警并回退该账号本地旧快照
+                from types import SimpleNamespace
+
+                from common.db.session import async_session_maker
+                from common.services.item_stats_service import snapshot_account_stats
+                from common.utils.time_utils import get_beijing_now
+
+                stat_date = get_beijing_now().strftime("%Y%m%d")
+                stats_ok = 0
+                for account_id, cookie in sync_account_meta:
+                    if not cookie:
+                        logger.warning(
+                            f"[权重算法预览] 账号 {account_id} 无 Cookie，"
+                            f"跳过指标刷新（使用本地快照）"
+                        )
+                        continue
+                    try:
+                        async with async_session_maker() as stat_session:
+                            info = await snapshot_account_stats(
+                                stat_session,
+                                SimpleNamespace(account_id=account_id, cookie=cookie),
+                                stat_date,
+                            )
+                        if info.get("success"):
+                            stats_ok += 1
+                        else:
+                            logger.warning(
+                                f"[权重算法预览] 账号 {account_id} 指标刷新失败，"
+                                f"回退本地快照: {info.get('error')}"
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            f"[权重算法预览] 账号 {account_id} 指标刷新异常，"
+                            f"回退本地快照: {exc}"
+                        )
+                logger.info(
+                    f"[权重算法预览] 运营指标快照刷新完成：{stats_ok}/{len(sync_accounts)} 个账号成功"
+                    f"（已同步写入商品管理列表数据源）"
+                )
 
         item_stmt = select(XYCatalogItem)
         if scope_owner is not None:
