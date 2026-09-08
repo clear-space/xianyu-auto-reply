@@ -11,10 +11,10 @@
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, Sparkles, X, FolderOpen } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, Sparkles, X, FolderOpen, ChevronDown } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
-import { getMaterials, deleteMaterial, batchDeleteMaterials, type ProductMaterial } from '@/api/productPublish'
+import { getMaterials, deleteMaterial, batchDeleteMaterials, updateMaterial, type ProductMaterial } from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { MaterialFormModal } from './MaterialFormModal'
@@ -23,6 +23,18 @@ import { AiListingModal } from './ai-listing/AiListingModal'
 import { useAiListingTask } from './ai-listing/useAiListingTask'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
+
+// 风险状态配置：0-正常(绿) / 1-危险(琥珀，仅警示) / 2-禁用(红，拦截发布)
+const RISK_CONFIG: Record<number, { label: string; cls: string }> = {
+  0: { label: '正常', cls: 'badge-success' },
+  1: { label: '危险', cls: 'badge-warning' },
+  2: { label: '禁用', cls: 'badge-danger' },
+}
+const RISK_OPTIONS = [0, 1, 2]
+
+function getRiskInfo(risk: number | undefined): { label: string; cls: string } {
+  return RISK_CONFIG[risk ?? 0] ?? { label: '未知', cls: 'badge-gray' }
+}
 
 function getPlatformSummary(material: ProductMaterial): string[] {
   return [
@@ -64,6 +76,25 @@ export function ProductMaterials() {
 
   // AI 铺货
   const [showAiModal, setShowAiModal] = useState(false)
+
+  // 风险状态切换下拉（打开下拉的素材ID）
+  const [riskMenuId, setRiskMenuId] = useState<number | null>(null)
+
+  /** 切换素材风险状态 */
+  const handleRiskChange = async (materialId: number, risk: number) => {
+    setRiskMenuId(null)
+    try {
+      const res = await updateMaterial(materialId, { risk: risk as 0 | 1 | 2 })
+      if (res.success) {
+        addToast({ type: 'success', message: `风险状态已更新为「${RISK_CONFIG[risk]?.label ?? risk}」` })
+        setMaterials(prev => prev.map(m => m.id === materialId ? { ...m, risk } : m))
+      } else {
+        addToast({ type: 'error', message: res.message || '更新风险状态失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '更新风险状态失败，请重试' })
+    }
+  }
 
   /** 加载素材列表 */
   const load = async (p = page, size = pageSize) => {
@@ -309,16 +340,17 @@ export function ProductMaterials() {
                 <th>成色</th>
                 <th>媒体</th>
                 <th>创建时间</th>
+                <th>风险</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {tableLoading ? (
-                <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-12">
+                <tr><td colSpan={isAdmin ? 11 : 10} className="text-center py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                 </td></tr>
               ) : materials.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-12 text-slate-400">
+                <tr><td colSpan={isAdmin ? 11 : 10} className="text-center py-12 text-slate-400">
                   <div className="flex flex-col items-center gap-2">
                     <Image className="w-12 h-12 text-slate-300" />
                     <p>暂无素材，点击「新建素材」添加</p>
@@ -357,6 +389,38 @@ export function ProductMaterials() {
                   <td><span className="badge-info">{(m.images || []).length} 图 / {(m.videos || []).length} 视频</span></td>
                   <td className="text-sm text-slate-500 whitespace-nowrap">
                     {m.created_at ? new Date(m.created_at).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'}
+                  </td>
+                  <td className="whitespace-nowrap">
+                    <div className="relative inline-block">
+                      <button
+                        type="button"
+                        className={`${getRiskInfo(m.risk).cls} cursor-pointer`}
+                        title="点击切换风险状态"
+                        onClick={() => setRiskMenuId(riskMenuId === m.id ? null : m.id)}
+                      >
+                        {getRiskInfo(m.risk).label}
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+                      {riskMenuId === m.id && (
+                        <>
+                          {/* 点击其它区域关闭下拉 */}
+                          <div className="fixed inset-0 z-10" onClick={() => setRiskMenuId(null)} />
+                          <div className="absolute right-0 top-full mt-1 z-20 w-24 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-lg py-1">
+                            {RISK_OPTIONS.map(risk => (
+                              <button
+                                key={risk}
+                                type="button"
+                                className="flex w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700"
+                                onClick={() => handleRiskChange(m.id, risk)}
+                              >
+                                <span>{RISK_CONFIG[risk].label}</span>
+                                <span className={`${RISK_CONFIG[risk].cls} pointer-events-none`} />
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </td>
                   <td>
                     <div className="table-actions">

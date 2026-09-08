@@ -73,11 +73,11 @@ async def _validate_owned_accounts(session: AsyncSession, user_id: int, account_
 
 async def _sanitize_material_ids(
     session: AsyncSession, user_id: int, material_ids: List[int]
-) -> tuple[List[int], List[int]]:
-    """净化素材ID：软删除静默剔除，返回 (有效ID, 缺失ID)
+) -> tuple[List[int], List[int], List[int]]:
+    """净化素材ID：软删除静默剔除，返回 (有效ID, 缺失ID, 禁用ID)
 
     素材库删除素材后规则里残留的旧ID不应卡住编辑保存：
-    仅不存在/越权的ID进入 missing 报错，软删除的直接剔除。
+    不存在/越权的ID进入 missing 报错，软删除的直接剔除，禁用(2)的进入 disabled 报错。
     """
     from app.services.product_publish_service import ProductMaterialService
 
@@ -157,7 +157,11 @@ async def create_schedule(
     if req.material_scope == "selected":
         if not req.material_ids:
             return ApiResponse(success=False, message="请至少选择一条素材")
-        valid_ids, missing = await _sanitize_material_ids(session, current_user.id, req.material_ids)
+        valid_ids, missing, disabled = await _sanitize_material_ids(session, current_user.id, req.material_ids)
+        if disabled:
+            shown = "、".join(str(x) for x in disabled[:5])
+            more = f" 等{len(disabled)}条" if len(disabled) > 5 else ""
+            return ApiResponse(success=False, message=f"以下素材已被禁用，无法加入发布规则: {shown}{more}")
         if missing:
             shown = "、".join(str(x) for x in missing[:5])
             more = f" 等{len(missing)}个" if len(missing) > 5 else ""
@@ -491,9 +495,13 @@ async def update_schedule(
     elif "material_ids" in update_data:
         if not update_data["material_ids"]:
             return ApiResponse(success=False, message="请至少选择一条素材")
-        valid_ids, missing = await _sanitize_material_ids(
+        valid_ids, missing, disabled = await _sanitize_material_ids(
             session, current.user_id, update_data["material_ids"]
         )
+        if disabled:
+            shown = "、".join(str(x) for x in disabled[:5])
+            more = f" 等{len(disabled)}条" if len(disabled) > 5 else ""
+            return ApiResponse(success=False, message=f"以下素材已被禁用，无法加入发布规则: {shown}{more}")
         if missing:
             shown = "、".join(str(x) for x in missing[:5])
             more = f" 等{len(missing)}个" if len(missing) > 5 else ""

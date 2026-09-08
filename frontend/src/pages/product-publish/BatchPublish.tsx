@@ -139,6 +139,20 @@ export function BatchPublish() {
   const handleSubmit = async () => {
     if (selectedAccounts.size === 0) { addToast({ type: 'warning', message: '请至少选择一个账号' }); return }
     if (selectedMaterials.size === 0) { addToast({ type: 'warning', message: '请至少选择一条素材' }); return }
+    // 兜底：剔除已变为禁用(2)的素材（防陈旧页面状态；后端提交时也会校验拦截）
+    const disabledSelected = Array.from(selectedMaterials).filter(id => {
+      const m = materials.find(m => m.id === id)
+      return m && (m.risk ?? 0) === 2
+    })
+    if (disabledSelected.length > 0) {
+      setSelectedMaterials(prev => {
+        const n = new Set(prev)
+        disabledSelected.forEach(id => n.delete(id))
+        return n
+      })
+      addToast({ type: 'warning', message: `已自动排除 ${disabledSelected.length} 条被禁用的素材` })
+      if (selectedMaterials.size === disabledSelected.length) return
+    }
     setSubmitting(true)
     try {
       const res = await publishBatch({
@@ -187,7 +201,12 @@ export function BatchPublish() {
   }
 
   const toggleAccount = (id: string) => setSelectedAccounts(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  const toggleMaterial = (id: number) => setSelectedMaterials(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggleMaterial = (id: number) => {
+    // 禁用(2)素材不可勾选（防呆；取消勾选不受限）
+    const material = materials.find(m => m.id === id)
+    if (material && (material.risk ?? 0) === 2 && !selectedMaterials.has(id)) return
+    setSelectedMaterials(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
   const toggleAllAccounts = () => selectedAccounts.size === accounts.length ? setSelectedAccounts(new Set()) : setSelectedAccounts(new Set(accounts.map((a: any) => a.id)))
   const [selectAllLoading, setSelectAllLoading] = useState(false)
   /** 全选/取消全选所有素材（跨分页，按当前搜索条件） */
@@ -308,9 +327,11 @@ export function BatchPublish() {
                   const specificationCount = (m.specifications || []).length
                   const skuCount = (m.sku_rows || []).length
                   const isMultiSpec = specificationCount > 0 || skuCount > 0
+                  const isRiskDisabled = (m.risk ?? 0) === 2
                   return (
-                    <label key={m.id} className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${checked ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
-                      <input type="checkbox" className="w-4 h-4 text-blue-600 rounded accent-blue-500"
+                    <label key={m.id} className={`flex items-center gap-3 p-2.5 rounded-lg transition-colors ${isRiskDisabled ? 'opacity-50 cursor-not-allowed' : checked ? 'bg-blue-50 dark:bg-blue-900/20 cursor-pointer' : 'hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer'}`}>
+                      <input type="checkbox" className="w-4 h-4 text-blue-600 rounded accent-blue-500 disabled:cursor-not-allowed"
+                        disabled={isRiskDisabled}
                         checked={checked} onChange={() => toggleMaterial(m.id)} />
                       {m.images?.[0] ? (
                         <img src={m.images[0]} alt={m.title} className="w-10 h-10 object-cover rounded-lg flex-shrink-0" />
@@ -318,7 +339,10 @@ export function BatchPublish() {
                         <div className="w-10 h-10 bg-slate-100 dark:bg-slate-700 rounded-lg flex items-center justify-center text-xs text-slate-400 flex-shrink-0">无图</div>
                       )}
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate text-slate-800 dark:text-slate-100">{m.title}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-sm font-medium truncate text-slate-800 dark:text-slate-100">{m.title}</p>
+                          {isRiskDisabled && <span className="badge-danger flex-shrink-0">禁用</span>}
+                        </div>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <span className="text-xs text-amber-600">{m.price}</span>
                           {isMultiSpec ? (

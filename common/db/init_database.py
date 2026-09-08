@@ -1574,6 +1574,7 @@ class DatabaseInitializer:
                 `condition` VARCHAR(20) DEFAULT '全新' COMMENT '成色',
                 stock INT DEFAULT 9999 COMMENT '库存数量',
                 remark VARCHAR(500) DEFAULT NULL COMMENT '备注（仅内部使用）',
+                risk TINYINT NOT NULL DEFAULT 0 COMMENT '风险状态：0-正常,1-危险,2-禁用',
                 is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -2415,6 +2416,7 @@ class DatabaseInitializer:
             ("address_expected_text", "VARCHAR(200) DEFAULT NULL COMMENT '所在地选择时的期望文本'", "address"),
             ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "remark"),
             ("stock", "INT DEFAULT 9999 COMMENT '库存数量'", "condition"),
+            ("risk", "TINYINT NOT NULL DEFAULT 0 COMMENT '风险状态：0-正常,1-危险,2-禁用'", "remark"),
         ],
         "xy_listing_monitor_tasks": [
             ("monitor_type", "VARCHAR(20) NOT NULL DEFAULT 'listing' COMMENT '监控类型：listing-上新监控，price_drop-降价监控'", "owner_id"),

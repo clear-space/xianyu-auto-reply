@@ -114,7 +114,7 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
         const removedMaterials = Array.from(selectedMaterials).filter(id => !validIdSet.has(id))
         if (removedMaterials.length > 0) {
           setSelectedMaterials(prev => new Set(Array.from(prev).filter(id => validIdSet.has(id))))
-          addToast({ type: 'warning', message: `规则中 ${removedMaterials.length} 条素材已被删除，已自动移除` })
+          addToast({ type: 'warning', message: `规则中 ${removedMaterials.length} 条素材已被删除或禁用，已自动移除` })
         }
       }
     }).finally(() => setDataLoading(false))
@@ -192,6 +192,21 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
   const handleSave = async () => {
     if (!name.trim()) { addToast({ type: 'warning', message: '请输入规则名称' }); return }
     if (selectedAccounts.size === 0) { addToast({ type: 'warning', message: '请至少选择一个账号' }); return }
+    // 兜底：剔除当前页可见的禁用(2)素材（防陈旧页面状态；后端保存时也会校验拦截）
+    const disabledSelected = Array.from(selectedMaterials).filter(id => {
+      const m = materials.find(m => m.id === id)
+      return m && (m.risk ?? 0) === 2
+    })
+    if (disabledSelected.length > 0) {
+      setSelectedMaterials(prev => {
+        const n = new Set(prev)
+        disabledSelected.forEach(id => n.delete(id))
+        return n
+      })
+      addToast({ type: 'warning', message: `已自动排除 ${disabledSelected.length} 条被禁用的素材` })
+      if (selectedMaterials.size === disabledSelected.length) return
+    }
+
     // 全部素材范围不校验勾选（执行时实时解析素材库；库空时执行会优雅失败）
     if (materialScope === 'selected' && selectedMaterials.size === 0) {
       addToast({ type: 'warning', message: '请至少选择一条素材' }); return
@@ -264,6 +279,9 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
     setSelectedAccounts(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   }
   const toggleMaterial = (id: number) => {
+    // 禁用(2)素材不可勾选（防呆；取消勾选不受限）
+    const material = materials.find(m => m.id === id)
+    if (material && (material.risk ?? 0) === 2 && !selectedMaterials.has(id)) return
     setSelectedMaterials(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   }
   const toggleAllAccounts = () => {
@@ -584,7 +602,7 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
 
               {materialScope === 'all' ? (
                 <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-sm text-slate-600 dark:text-slate-300 space-y-1">
-                  <p>将实时使用素材库<strong>全部 {allLibraryCount} 条</strong>素材：新增素材自动纳入、删除素材自动剔除。</p>
+                  <p>将实时使用素材库<strong>全部 {allLibraryCount} 条</strong>素材：新增素材自动纳入，删除或禁用(2)的素材自动剔除、不参与发布。</p>
                   {publishMode === 'specified' && (
                     <p className="text-amber-600">每次触发将发布库内全部素材，素材较多时发布量较大，请知悉。</p>
                   )}
@@ -638,15 +656,19 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
                           <p className="text-sm">没有匹配的素材</p>
                         </div>
                       </td></tr>
-                    ) : materials.map(m => (
-                      <tr key={m.id} className={selectedMaterials.has(m.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
+                    ) : materials.map(m => {
+                      const isRiskDisabled = (m.risk ?? 0) === 2
+                      return (
+                      <tr key={m.id} className={`${selectedMaterials.has(m.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''} ${isRiskDisabled ? 'opacity-50' : ''}`}>
                         <td>
                           <input type="checkbox" checked={selectedMaterials.has(m.id)}
+                            disabled={isRiskDisabled}
                             onChange={() => toggleMaterial(m.id)}
-                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed" />
                         </td>
                         <td className="max-w-[160px]">
                           <span className="truncate block font-medium text-slate-800 dark:text-slate-100 text-sm" title={m.title}>{m.title}</span>
+                          {isRiskDisabled && <span className="badge-danger text-xs mt-1">禁用</span>}
                         </td>
                         <td>
                           <span className="text-amber-600 font-medium text-sm">¥{m.price}</span>
@@ -658,7 +680,8 @@ export function ScheduleFormModal({ initial, prefills, onClose, onSaved }: Props
                         <td><span className="badge-gray text-xs">{m.condition}</span></td>
                         <td><span className="badge-info text-xs">{(m.images || []).length} 张</span></td>
                       </tr>
-                    ))}
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

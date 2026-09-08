@@ -256,19 +256,22 @@ export function MaterialPickerModal({ onSelect, onClose }: MaterialPickerModalPr
                   <tr><td colSpan={6} className="py-16 text-center"><Loader2 className="mx-auto h-7 w-7 animate-spin text-blue-500" /></td></tr>
                 ) : materials.length === 0 ? (
                   <tr><td colSpan={6} className="py-16 text-center text-slate-400">{keyword ? <><SearchX className="mx-auto mb-2 h-10 w-10 text-slate-300" />未找到匹配“{keyword}”的素材</> : <><Image className="mx-auto mb-2 h-10 w-10 text-slate-300" />素材库为空，请先添加素材</>}</td></tr>
-                ) : materials.map((material) => (
-                  <tr key={material.id}>
-                    <td><div className="flex min-w-56 items-center gap-3">{material.images?.[0] ? <img src={material.images[0]} alt="" className="h-12 w-12 flex-shrink-0 rounded-lg object-cover" /> : <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400 dark:bg-slate-700">无图</div>}<div className="min-w-0 max-w-72"><p className="truncate font-medium text-slate-800 dark:text-slate-100" title={material.title}>{material.title}</p><p className="mt-1 line-clamp-2 break-words text-xs text-slate-400" title={material.description}>{material.description}</p></div></div></td>
+                ) : materials.map((material) => {
+                  const isRiskDisabled = (material.risk ?? 0) === 2
+                  return (
+                  <tr key={material.id} className={isRiskDisabled ? 'opacity-50' : ''}>
+                    <td><div className="flex min-w-56 items-center gap-3">{material.images?.[0] ? <img src={material.images[0]} alt="" className="h-12 w-12 flex-shrink-0 rounded-lg object-cover" /> : <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400 dark:bg-slate-700">无图</div>}<div className="min-w-0 max-w-72"><div className="flex items-center gap-1.5"><p className="truncate font-medium text-slate-800 dark:text-slate-100" title={material.title}>{material.title}</p>{isRiskDisabled && <span className="badge-danger flex-shrink-0">禁用</span>}</div><p className="mt-1 line-clamp-2 break-words text-xs text-slate-400" title={material.description}>{material.description}</p></div></div></td>
                     <td className="whitespace-nowrap font-medium text-amber-600">¥{material.price}</td>
                     <td className="max-w-40"><span className="block truncate" title={material.platform_category_name || material.category || ''}>{material.platform_category_name || material.category || '-'}</span></td>
                     <td>{(material.specifications || []).length ? `${material.specifications.length} 类 / ${(material.sku_rows || []).length} 组合` : '单规格'}</td>
                     <td className="whitespace-nowrap">{(material.images || []).length} 图 / {(material.videos || []).length} 视频</td>
                     <td><div className="table-actions">
                       <button type="button" className="table-action-btn" title="查看素材详情" disabled={detailLoadingId === material.id} onClick={() => void showDetail(material)}>{detailLoadingId === material.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4 text-blue-500" />}</button>
-                      <button type="button" className="btn-ios-primary btn-sm whitespace-nowrap" onClick={() => onSelect(material)}><Upload className="h-3.5 w-3.5" />导入</button>
+                      <button type="button" className="btn-ios-primary btn-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed" disabled={isRiskDisabled} title={isRiskDisabled ? '该素材已被禁用，无法导入' : '导入'} onClick={() => onSelect(material)}><Upload className="h-3.5 w-3.5" />导入</button>
                     </div></td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

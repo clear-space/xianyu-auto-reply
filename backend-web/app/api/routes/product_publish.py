@@ -177,6 +177,7 @@ class MaterialUpdateRequest(BaseModel):
     condition: Optional[str] = Field(None, max_length=20)
     stock: Optional[int] = Field(None, ge=0, description="库存数量")
     remark: Optional[str] = Field(None, max_length=500)
+    risk: Optional[int] = Field(None, ge=0, le=2, description="风险状态：0-正常,1-危险,2-禁用")
 
 
 class PublishSingleRequest(BaseModel):
@@ -509,6 +510,14 @@ async def publish_batch(
     """
     mat_svc = ProductMaterialService(session)
     from app.services.product_publish_service import _material_to_dict
+
+    # 禁用素材明确报错（区别于软删除/越权的静默过滤），避免前端陈旧状态提交后悄然少发
+    disabled_ids = await mat_svc.list_disabled_ids(req.material_ids, current_user.id)
+    if disabled_ids:
+        shown = "、".join(str(x) for x in disabled_ids[:5])
+        more = f" 等{len(disabled_ids)}条" if len(disabled_ids) > 5 else ""
+        return ApiResponse(success=False, message=f"以下素材已被禁用，无法发布: {shown}{more}")
+
     materials = [_material_to_dict(m) for m in await mat_svc.list_by_ids(req.material_ids, current_user.id)]
 
     if not materials:

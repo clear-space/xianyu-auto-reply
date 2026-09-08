@@ -144,6 +144,7 @@ export interface ProductMaterial {
   condition: string
   stock?: number
   remark?: string | null
+  risk?: number  // 风险状态：0-正常,1-危险,2-禁用
   created_at: string
   updated_at: string
 }
@@ -179,6 +180,7 @@ export interface MaterialCreateParams {
   condition?: string
   stock?: number
   remark?: string | null
+  risk?: 0 | 1 | 2
 }
 
 export interface MaterialListResponse {

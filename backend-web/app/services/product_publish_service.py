@@ -12,7 +12,10 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from common.models.product_material import ProductMaterial
+from common.models.product_material import (
+    MATERIAL_RISK_DISABLED,
+    ProductMaterial,
+)
 
 
 # ==================== 素材库服务 ====================
@@ -132,6 +135,7 @@ class ProductMaterialService:
             condition=data.get("condition", "全新"),
             stock=int(data.get("stock", 9999)),
             remark=data.get("remark"),
+            risk=int(data.get("risk", 0)),
         )
         self.session.add(material)
         await self.session.commit()
@@ -142,6 +146,7 @@ class ProductMaterialService:
         self, user_id: int = None, page: int = 1, page_size: int = 20,
         title: str = None, category: str = None, condition: str = None,
         platform_category_id: str = None, keyword: str = None,
+        exclude_risk_disabled: bool = False,
     ) -> Dict[str, Any]:
         """分页查询素材列表
 
@@ -151,11 +156,14 @@ class ProductMaterialService:
             category: 分类筛选
             condition: 成色筛选
             keyword: 关键词搜索（匹配标题或描述）
+            exclude_risk_disabled: 是否排除风险=禁用(2)的素材（发布类场景用，素材库管理页保留显示）
         """
         page = max(page, 1)
         page_size = page_size if page_size in (10, 20, 50, 100, 500, 1000) else 20
 
         base_cond = [ProductMaterial.is_deleted.is_(False)]
+        if exclude_risk_disabled:
+            base_cond.append(ProductMaterial.risk != MATERIAL_RISK_DISABLED)
         if user_id is not None:
             base_cond.append(ProductMaterial.user_id == user_id)
         if title:
@@ -202,9 +210,10 @@ class ProductMaterialService:
     ) -> List[int]:
         """查询素材ID列表（无分页，供前端"全选所有素材"使用）
 
-        筛选条件与 list_materials 保持一致。
+        筛选条件与 list_materials 保持一致；风险=禁用(2)的素材始终排除
+        （全选、scope=all 素材池、内部计数等发布类场景不可包含禁用素材）。
         """
-        base_cond = [ProductMaterial.is_deleted.is_(False)]
+        base_cond = [ProductMaterial.is_deleted.is_(False), ProductMaterial.risk != MATERIAL_RISK_DISABLED]
         if user_id is not None:
             base_cond.append(ProductMaterial.user_id == user_id)
         if title:
@@ -242,6 +251,7 @@ class ProductMaterialService:
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def list_by_ids(self, material_ids: List[int], user_id: int) -> List[ProductMaterial]:
+        """按ID查询素材（发布链路的硬过滤安全网：软删除与禁用(2)素材一律不返回）"""
         if not material_ids:
             return []
         unique_ids = list(dict.fromkeys(material_ids))
@@ -253,46 +263,73 @@ class ProductMaterialService:
                 ProductMaterial.user_id == user_id,
                 ProductMaterial.id.in_(batch),
                 ProductMaterial.is_deleted.is_(False),
+                ProductMaterial.risk != MATERIAL_RISK_DISABLED,
             )
             rows = (await self.session.execute(stmt)).scalars().all()
             for row in rows:
                 material_map[row.id] = row
         return [material_map[mid] for mid in material_ids if mid in material_map]
 
+    async def list_disabled_ids(self, material_ids: List[int], user_id: int) -> List[int]:
+        """查询素材ID列表中处于禁用(2)状态的ID（供调用方给出明确报错提示）"""
+        if not material_ids:
+            return []
+        unique_ids = list(dict.fromkeys(material_ids))
+        disabled_map: dict[int, bool] = {}
+        for i in range(0, len(unique_ids), 500):
+            batch = unique_ids[i:i + 500]
+            stmt = select(ProductMaterial.id, ProductMaterial.risk).where(
+                ProductMaterial.user_id == user_id,
+                ProductMaterial.id.in_(batch),
+                ProductMaterial.is_deleted.is_(False),
+            )
+            for row in (await self.session.execute(stmt)).all():
+                if row[1] == MATERIAL_RISK_DISABLED:
+                    disabled_map[row[0]] = True
+        return [mid for mid in material_ids if mid in disabled_map]
+
     async def sanitize_schedule_material_ids(
         self, material_ids: List[int], user_id: int
-    ) -> tuple[List[int], List[int]]:
-        """净化定时规则素材ID：软删除静默剔除，返回 (有效ID列表, 缺失ID列表)
+    ) -> tuple[List[int], List[int], List[int]]:
+        """净化定时规则素材ID，返回 (有效ID列表, 缺失ID列表, 禁用ID列表)
 
         素材库删除素材后，规则里残留的旧ID不应卡住编辑保存：
-        - 存在且未删除 → 有效（保留原顺序、去重）
+        - 存在且未删除且未禁用 → 有效（保留原顺序、去重）
         - 存在但已软删除 → 静默剔除（不报错）
+        - 存在但风险=禁用(2) → 禁用（由调用方明确报错，不静默剔除）
         - 不存在或不属于当前用户 → 缺失（由调用方决定报错）
         """
         valid: List[int] = []
         missing: List[int] = []
+        disabled: List[int] = []
         seen: set[int] = set()
-        status_map: dict[int, bool] = {}
+        status_map: dict[int, tuple[bool, int]] = {}
         unique_ids = list(dict.fromkeys(material_ids))
         # 分批查询：素材过多时避免 IN 子句超出 MySQL max_allowed_packet
         for i in range(0, len(unique_ids), 500):
             batch = unique_ids[i:i + 500]
-            stmt = select(ProductMaterial.id, ProductMaterial.is_deleted).where(
+            stmt = select(ProductMaterial.id, ProductMaterial.is_deleted, ProductMaterial.risk).where(
                 ProductMaterial.user_id == user_id,
                 ProductMaterial.id.in_(batch),
             )
             for row in (await self.session.execute(stmt)).all():
-                status_map[row[0]] = bool(row[1])
+                status_map[row[0]] = (bool(row[1]), int(row[2] or 0))
         for mid in material_ids:
             if mid in seen:
                 continue
             seen.add(mid)
             if mid not in status_map:
                 missing.append(mid)
-            elif not status_map[mid]:
-                valid.append(mid)
-            # 已软删除：静默剔除
-        return valid, missing
+                continue
+            is_deleted, risk = status_map[mid]
+            if is_deleted:
+                # 已软删除：静默剔除
+                continue
+            if risk == MATERIAL_RISK_DISABLED:
+                disabled.append(mid)
+                continue
+            valid.append(mid)
+        return valid, missing, disabled
 
     async def list_for_schedule(
         self, material_ids: List[int], user_id: int, material_scope: str = "selected",
@@ -324,14 +361,14 @@ class ProductMaterialService:
             "platform_channel_category_id", "platform_channel_category_name",
             "platform_leaf_id", "platform_tb_category_id", "platform_category_path", "platform_attributes",
             "category_source", "category_confidence", "images", "videos", "specifications", "sku_rows", "quantity",
-            "delivery_method", "shipping_method", "support_pickup", "postage", "address", "address_expected_text", "brand", "condition", "stock", "remark",
+            "delivery_method", "shipping_method", "support_pickup", "postage", "address", "address_expected_text", "brand", "condition", "stock", "remark", "risk",
         ]
         for field in updatable:
             if field in data:
                 value = data[field]
                 if field in ("price", "original_price", "postage"):
                     value = float(value) if value else (None if field == "original_price" else 0)
-                if field == "stock":
+                if field in ("stock", "risk"):
                     value = int(value)
                 setattr(material, field, value)
 
@@ -405,6 +442,7 @@ def _material_to_dict(m: ProductMaterial) -> dict:
         "condition": m.condition,
         "stock": int(m.stock) if m.stock is not None else 9999,
         "remark": m.remark,
+        "risk": int(m.risk) if m.risk is not None else 0,
         "created_at": safe_isoformat(m.created_at),
         "updated_at": safe_isoformat(m.updated_at),
     }

@@ -434,7 +434,7 @@ async def preview_weight_algorithm(
     page = 1
     total = 0
     while True:
-        result = await mat_svc.list_materials(user_id=current_user.id, page=page, page_size=1000)
+        result = await mat_svc.list_materials(user_id=current_user.id, page=page, page_size=1000, exclude_risk_disabled=True)
         rows = result["list"]
         materials.extend(rows)
         total = int(result.get("total") or 0)

@@ -13,6 +13,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
 
+# 素材风险状态
+MATERIAL_RISK_NORMAL = 0      # 正常
+MATERIAL_RISK_DANGEROUS = 1   # 危险（仅警示，不拦截发布）
+MATERIAL_RISK_DISABLED = 2    # 禁用（不可用于任何发布链路）
+VALID_MATERIAL_RISK_VALUES = {MATERIAL_RISK_NORMAL, MATERIAL_RISK_DANGEROUS, MATERIAL_RISK_DISABLED}
+
 
 class ProductMaterial(TimestampMixin, Base):
     """商品素材库表 - 存储可复用的商品发布模板"""
@@ -55,4 +61,5 @@ class ProductMaterial(TimestampMixin, Base):
     condition: Mapped[str] = mapped_column(String(20), default="全新", comment="成色：全新/99新/95新等")
     stock: Mapped[int] = mapped_column(Integer, default=9999, comment="库存数量")
     remark: Mapped[str | None] = mapped_column(String(500), comment="备注（仅内部使用，不发布到闲鱼）")
+    risk: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="风险状态：0-正常,1-危险,2-禁用")
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, comment="是否已删除（软删除）")
