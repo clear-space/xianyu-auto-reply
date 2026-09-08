@@ -11,19 +11,24 @@
 口径说明（实调验证）：
 - recent1d / recent7d 为滚动窗口；want_count 为累计值；上架天数为当前状态值
 - datacompass.item.list 仅覆盖在售商品，pageSize=300 一次返回全量
+- 落库归一化：零值/无值占位符（"-"、"null" 等）→ NULL；金额剥离 ¥/￥/千分位；
+  上架日期归一为 yyyyMMdd
+- want_count 跨天保真：当日详情接口采集失败时回退上一非空历史值
+  （累计值语义安全，避免最新快照行 NULL 导致列表整天显示 "--"）
 """
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.xy_account import XYAccount
 from common.services.xianyu_mtop import mtop_call
-from common.utils.time_utils import get_beijing_now
+from common.utils.time_utils import BEIJING_TZ, get_beijing_now
 
 # 数据罗盘商品列表接口（一次性全量在售商品，pageSize=300）
 DATACOMPASS_ITEM_LIST_API = "mtop.alibaba.idle.seller.pc.datacompass.item.list"
@@ -118,21 +123,75 @@ async def fetch_item_want_count(cookies_str: str, seller_id: str, item_id: str) 
 
 
 def _to_int(value: Any) -> Optional[int]:
-    """安全转 int（字符串数字/数字均可），失败返回 None"""
+    """安全转 int（字符串数字/数字均可）；数据罗盘对零值/无值可能返回
+    "-"、"null" 等占位符，含千分位逗号 → 统一归一为 None，避免脏值落库"""
     if value is None or value == "":
         return None
+    s = str(value).strip()
+    if s in ("-", "--", "null", "None", "none"):
+        return None
     try:
-        return int(float(value))
+        return int(float(s.replace(",", "")))
     except (TypeError, ValueError):
         return None
 
 
 def _to_str(value: Any) -> Optional[str]:
-    """安全转短字符串"""
+    """安全转短字符串；"-"/空串归一为 None（数据罗盘无值占位符）"""
     if value is None:
         return None
-    s = str(value)
+    s = str(value).strip()
+    if not s or s == "-":
+        return None
     return s[:32] if s else None
+
+
+def _to_amount(value: Any) -> Optional[str]:
+    """把数据罗盘金额字符串归一为纯数字字符串（剥离 ¥/￥/千分位逗号）
+
+    无成交时数据罗盘可能返回 "-" → None，避免前端渲染成 "¥-"；
+    剥离货币符号后落库，保证排序 CAST 与前端 `¥{pay_amt}` 前缀均正确。
+    """
+    s = _to_str(value)
+    if s is None:
+        return None
+    cleaned = s.replace("¥", "").replace("￥", "").replace(",", "").strip()
+    if not cleaned or cleaned == "-":
+        return None
+    try:
+        float(cleaned)  # 仅做数值合法性校验，保留原始数字字符串口径
+    except ValueError:
+        return None
+    return cleaned[:32]
+
+
+def _to_yyyymmdd(value: Any) -> Optional[str]:
+    """把上架日期归一为 yyyyMMdd（8 位）
+
+    兼容：8 位数字、"YYYY-MM-DD"、"YYYY-MM-DD HH:MM:SS"、
+    "YYYY-MM-DDTHH:MM:SS"、毫秒/秒时间戳；无法识别时原样返回
+    （保留原始信息，由前端兜底展示），"-" 等占位符归一为 None。
+    """
+    s = _to_str(value)
+    if s is None:
+        return None
+    if s.isdigit():
+        if len(s) == 8:
+            return s
+        # 时间戳（毫秒/秒）→ 按北京时区取日期部分
+        try:
+            ts = float(s)
+            if ts > 1e12:
+                ts /= 1000
+            return datetime.fromtimestamp(ts, tz=BEIJING_TZ).strftime("%Y%m%d")
+        except (ValueError, OverflowError, OSError):
+            return s
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y%m%d")
+        except ValueError:
+            continue
+    return s
 
 
 async def snapshot_account_stats(
@@ -174,8 +233,30 @@ async def snapshot_account_stats(
         return_exceptions=True,
     )
 
-    # 3. UPSERT 快照表
+    # 3. 想要数跨天保真：详情接口单日失败时回退上一非空历史值，
+    #    避免"最新快照行为 NULL → 列表整天显示 --"（想要数是累计值，回退语义安全）
+    prev_want: Dict[str, int] = {}
+    item_id_list = [str(r.get("itmId")) for r in items]
+    if item_id_list:
+        try:
+            prev_rows = await session.execute(
+                text(
+                    "SELECT item_id, want_count FROM xy_item_stats_daily "
+                    "WHERE account_id = :account_id AND item_id IN :item_ids "
+                    "AND stat_date < :stat_date AND want_count IS NOT NULL "
+                    "ORDER BY item_id, stat_date DESC"
+                ).bindparams(bindparam("item_ids", expanding=True)),
+                {"account_id": seller_id, "item_ids": item_id_list, "stat_date": stat_date},
+            )
+            for row in prev_rows:
+                if row.item_id not in prev_want:
+                    prev_want[row.item_id] = row.want_count
+        except Exception as e:
+            logger.warning(f"【{seller_id}】读取想要数历史回退值失败（不影响主流程）: {e}")
+
+    # 4. UPSERT 快照表
     want_ok = 0
+    want_fallback = 0
     inserted = 0
     upsert_sql = text(
         """
@@ -216,6 +297,10 @@ async def snapshot_account_stats(
         want_count = want if isinstance(want, int) else None
         if want_count is not None:
             want_ok += 1
+        elif item_id in prev_want:
+            # 当日详情接口失败 → 回退上一非空历史值（累计值语义安全）
+            want_count = prev_want[item_id]
+            want_fallback += 1
         row_7d = map_7d.get(item_id) or {}
 
         params = {
@@ -229,7 +314,7 @@ async def snapshot_account_stats(
             "chat_uv_1d": _to_int(row.get("chatUv")),
             "pay_ord_cnt_1d": _to_int(row.get("payOrdCnt")),
             "pay_byr_cnt_1d": _to_int(row.get("payByrCnt")),
-            "pay_amt_1d": _to_str(row.get("payAmt")),
+            "pay_amt_1d": _to_amount(row.get("payAmt")),
             "ipv_pay_ucvr_1d": _to_str(row.get("ipvPayUcvr")),
             "show_pv_7d": _to_int(row_7d.get("showPv")),
             "show_uv_7d": _to_int(row_7d.get("showUv")),
@@ -238,11 +323,11 @@ async def snapshot_account_stats(
             "chat_uv_7d": _to_int(row_7d.get("chatUv")),
             "pay_ord_cnt_7d": _to_int(row_7d.get("payOrdCnt")),
             "pay_byr_cnt_7d": _to_int(row_7d.get("payByrCnt")),
-            "pay_amt_7d": _to_str(row_7d.get("payAmt")),
+            "pay_amt_7d": _to_amount(row_7d.get("payAmt")),
             "ipv_pay_ucvr_7d": _to_str(row_7d.get("ipvPayUcvr")),
             "want_count": want_count,
             "days_on_shelf": _to_int(row.get("daysOnShelf")),
-            "post_dt": _to_str(row.get("postDt")),
+            "post_dt": _to_yyyymmdd(row.get("postDt")),
         }
         try:
             await session.execute(upsert_sql, params)
@@ -253,7 +338,7 @@ async def snapshot_account_stats(
     await session.commit()
     logger.info(
         f"【{seller_id}】商品指标快照完成：写入 {inserted}/{len(items)} 件，"
-        f"想要数成功 {want_ok} 件（stat_date={stat_date}）"
+        f"想要数成功 {want_ok} 件、回退历史值 {want_fallback} 件（stat_date={stat_date}）"
     )
     return {"success": True, "item_count": inserted, "want_ok": want_ok, "error": ""}
 

@@ -4,7 +4,7 @@ import logging
 from typing import Any, Awaitable, Callable, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -30,6 +30,14 @@ from app.services.xianyu_item_edit_service import edit_seller_item, fetch_seller
 
 logger = logging.getLogger(__name__)
 
+
+def _clean_metric_value(value: Any) -> Any:
+    """把快照字段中的无值占位符（"-"/空串）归一为 None，防止前端渲染成 "¥-"
+
+    写入侧（item_stats_service）已做归一化，此处兜底清洗历史脏数据。
+    """
+    return None if value in (None, "", "-") else value
+
 items_router = APIRouter(prefix="/items", tags=["items"])
 
 
@@ -41,20 +49,27 @@ async def _get_latest_item_stats(
 
     快照由 scheduler 商品指标快照任务每日凌晨采集写入；
     无快照（当天新发布等）的商品不在返回映射中，字段为 None。
+    用 MAX(stat_date) 子查询直取最新行，避免把每件商品的全部历史
+    快照拉回 Python 再取最新（100 件/页 × 保留 30 天 ≈ 3000 行/请求）。
     """
     if not item_ids:
         return {}
-    result = await db.execute(
-        select(ItemStatsDaily)
+    max_date_subq = (
+        select(ItemStatsDaily.item_id, func.max(ItemStatsDaily.stat_date).label("max_date"))
         .where(ItemStatsDaily.item_id.in_(item_ids))
-        .order_by(ItemStatsDaily.item_id, ItemStatsDaily.stat_date.desc())
+        .group_by(ItemStatsDaily.item_id)
+        .subquery()
     )
-    rows = result.scalars().all()
-    latest_map: Dict[str, ItemStatsDaily] = {}
-    for row in rows:
-        if row.item_id not in latest_map:
-            latest_map[row.item_id] = row
-    return latest_map
+    result = await db.execute(
+        select(ItemStatsDaily).join(
+            max_date_subq,
+            and_(
+                ItemStatsDaily.item_id == max_date_subq.c.item_id,
+                ItemStatsDaily.stat_date == max_date_subq.c.max_date,
+            ),
+        )
+    )
+    return {row.item_id: row for row in result.scalars().all()}
 
 
 async def _execute_batch_item_operation(
@@ -203,9 +218,9 @@ async def list_items_paginated(
         it["ipv"] = s.ipv_7d if s else None
         it["ipv_uv"] = s.ipv_uv_7d if s else None
         it["chat_uv"] = s.chat_uv_7d if s else None
-        it["pay_amt"] = s.pay_amt_7d if s else None
+        it["pay_amt"] = _clean_metric_value(s.pay_amt_7d) if s else None
         it["pay_ord_cnt"] = s.pay_ord_cnt_7d if s else None
-        it["ipv_pay_ucvr"] = s.ipv_pay_ucvr_7d if s else None
+        it["ipv_pay_ucvr"] = _clean_metric_value(s.ipv_pay_ucvr_7d) if s else None
         it["want_count"] = s.want_count if s else None
 
     return {

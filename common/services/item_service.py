@@ -48,11 +48,16 @@ def normalize_publish_time(value) -> str | None:
             for fmt in (
                 "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
                 "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d",
+                # 带时区偏移的 ISO 格式（如卖家平台 gmtShelf 的 +08:00）
+                "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z",
             ):
                 try:
                     parsed = datetime.strptime(digits, fmt)
                 except ValueError:
                     continue
+                if parsed.tzinfo is not None:
+                    # aware 时间用 astimezone 换算（replace 会错误覆盖原时区）
+                    return parsed.astimezone(timezone.utc).isoformat()
                 return parsed.replace(tzinfo=timezone.utc).isoformat()
     except (ValueError, OverflowError, OSError):
         pass

@@ -110,6 +110,7 @@ class SchedulerService:
         self._red_flower_task_handle: Optional[asyncio.Task] = None
         self._db_backup_task_handle: Optional[asyncio.Task] = None
         self._item_stats_snapshot_task_handle: Optional[asyncio.Task] = None
+        self._item_stats_interval_warned: bool = False  # 快照任务间隔被钳制时仅告警一次
         self._delivery_timeout_task_handle: Optional[asyncio.Task] = None
         self._listing_monitor_task_handle: Optional[asyncio.Task] = None
         self._seller_fill_task_handle: Optional[asyncio.Task] = None
@@ -1355,7 +1356,16 @@ class SchedulerService:
             if not config:
                 config = {"interval_seconds": 600, "enabled": True}
 
-            interval = config.get("interval_seconds", 600)
+            raw_interval = config.get("interval_seconds", 600)
+            # 该任务依赖 3:00~4:00 采集窗口内的轮询触发，间隔过大（如被管理员改大）
+            # 会使轮询网格整天错过窗口 → 钳制到 60~600 秒（任务内部还有 4:00 后兜底执行兜住）
+            interval = max(60, min(int(raw_interval), 600))
+            if interval != raw_interval and not self._item_stats_interval_warned:
+                self._item_stats_interval_warned = True
+                logger.warning(
+                    f"[定时任务调度] 商品指标快照任务间隔 {raw_interval} 秒超出 60~600 秒范围，"
+                    f"已钳制为 {interval} 秒（凌晨采集窗口依赖高频轮询触发）"
+                )
             enabled = config.get("enabled", True)
 
             if enabled:

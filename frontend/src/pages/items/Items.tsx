@@ -77,6 +77,16 @@ const COLUMN_OPTIONS: { key: string; label: string }[] = [
 /** 列显隐本地持久化键 */
 const COLUMNS_PREF_KEY = 'items_columns_hidden_v1'
 
+/** 把上架日期字符串安全格式化为 YYYY-MM-DD（兼容 8 位 yyyyMMdd 与各种带分隔符/时间戳格式） */
+const formatPostDate = (value?: string | null): string | null => {
+  if (!value) return null
+  const digits = String(value).replace(/\D/g, '')
+  if (digits.length >= 8) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`
+  }
+  return String(value)
+}
+
 const ITEM_STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   on_sale: { label: '在售', cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
   sold: { label: '已售出', cls: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
@@ -1800,7 +1810,7 @@ export function Items() {
                     <td className="text-center text-gray-600 dark:text-gray-300">
                       {item.days_on_shelf != null ? (
                         <span
-                          title={item.post_dt ? `上架日期 ${item.post_dt.slice(0, 4)}-${item.post_dt.slice(4, 6)}-${item.post_dt.slice(6, 8)}` : undefined}
+                          title={formatPostDate(item.post_dt) ? `上架日期 ${formatPostDate(item.post_dt)}` : undefined}
                         >
                           {item.days_on_shelf} 天
                         </span>
@@ -1855,7 +1865,7 @@ export function Items() {
                     )}
                     {isColVisible('pay_amt') && (
                     <td className="text-center text-amber-600 font-medium">
-                      {item.pay_amt != null ? (
+                      {item.pay_amt != null && item.pay_amt !== '-' ? (
                         <span>¥{item.pay_amt}</span>
                       ) : (
                         <span className="text-gray-400">--</span>
@@ -1876,7 +1886,7 @@ export function Items() {
                     {isColVisible('ipv_pay_ucvr') && (
                     <td className="text-center text-gray-600 dark:text-gray-300">
                       {item.ipv_pay_ucvr != null ? (
-                        <span className={item.ipv_pay_ucvr === '0.00%' ? 'text-gray-400' : undefined}>
+                        <span className={parseFloat(String(item.ipv_pay_ucvr)) === 0 ? 'text-gray-400' : undefined}>
                           {item.ipv_pay_ucvr}
                         </span>
                       ) : (

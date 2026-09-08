@@ -154,6 +154,9 @@ class SellerItemInfoManager:
             "quantity": raw.get("quantity", ""),
             "gmt_create": raw.get("gmtCreate", ""),
             "gmt_shelf": raw.get("gmtShelf", ""),
+            # 上架时间：与个人版 publish_time 对齐（供自动下架规则筛选使用），
+            # 卖家平台优先取 gmtShelf，缺失回退 gmtCreate；无值置 None（勿给 0）
+            "publish_time": raw.get("gmtShelf") or raw.get("gmtCreate") or None,
             "item_type": raw.get("itemType", ""),
             "image_url": image_url,
             "fan_price": raw.get("fanPrice", {}),
