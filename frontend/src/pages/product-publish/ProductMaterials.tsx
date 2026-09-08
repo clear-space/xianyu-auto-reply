@@ -7,10 +7,11 @@
  * 3. 筛选（标题、分类、成色）
  * 4. 勾选批量删除
  * 5. 素材用于单品发布和批量发布
+ * 6. AI 铺货：批量生成素材（弹窗内配置与进度，进度由后端落库，刷新页面可恢复）
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, X, FolderOpen } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, Sparkles, X, FolderOpen } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { getMaterials, deleteMaterial, batchDeleteMaterials, type ProductMaterial } from '@/api/productPublish'
@@ -18,6 +19,8 @@ import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { MaterialFormModal } from './MaterialFormModal'
 import { BatchImportModal } from './BatchImportModal'
+import { AiListingModal } from './ai-listing/AiListingModal'
+import { useAiListingTask } from './ai-listing/useAiListingTask'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 
@@ -59,6 +62,9 @@ export function ProductMaterials() {
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
   const [batchDeleting, setBatchDeleting] = useState(false)
 
+  // AI 铺货
+  const [showAiModal, setShowAiModal] = useState(false)
+
   /** 加载素材列表 */
   const load = async (p = page, size = pageSize) => {
     setTableLoading(true)
@@ -88,6 +94,22 @@ export function ProductMaterials() {
   }
 
   useEffect(() => { load(page, pageSize) }, [page, pageSize])
+
+  // AI 铺货任务进度（轮询放在页面级，关闭弹窗后按钮徽章仍会更新）
+  const aiTask = useAiListingTask({
+    onFinished: (task) => {
+      addToast({
+        type: task.failed === 0 && task.success > 0 ? 'success' : 'warning',
+        message: `AI 铺货结束：成功 ${task.success} 条，失败 ${task.failed} 条`,
+      })
+      load(page, pageSize)
+    },
+  })
+
+  // 进入页面时恢复上次未结束的铺货任务
+  useEffect(() => { void aiTask.restoreTracking() }, [aiTask.restoreTracking])
+
+  const aiRunning = Boolean(aiTask.task && !aiTask.task.finished)
 
   /** 执行筛选 */
   const handleFilter = () => {
@@ -204,6 +226,14 @@ export function ProductMaterials() {
           )}
           <button className="btn-ios-secondary" onClick={() => load(page, pageSize)} disabled={tableLoading}>
             <RefreshCw className={`w-4 h-4 ${tableLoading ? 'animate-spin' : ''}`} />刷新
+          </button>
+          <button className="btn-ios-secondary" onClick={() => setShowAiModal(true)}>
+            <Sparkles className="w-4 h-4" />AI 铺货
+            {aiRunning && aiTask.task && (
+              <span className="badge-info ml-1">
+                生成中 {aiTask.task.success + aiTask.task.failed}/{aiTask.task.total}
+              </span>
+            )}
           </button>
           <button className="btn-ios-primary" onClick={() => { setEditTarget(null); setShowModal(true) }}>
             <Plus className="w-4 h-4" />新建素材
@@ -381,6 +411,16 @@ export function ProductMaterials() {
           initial={editTarget}
           onClose={() => setShowModal(false)}
           onSaved={() => { setShowModal(false); load(page, pageSize) }}
+        />
+      )}
+
+      {/* AI 铺货弹窗 */}
+      {showAiModal && (
+        <AiListingModal
+          task={aiTask.task}
+          onStartTracking={aiTask.startTracking}
+          onResetTask={aiTask.resetTask}
+          onClose={() => setShowAiModal(false)}
         />
       )}
 

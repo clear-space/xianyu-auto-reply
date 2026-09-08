@@ -71,6 +71,8 @@ from common.models.offline_schedule import OfflineSchedule
 from common.models.offline_schedule_log import OfflineScheduleLog
 from common.models.weight_algorithm import WeightAlgorithm
 from common.models.chat_quick_phrase import ChatQuickPhrase
+from common.models.ai_listing_config import AiListingConfig
+from common.models.ai_listing_task import AiListingTask, AiListingTaskItem
 
 __all__ = [
     "User",
@@ -148,4 +150,7 @@ __all__ = [
     "OfflineSchedule",
     "OfflineScheduleLog",
     "WeightAlgorithm",
+    "AiListingConfig",
+    "AiListingTask",
+    "AiListingTaskItem",
 ]

@@ -97,6 +97,8 @@ class OrderService:
         owner_id: int | None,
         *,
         account_id: str | None = None,
+        item_ids: list[str] | None = None,
+        order_no: str | None = None,
         status: str | None = None,
         search: str | None = None,
         delivery_method: str | None = None,
@@ -113,6 +115,8 @@ class OrderService:
         Args:
             owner_id: 用户ID，None表示查询所有用户（管理员）
             account_id: 账号ID筛选
+            item_ids: 商品ID筛选
+            order_no: 订单号精确筛选
             status: 订单状态筛选
             search: 搜索关键词（匹配订单号、商品ID、买家ID）
             delivery_method: 发货方式筛选（manual/auto/scheduled）
@@ -137,6 +141,10 @@ class OrderService:
             conditions.append(XYOrder.owner_id == owner_id)
         if account_id:
             conditions.append(XYOrder.account_id == account_id)
+        if item_ids:
+            conditions.append(XYOrder.item_id.in_(item_ids))
+        if order_no:
+            conditions.append(XYOrder.order_no == order_no)
         if status:
             conditions.append(XYOrder.status == status)
         

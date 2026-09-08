@@ -89,7 +89,14 @@ async def lifespan(app: FastAPI):
         await ensure_jwt_secret_key(settings)
     except Exception as e:
         logger.error(f"JWT 密钥自检失败: {e}")
-    
+
+    # 自检 AI 铺货任务：把重启前遗留的进行中任务标记为失败，避免状态永远停在执行中
+    try:
+        from app.services.ai_listing_task_service import mark_stale_running_failed
+        await mark_stale_running_failed()
+    except Exception as e:
+        logger.error(f"AI铺货任务自检失败: {e}")
+
     # 从数据库加载日志保留天数配置
     from common.utils.logging_utils import apply_db_log_retention, run_db_log_retention_sync
     await apply_db_log_retention()

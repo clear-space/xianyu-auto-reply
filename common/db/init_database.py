@@ -2248,6 +2248,77 @@ class DatabaseInitializer:
                 INDEX idx_wa_enabled (enabled)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='上架权重算法表';
         """,
+        # 57. AI铺货配置表
+        "xy_ai_listing_configs": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_configs (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                name VARCHAR(80) NOT NULL COMMENT '配置名称',
+                provider_type VARCHAR(30) NOT NULL DEFAULT 'openai_compatible' COMMENT '服务商类型：openai_compatible 等',
+                text_base_url VARCHAR(300) NOT NULL COMMENT '文案接口地址',
+                text_api_key VARCHAR(500) NOT NULL COMMENT '文案接口密钥',
+                text_model VARCHAR(100) NOT NULL COMMENT '文案模型名称',
+                text_temperature DECIMAL(4,2) NOT NULL DEFAULT 0.70 COMMENT '文案生成温度',
+                text_max_tokens INT NOT NULL DEFAULT 2048 COMMENT '文案生成最大token数',
+                prompt_template TEXT DEFAULT NULL COMMENT '自定义提示词模板（为空则用内置模板）',
+                image_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用AI图片生成',
+                image_base_url VARCHAR(300) DEFAULT NULL COMMENT '图片接口地址',
+                image_api_key VARCHAR(500) DEFAULT NULL COMMENT '图片接口密钥',
+                image_model VARCHAR(100) DEFAULT NULL COMMENT '图片模型名称',
+                image_size VARCHAR(20) NOT NULL DEFAULT '1024x1024' COMMENT '图片尺寸，如 1024x1024',
+                image_count INT NOT NULL DEFAULT 1 COMMENT '每条素材生成图片数量（1~9）',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX ix_xy_ai_listing_configs_owner_id (owner_id),
+                INDEX idx_alc_owner_deleted (owner_id, is_deleted)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货配置表';
+        """,
+
+        # 58. AI铺货任务表
+        "xy_ai_listing_tasks": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_tasks (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                task_id VARCHAR(36) NOT NULL COMMENT '任务ID（UUID）',
+                config_id BIGINT NOT NULL COMMENT '使用的AI铺货配置ID',
+                config_name VARCHAR(80) DEFAULT NULL COMMENT '配置名称快照',
+                keyword VARCHAR(200) NOT NULL COMMENT '生成主题/关键词',
+                total_count INT NOT NULL DEFAULT 0 COMMENT '计划生成条数',
+                success_count INT NOT NULL DEFAULT 0 COMMENT '已成功条数',
+                failed_count INT NOT NULL DEFAULT 0 COMMENT '已失败条数',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/running/success/partial/failed/canceled',
+                error_message VARCHAR(1000) DEFAULT NULL COMMENT '整体失败原因',
+                params JSON DEFAULT NULL COMMENT '提交参数快照（价格模式、素材默认值等）',
+                started_at DATETIME DEFAULT NULL COMMENT '开始执行时间',
+                finished_at DATETIME DEFAULT NULL COMMENT '执行结束时间',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                UNIQUE KEY uq_xy_ai_listing_tasks_task_id (task_id),
+                INDEX ix_xy_ai_listing_tasks_owner_id (owner_id),
+                INDEX idx_alt_owner_created (owner_id, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货任务表';
+        """,
+
+        # 59. AI铺货任务明细表
+        "xy_ai_listing_task_items": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_task_items (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                task_id VARCHAR(36) NOT NULL COMMENT '所属任务ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                seq INT NOT NULL DEFAULT 0 COMMENT '序号（从1开始）',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/running/success/failed',
+                title VARCHAR(200) DEFAULT NULL COMMENT '生成的商品标题',
+                material_id BIGINT DEFAULT NULL COMMENT '入库后的素材ID',
+                image_count INT NOT NULL DEFAULT 0 COMMENT '本条素材图片数量',
+                error_message VARCHAR(1000) DEFAULT NULL COMMENT '失败原因',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX ix_xy_ai_listing_task_items_task_id (task_id),
+                INDEX idx_alti_task_status (task_id, status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货任务明细表';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
