@@ -15,7 +15,7 @@ import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_db_session
@@ -133,16 +133,22 @@ class MaterialCreateRequest(BaseModel):
     specifications: List[ProductSpecificationRequest] = Field(default_factory=list, max_length=2)
     sku_rows: List[PublishSkuRowRequest] = Field(default_factory=list, max_length=200)
     quantity: int = Field(1, ge=1, le=999999, description="发布数量")
-    delivery_method: str = Field("express", description="发货方式：express/pickup")
+    delivery_method: str = Field("express", pattern="^(express|pickup)$", description="发货方式：express/pickup")
     shipping_method: str = Field("free", pattern="^(free|distance|fixed|template|none)$")
     support_pickup: bool = False
-    postage: float = Field(0, ge=0, description="邮费，0表示包邮")
+    postage: float = Field(0, ge=0, le=1000, description="邮费，0表示包邮")
     address: Optional[str] = Field(None, max_length=200, description="宝贝所在地")
     address_expected_text: Optional[str] = Field(None, max_length=200)
     brand: Optional[str] = Field(None, max_length=100, description="品牌")
     condition: str = Field("全新", description="成色")
     stock: int = Field(9999, ge=0, description="库存数量")
     remark: Optional[str] = Field(None, max_length=500, description="备注（内部使用）")
+
+    @model_validator(mode="after")
+    def normalize_delivery_method(self) -> "MaterialCreateRequest":
+        """以 shipping_method 为发布载荷事实来源，统一兼容字段。"""
+        self.delivery_method = "pickup" if self.shipping_method == "none" else "express"
+        return self
 
 
 class MaterialUpdateRequest(BaseModel):
@@ -170,7 +176,7 @@ class MaterialUpdateRequest(BaseModel):
     delivery_method: Optional[str] = Field(None, pattern="^(express|pickup)$")
     shipping_method: Optional[str] = Field(None, pattern="^(free|distance|fixed|template|none)$")
     support_pickup: Optional[bool] = None
-    postage: Optional[float] = Field(None, ge=0)
+    postage: Optional[float] = Field(None, ge=0, le=1000)
     address: Optional[str] = Field(None, max_length=200)
     address_expected_text: Optional[str] = Field(None, max_length=200)
     brand: Optional[str] = Field(None, max_length=100)
@@ -178,6 +184,13 @@ class MaterialUpdateRequest(BaseModel):
     stock: Optional[int] = Field(None, ge=0, description="库存数量")
     remark: Optional[str] = Field(None, max_length=500)
     risk: Optional[int] = Field(None, ge=0, le=2, description="风险状态：0-正常,1-危险,2-禁用")
+
+    @model_validator(mode="after")
+    def normalize_delivery_method(self) -> "MaterialUpdateRequest":
+        """保持兼容字段与实际运费方式一致。"""
+        if self.shipping_method is not None:
+            self.delivery_method = "pickup" if self.shipping_method == "none" else "express"
+        return self
 
 
 class PublishSingleRequest(BaseModel):
@@ -207,12 +220,18 @@ class PublishSingleRequest(BaseModel):
     sku_rows: List[PublishSkuRowRequest] = Field(default_factory=list, max_length=200)
     address: Optional[str] = None
     address_expected_text: Optional[str] = Field(None, max_length=200)
-    delivery_method: str = Field("express", description="发货方式：express/pickup")
+    delivery_method: str = Field("express", pattern="^(express|pickup)$", description="发货方式：express/pickup")
     shipping_method: str = Field("free", pattern="^(free|distance|fixed|template|none)$")
     support_pickup: bool = False
-    postage: float = Field(0, ge=0, description="邮费，0表示包邮")
+    postage: float = Field(0, ge=0, le=1000, description="邮费，0表示包邮")
     brand: Optional[str] = Field(None, description="品牌")
     condition: str = Field("全新", description="成色")
+
+    @model_validator(mode="after")
+    def normalize_delivery_method(self) -> "PublishSingleRequest":
+        """以 shipping_method 为发布载荷事实来源，统一兼容字段。"""
+        self.delivery_method = "pickup" if self.shipping_method == "none" else "express"
+        return self
 
 
 class BatchPublishRequest(BaseModel):

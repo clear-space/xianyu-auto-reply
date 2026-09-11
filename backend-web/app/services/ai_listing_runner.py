@@ -35,6 +35,7 @@ from common.services.ai_image_client import (
     generate_images,
 )
 from common.services.ai_text_client import DEFAULT_TEXT_TIMEOUT
+from app.services.xianyu_item_snapshot import as_bool
 
 # 图片生成的并发度（单任务内）与全局并发上限（跨任务）
 IMAGE_CONCURRENCY = 3
@@ -133,9 +134,9 @@ def _build_material_data(
         "specifications": [],
         "sku_rows": [],
         "quantity": int(defaults.get("quantity") or 1),
-        "delivery_method": defaults.get("delivery_method") or "express",
+        "delivery_method": "pickup" if (defaults.get("shipping_method") or "free") == "none" else "express",
         "shipping_method": defaults.get("shipping_method") or "free",
-        "support_pickup": bool(defaults.get("support_pickup")),
+        "support_pickup": as_bool(defaults.get("support_pickup")),
         "postage": float(defaults.get("postage") or 0),
         "address": defaults.get("address"),
         "brand": defaults.get("brand"),

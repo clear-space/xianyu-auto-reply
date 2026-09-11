@@ -245,6 +245,7 @@ export interface SellerItemEditPayload {
   quantity: number
   address?: string | null
   address_expected_text?: string | null
+  delivery_method: 'express' | 'pickup'
   shipping_method: 'free' | 'distance' | 'fixed' | 'template' | 'none'
   support_pickup: boolean
   postage: number

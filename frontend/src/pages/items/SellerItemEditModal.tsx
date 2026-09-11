@@ -108,7 +108,8 @@ const toFormState = (detail: SellerItemEditForm): SellerEditFormState => {
     platform_attributes: detail.platform_attributes || [],
     category_source: detail.category_source || 'manual',
     videos: detail.videos || [],
-    quantity: detail.quantity || 1,
+    // 平台售罄商品库存允许为 0，不能用 || 把它回填成 1。
+    quantity: detail.quantity ?? 1,
     address: detail.address || '',
     address_expected_text: detail.address_expected_text || undefined,
     delivery_method: detail.delivery_method || 'express',
@@ -155,6 +156,7 @@ const toEditPayload = (form: SellerEditFormState): SellerItemEditPayload => {
     quantity: form.specifications.length > 0 ? 1 : form.quantity,
     address: form.address.trim() || null,
     address_expected_text: form.address_expected_text?.trim() || null,
+    delivery_method: form.delivery_method,
     shipping_method: form.shipping_method,
     support_pickup: form.support_pickup,
     postage: Number(form.postage) || 0,

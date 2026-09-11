@@ -16,6 +16,10 @@ import aiohttp
 from app.core.config import get_settings
 from app.core.http_client import get_http_client
 from common.services.captcha.remote_timeout import get_remote_solve_timeout
+from common.utils.internal_auth import (
+    build_internal_auth_headers,
+    is_internal_api_url,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -295,6 +299,13 @@ class WebSocketServiceClient:
             websocket 返回的响应字典（success / data.engine / data.cookies）
         """
         endpoint = f"{self.base_url}/internal/captcha/solve"
+        if not is_internal_api_url(endpoint, (self.base_url,)):
+            logger.error(f"过滑块服务地址不合法: {endpoint}")
+            return {
+                "success": False,
+                "message": "过滑块服务地址不合法",
+                "_request_not_sent": True,
+            }
         request_not_sent_errors = (aiohttp.ClientConnectorError, aiohttp.InvalidURL)
         connection_timeout_error = getattr(aiohttp, "ConnectionTimeoutError", None)
         if connection_timeout_error is not None:
@@ -324,7 +335,11 @@ class WebSocketServiceClient:
                     payload["persist_token_cache"] = True
                     payload["token_user_id"] = token_user_id or ""
                     payload["token_cache_write_mode"] = token_cache_write_mode or "renewal"
-                async with session.post(endpoint, json=payload) as resp:
+                async with session.post(
+                    endpoint,
+                    json=payload,
+                    headers=build_internal_auth_headers(settings.internal_api_token),
+                ) as resp:
                     return await resp.json(content_type=None)
         except request_not_sent_errors as e:
             logger.error(f"无法连接过滑块服务: account_id={account_id}, 错误: {e}")

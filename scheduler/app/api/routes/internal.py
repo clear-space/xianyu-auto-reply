@@ -9,7 +9,7 @@ Scheduler服务内部API路由
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from loguru import logger
 from pydantic import BaseModel
 
@@ -17,8 +17,13 @@ from app.services.scheduler.listing_monitor_task import listing_monitor_task_ser
 from app.services.scheduler_service import get_scheduler_service
 from common.services.account_cooldown import account_cooldown_manager
 from common.utils.time_utils import get_beijing_now_naive
+from app.api.deps import require_internal_auth
 
-router = APIRouter(prefix="/internal", tags=["internal"])
+router = APIRouter(
+    prefix="/internal",
+    tags=["internal"],
+    dependencies=[Depends(require_internal_auth)],
+)
 
 
 class LogRetentionRequest(BaseModel):

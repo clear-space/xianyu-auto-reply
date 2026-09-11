@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from common.services.account_cookie_service import merge_account_cookie_fields
@@ -29,14 +29,20 @@ from common.services.risk_control_log_query_service import (
     get_account_risk_control_lock,
 )
 from common.services.token_renewal_cache_service import (
+    delete_token_cache,
     mark_token_cache_expired,
     upsert_token_cache,
     write_renewed_token_cache,
 )
 from common.services.token_api_mode import load_token_api_mode
 from common.utils.xianyu_utils import trans_cookies
+from app.api.deps import require_internal_auth
 
-router = APIRouter(prefix="/internal", tags=["internal"])
+router = APIRouter(
+    prefix="/internal",
+    tags=["internal"],
+    dependencies=[Depends(require_internal_auth)],
+)
 
 
 class StartAccountRequest(BaseModel):
@@ -320,11 +326,10 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
                     logger.warning(f"解析Cookie获取unb失败: {parse_e}")
                     unb = ""
 
-            # 3) 用正确的 unb 作为 user_id 标记 Token 缓存失效
+            # 3) 用正确的 unb 作为唯一 user_id 删除 Token 缓存
             if unb:
-                invalidation = await mark_token_cache_expired(
+                invalidation = await delete_token_cache(
                     token_user_id=unb,
-                    invalidate_valid_cache=True,
                 )
                 logger.info(
                     f"账号重启前{invalidation.message}: "

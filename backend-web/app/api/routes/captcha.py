@@ -31,10 +31,12 @@ from app.services.remote_captcha_admission_service import (
 from app.services.risk_control_log_service import RiskControlLogService
 from app.services.system_setting_service import SystemSettingService
 from app.services.websocket_client import websocket_client
+from app.core.config import get_settings
 from common.db.session import async_session_maker
 from common.models.system_setting import SystemSetting
 from common.models.user import User
 from common.schemas.common import ApiResponse
+from common.utils.internal_auth import build_internal_auth_headers, is_internal_api_url
 
 router = APIRouter(prefix="/captcha", tags=["验证码"])
 
@@ -690,14 +692,37 @@ async def test_remote_slider_solve(
         "account_id": "connectivity-test",
         "url": "",  # 故意留空：只测连通+秘钥，不真正过滑块
     }
-    logger.info(f"[过滑块测试] 请求远程服务 url={url} payload={payload}")
+    settings = get_settings()
+    allowed_internal_bases = tuple(
+        value
+        for value in (
+            settings.websocket_service_url,
+            getattr(settings, "scheduler_service_url", ""),
+        )
+        if value
+    )
+    request_headers: dict[str, str] = {}
+    if is_internal_api_url(url, allowed_internal_bases):
+        token = (settings.internal_api_token or "").strip()
+        if token:
+            request_headers = build_internal_auth_headers(token)
+    # 只记录是否提供秘钥和长度，禁止把远程秘钥原文写入日志。
+    logger.info(
+        "[过滑块测试] 请求远程服务 url={} secret_key_present={} secret_key_length={}",
+        url.split("?", 1)[0],
+        bool(payload["secret_key"]),
+        len(payload["secret_key"]),
+    )
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-            async with session.post(url, json=payload) as resp:
+            async with session.post(url, json=payload, headers=request_headers) as resp:
                 # 打印远程服务原始返回（状态码 + 文本）
                 raw_text = await resp.text()
+                # 远程服务可能回显请求体中的秘钥或 Cookie，日志只保留状态和长度。
                 logger.info(
-                    f"[过滑块测试] 远程响应 status={resp.status} body={raw_text}"
+                    "[过滑块测试] 远程响应 status={} body_length={}",
+                    resp.status,
+                    len(raw_text),
                 )
                 try:
                     body = await resp.json(content_type=None)

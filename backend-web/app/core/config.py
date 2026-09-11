@@ -47,11 +47,11 @@ class BackendWebConfig(BaseConfig):
     
     # 服务间通信URL
     websocket_service_url: str = Field(
-        default="http://localhost:8090",
+        default="http://127.0.0.1:8090",
         alias="WEBSOCKET_SERVICE_URL"
     )
     scheduler_service_url: str = Field(
-        default="http://localhost:8091",
+        default="http://127.0.0.1:8091",
         alias="SCHEDULER_SERVICE_URL"
     )
     
@@ -65,7 +65,7 @@ class BackendWebConfig(BaseConfig):
 
     # Backend-Web服务的公网访问地址（用于生成文件URL）
     backend_web_public_url: str = Field(
-        default="http://localhost:8089",
+        default="http://127.0.0.1:8089",
         alias="BACKEND_WEB_PUBLIC_URL"
     )
 

@@ -16,6 +16,9 @@ from typing import Any, Dict, Optional
 
 import aiohttp
 
+from app.core.config import get_settings
+from common.utils.internal_auth import is_internal_api_url, merge_internal_auth_headers
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,6 +109,17 @@ class HTTPClient:
         # 本次请求的超时与重试：显式传入时覆盖实例默认，否则沿用实例默认
         req_timeout = aiohttp.ClientTimeout(total=timeout) if timeout is not None else self.timeout
         req_max_retries = max_retries if max_retries is not None else self.max_retries
+
+        # 仅对服务间 /internal 请求加入令牌，避免把内部凭证发送给外部服务。
+        settings = get_settings()
+        if is_internal_api_url(
+            url,
+            (
+                settings.websocket_service_url,
+                settings.scheduler_service_url,
+            ),
+        ):
+            headers = merge_internal_auth_headers(headers, settings.internal_api_token)
 
         for attempt in range(req_max_retries):
             try:

@@ -74,7 +74,13 @@ class AiListingMaterialDefaults(BaseModel):
         "free", pattern="^(free|distance|fixed|template|none)$", description="运费方式"
     )
     support_pickup: bool = Field(False, description="是否支持自提")
-    postage: float = Field(0, ge=0, le=9999, description="邮费")
+    postage: float = Field(0, ge=0, le=1000, description="邮费，0到1000元")
+
+    @model_validator(mode="after")
+    def normalize_delivery_method(self) -> "AiListingMaterialDefaults":
+        """以实际运费方式统一兼容字段 delivery_method。"""
+        self.delivery_method = "pickup" if self.shipping_method == "none" else "express"
+        return self
     address: Optional[str] = Field(None, max_length=200, description="宝贝所在地")
     remark: Optional[str] = Field(None, max_length=500, description="内部备注")
     images: List[str] = Field(
@@ -120,5 +126,4 @@ __all__ = [
     "AiListingModelListRequest",
     "AiListingTaskCreateRequest",
 ]
-
 
