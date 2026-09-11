@@ -388,10 +388,21 @@ export function SystemInfo() {
 
   const pieData = useMemo(() => {
     const dirs = storage?.dirs ?? {}
-    return Object.entries(dirs)
+    const dirEntries = Object.entries(dirs)
       .map(([name, info]) => ({ name, value: info.size_bytes }))
       .sort((a, b) => b.value - a.value)
-  }, [storage])
+    // 数据库为首切片（与下方存储分布表格一致）
+    return [
+      ...(dbSize > 0 ? [{ name: '数据库（MySQL）', value: dbSize }] : []),
+      ...dirEntries,
+    ]
+  }, [storage, dbSize])
+
+  // 存储总量（数据库 + 文件目录），显示在环形图中心
+  const totalStorageBytes = useMemo(
+    () => pieData.reduce((sum, item) => sum + item.value, 0),
+    [pieData],
+  )
 
   // 存储分布表格行（首行为数据库合成行，其余来自目录体积统计）
   const storageRows = useMemo(() => {
@@ -692,16 +703,26 @@ export function SystemInfo() {
               </div>
               <div className="vben-card-body">
                 <div className="flex items-center">
-                  <ResponsiveContainer width="55%" height={200}>
-                    <PieChart>
-                      <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={2}>
-                        {pieData.map((_, i) => (
-                          <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value) => formatBytes(Number(value ?? 0))} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                  <div className="relative" style={{ width: '55%' }}>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <PieChart>
+                        <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={2}>
+                          {pieData.map((_, i) => (
+                            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value) => formatBytes(Number(value ?? 0))} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    {pieData.length > 0 && (
+                      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                        <span className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                          {formatBytes(totalStorageBytes)}
+                        </span>
+                        <span className="text-xs text-slate-400">存储总量</span>
+                      </div>
+                    )}
+                  </div>
                   <div className="flex-1 space-y-1.5">
                     {pieData.map((item, i) => (
                       <div key={item.name} className="flex items-center justify-between text-xs">
