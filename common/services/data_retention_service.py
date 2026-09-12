@@ -122,19 +122,21 @@ async def cleanup_created_at_table(
     session: AsyncSession,
     table_name: str,
     days_config_key: str,
+    column: str = "created_at",
     log_prefix: str = "[数据保留清理]",
 ) -> int:
     """单表清理辅助函数：删除时间列早于 (当前北京时间 - 保留天数) 的记录。
 
     供统一清理引擎与各定时任务内嵌的 _cleanup_expired_logs 共用，
-    统一保留天数来源。返回删除行数；失败时抛出异常由调用方处理。
+    统一保留天数来源。column 为时间列名（默认 created_at，个别表如
+    xy_goofish_crawl_items 为 fetched_at）。返回删除行数；失败时抛出异常由调用方处理。
     """
     days = await get_retention_days(days_config_key)
     cutoff = get_beijing_now_naive() - timedelta(days=days)
     batch_size = await get_setting_int(CONFIG_BATCH_SIZE, DEFAULT_BATCH_SIZE)
     max_batches = await get_setting_int(CONFIG_MAX_BATCHES, DEFAULT_MAX_BATCHES_PER_TABLE)
     deleted = await _delete_in_batches(
-        session, table_name, "created_at", cutoff, batch_size, max_batches, log_prefix
+        session, table_name, column, cutoff, batch_size, max_batches, log_prefix
     )
     if deleted > 0:
         logger.info(f"{log_prefix} 表 {table_name} 已清理 {deleted} 条超过 {days} 天的记录（截止: {cutoff}）")
@@ -241,7 +243,9 @@ async def run_all_cleanup() -> list[dict]:
                 if mode == "token_cache":
                     deleted = await _cleanup_token_cache_table(session)
                 else:
-                    deleted = await cleanup_created_at_table(session, table_name, config_key)
+                    deleted = await cleanup_created_at_table(
+                        session, table_name, config_key, column=column
+                    )
                 record["deleted_rows"] = deleted
             except Exception as exc:
                 record["status"] = "failed"
