@@ -588,6 +588,7 @@ class ItemService:
         normalized_required_title_keyword = str(required_title_keyword or "").strip()
 
         manager = await self._resolve_item_fetch_manager(account)
+        supports_groups = getattr(manager, "supports_groups", False)  # 默认 False 安全降级
         fetched_items: list[dict] = []
         total_saved_count = 0
         fetched_pages = 0
@@ -595,38 +596,47 @@ class ItemService:
         groups_complete = False  # 两个分组都成功抓完才允许对账（防误标）
         early_break = False  # 任一分组因「整页已存在」提前停止翻页（增量同步，抓取不完整）
         try:
-            # 0. 动态获取商品分组（在售/已售出），分组ID按账号变化，不写死
+            # 0. 动态获取商品分组（在售/已售出），分组ID按账号变化，不写死。
+            # 鱼小铺（卖家平台接口）不支持分组：跳过探测，避免无意义探测请求与误导性告警。
             target_groups: list[tuple[str, Any]] = [("在售", None)]
-            try:
-                group_result = await manager.get_item_list_info(
-                    1, 5, myid=myid, need_group_info=True
-                )
-                if group_result and group_result.get("success"):
-                    raw = group_result.get("raw_data") or {}
-                    group_map: dict[str, Any] = {}
-                    for g in (raw.get("itemGroupList") or []):
-                        name = g.get("groupName")
-                        gid = g.get("groupId")
-                        if name in ("在售", "已售出") and gid is not None:
-                            group_map[name] = gid
-                    if group_map:
-                        target_groups = [
-                            (name, group_map.get(name)) for name in ("在售", "已售出")
-                        ]
-                        logger.info(f"账号[{account.account_id}]商品分组: {list(group_map.items())}")
+            if supports_groups:
+                try:
+                    group_result = await manager.get_item_list_info(
+                        1, 5, myid=myid, need_group_info=True
+                    )
+                    if group_result and group_result.get("success"):
+                        raw = group_result.get("raw_data") or {}
+                        group_map: dict[str, Any] = {}
+                        for g in (raw.get("itemGroupList") or []):
+                            name = g.get("groupName")
+                            gid = g.get("groupId")
+                            if name in ("在售", "已售出") and gid is not None:
+                                group_map[name] = gid
+                        if group_map:
+                            target_groups = [
+                                (name, group_map.get(name)) for name in ("在售", "已售出")
+                            ]
+                            logger.info(f"账号[{account.account_id}]商品分组: {list(group_map.items())}")
+                        else:
+                            logger.warning(
+                                f"账号[{account.account_id}]未获取到商品分组，仅抓取在售分组（跳过对账）"
+                            )
                     else:
                         logger.warning(
-                            f"账号[{account.account_id}]未获取到商品分组，仅抓取在售分组（跳过对账）"
+                            f"账号[{account.account_id}]获取商品分组失败，仅抓取在售分组（跳过对账）"
                         )
-                else:
-                    logger.warning(
-                        f"账号[{account.account_id}]获取商品分组失败，仅抓取在售分组（跳过对账）"
-                    )
-            except Exception as exc:
-                logger.warning(f"账号[{account.account_id}]获取商品分组异常（回退仅抓在售）: {exc}")
+                except Exception as exc:
+                    logger.warning(f"账号[{account.account_id}]获取商品分组异常（回退仅抓在售）: {exc}")
+            else:
+                logger.info(
+                    f"账号[{account.account_id}]当前抓取器不支持商品分组，仅抓取在售分组（跳过对账）"
+                )
 
             for group_name, group_id in target_groups:
                 group_status = 0 if group_name == "在售" else 1  # 0=在售, 1=已售出
+                fetch_kwargs: dict[str, Any] = (
+                    {"group_name": group_name, "group_id": group_id} if supports_groups else {}
+                )
                 page_number = 1
                 while True:
                     if max_pages and page_number > max_pages:
@@ -639,8 +649,7 @@ class ItemService:
                         f"账号[{account.account_id}]正在获取「{group_name}」分组第 {page_number} 页"
                     )
                     result = await manager.get_item_list_info(
-                        page_number, page_size, myid=myid,
-                        group_name=group_name, group_id=group_id,
+                        page_number, page_size, myid=myid, **fetch_kwargs,
                     )
 
                     if not result or not result.get("success"):

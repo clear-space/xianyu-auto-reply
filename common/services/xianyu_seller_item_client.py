@@ -44,6 +44,9 @@ SELLER_BIZ_HEADERS = {
 class SellerItemInfoManager:
     """鱼小铺（卖家平台）商品列表抓取器，接口与 ItemInfoManager 对齐。"""
 
+    # 卖家平台接口仅返回在售商品（itemStatus="0"），不支持分组；抓取编排层据此跳过分组探测
+    supports_groups: bool = False
+
     def __init__(self, account_id: str, cookie: str, owner_id: Optional[int] = None) -> None:
         """
         Args:

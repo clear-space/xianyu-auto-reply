@@ -18,7 +18,10 @@ class ItemInfoManager:
     
     管理商品信息的获取、保存等操作（纯 HTTP API 调用，不需要 WebSocket）
     """
-    
+
+    # 个人版接口支持商品分组（在售/已售出），供抓取编排层按能力分支
+    supports_groups: bool = True
+
     def __init__(self, cookie_id: str, cookies_str: str, session=None):
         """初始化商品信息管理器
         
@@ -228,7 +231,10 @@ class ItemInfoManager:
                     if 'FAIL_SYS_TOKEN_EXOIRED' in error_msg or 'token' in error_msg.lower():
                         logger.warning(f"Token失效，准备重试: {error_msg}")
                         await asyncio.sleep(0.5)
-                        return await self.get_item_list_info(page_number, page_size, retry_count + 1, update_config_cookies_callback, myid)
+                        return await self.get_item_list_info(
+                            page_number, page_size, retry_count + 1, update_config_cookies_callback, myid,
+                            group_name=group_name, group_id=group_id, need_group_info=need_group_info,
+                        )
                     else:
                         logger.error(f"获取商品信息失败: {res_json}")
                         return {"success": False, "error": f"获取商品信息失败: {error_msg}"}
@@ -236,7 +242,10 @@ class ItemInfoManager:
         except Exception as e:
             logger.error(f"商品信息API请求异常: {self._safe_str(e)}")
             await asyncio.sleep(0.5)
-            return await self.get_item_list_info(page_number, page_size, retry_count + 1, update_config_cookies_callback, myid)
+            return await self.get_item_list_info(
+                page_number, page_size, retry_count + 1, update_config_cookies_callback, myid,
+                group_name=group_name, group_id=group_id, need_group_info=need_group_info,
+            )
 
     async def get_all_items(self, page_size=20, max_pages=None, update_config_cookies_callback=None, myid=None):
         """获取所有商品信息（自动分页）
