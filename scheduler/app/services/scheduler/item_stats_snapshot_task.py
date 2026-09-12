@@ -200,7 +200,8 @@ class ItemStatsSnapshotTaskService:
             force: True=手动触发，跳过「当日已采集」判断强制重采（UPSERT 覆盖当天数据）
 
         Returns:
-            {"ok": 成功账号数, "failed": 失败账号数}（当日已有快照被跳过的账号不计入）
+            {"ok": 成功账号数, "failed": 失败账号数, "write_failed": 商品级快照写入失败数,
+             "want_failed": 想要数抓取失败数}（当日已有快照被跳过的账号不计入）
         """
         logger.info(f"【{self.task_name}】开始执行（force={force}）")
         stat_date = self._today_str()
@@ -225,6 +226,8 @@ class ItemStatsSnapshotTaskService:
 
         ok_count = 0
         fail_count = 0
+        write_failed_total = 0
+        want_failed_total = 0
         for account in accounts:
             try:
                 async with async_session_maker() as session:
@@ -232,6 +235,8 @@ class ItemStatsSnapshotTaskService:
                         logger.info(f"【{self.task_name}】账号 {account.account_id} 当日已采集，跳过")
                         continue
                     result_info = await snapshot_account_stats(session, account, stat_date)
+                    write_failed_total += int(result_info.get("write_failed") or 0)
+                    want_failed_total += int(result_info.get("want_failed") or 0)
                     if result_info.get("success"):
                         ok_count += 1
                     else:
@@ -252,8 +257,10 @@ class ItemStatsSnapshotTaskService:
 
         logger.info(
             f"【{self.task_name}】执行完成：成功 {ok_count} 个账号，失败 {fail_count} 个账号"
+            f"（商品级：快照写入失败 {write_failed_total} 件、想要数抓取失败 {want_failed_total} 件）"
         )
-        return {"ok": ok_count, "failed": fail_count}
+        return {"ok": ok_count, "failed": fail_count,
+                "write_failed": write_failed_total, "want_failed": want_failed_total}
 
 
 # 全局实例

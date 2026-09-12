@@ -277,7 +277,8 @@ async def snapshot_account_stats(
         stat_date: 快照日期 yyyyMMdd（采集日期）
 
     Returns:
-        执行结果统计 {"success": bool, "item_count": int, "want_ok": int, "error": str}
+        执行结果统计 {"success": bool, "item_count": int, "want_ok": int,
+                     "want_fallback": int, "want_failed": int, "write_failed": int, "error": str}
     """
     seller_id = account.account_id
     cookie = account.cookie
@@ -286,7 +287,9 @@ async def snapshot_account_stats(
     rows_1d = await fetch_item_stats_list(cookie, seller_id, "recent1d")
     rows_7d = await fetch_item_stats_list(cookie, seller_id, "recent7d")
     if rows_1d is None or rows_7d is None:
-        return {"success": False, "item_count": 0, "want_ok": 0, "error": "数据罗盘商品列表获取失败"}
+        return {"success": False, "item_count": 0, "want_ok": 0,
+                "want_fallback": 0, "want_failed": 0, "write_failed": 0,
+                "error": "数据罗盘商品列表获取失败"}
 
     map_7d: Dict[str, Dict[str, Any]] = {str(r.get("itmId")): r for r in rows_7d if r.get("itmId")}
     items = [r for r in rows_1d if r.get("itmId")]
@@ -302,6 +305,7 @@ async def snapshot_account_stats(
         *[fetch_one(str(r.get("itmId"))) for r in items],
         return_exceptions=True,
     )
+    want_failed = sum(1 for w in want_results if isinstance(w, Exception))
 
     # 3. 想要数跨天保真：详情接口单日失败时回退上一非空历史值，
     #    避免"最新快照行为 NULL → 列表整天显示 --"（想要数是累计值，回退语义安全）
@@ -327,6 +331,7 @@ async def snapshot_account_stats(
     # 4. UPSERT 快照表
     want_ok = 0
     want_fallback = 0
+    write_failed = 0
     inserted = 0
     upsert_sql = text(
         """
@@ -356,7 +361,7 @@ async def snapshot_account_stats(
              chat_uv_7d = new.chat_uv_7d,
              pay_ord_cnt_7d = new.pay_ord_cnt_7d, pay_byr_cnt_7d = new.pay_byr_cnt_7d,
              pay_amt_7d = new.pay_amt_7d, ipv_pay_ucvr_7d = new.ipv_pay_ucvr_7d,
-             want_count = IF(new.want_count IS NULL, want_count, new.want_count),
+             want_count = IF(new.want_count IS NULL, xy_item_stats_daily.want_count, new.want_count),
              days_on_shelf = new.days_on_shelf, post_dt = new.post_dt,
              updated_at = NOW()
         """
@@ -403,14 +408,17 @@ async def snapshot_account_stats(
             await session.execute(upsert_sql, params)
             inserted += 1
         except Exception as e:
+            write_failed += 1
             logger.warning(f"【{seller_id}】商品 {item_id} 快照写入失败: {e}")
 
     await session.commit()
     logger.info(
-        f"【{seller_id}】商品指标快照完成：写入 {inserted}/{len(items)} 件，"
-        f"想要数成功 {want_ok} 件、回退历史值 {want_fallback} 件（stat_date={stat_date}）"
+        f"【{seller_id}】商品指标快照完成：写入 {inserted}/{len(items)} 件（失败 {write_failed} 件），"
+        f"想要数成功 {want_ok} 件、抓取失败 {want_failed} 件、回退历史值 {want_fallback} 件（stat_date={stat_date}）"
     )
-    return {"success": True, "item_count": inserted, "want_ok": want_ok, "error": ""}
+    return {"success": True, "item_count": inserted, "want_ok": want_ok,
+            "want_fallback": want_fallback, "want_failed": want_failed,
+            "write_failed": write_failed, "error": ""}
 
 
 async def cleanup_expired_snapshots(session: AsyncSession) -> int:
