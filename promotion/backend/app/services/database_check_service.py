@@ -243,7 +243,7 @@ async def _check_materials_columns(conn: AsyncConnection, existing_tables: list[
         logger.info("检测到 fy_materials 缺失字段 publish_status，将自动添加")
         publish_status_added = True
     if "published" not in columns:
-        alter_stmts.append("ALTER TABLE fy_materials ADD COLUMN published TINYINT(1) DEFAULT 0 COMMENT '是否已发布到闲鱼'")
+        alter_stmts.append("ALTER TABLE fy_materials ADD COLUMN published TINYINT DEFAULT 0 COMMENT '是否已发布到闲鱼'")
         logger.info("检测到 fy_materials 缺失字段 published，将自动添加")
         published_added = True
     if "published_at" not in columns:
@@ -324,7 +324,7 @@ async def _check_publish_rules_columns(conn: AsyncConnection, existing_tables: l
         alter_stmts.append("ALTER TABLE fy_publish_rules ADD COLUMN daily_count INT DEFAULT 5 COMMENT '每天发布数量'")
         logger.info("检测到 fy_publish_rules 缺失字段 daily_count，将自动添加")
     if "enabled" not in columns:
-        alter_stmts.append("ALTER TABLE fy_publish_rules ADD COLUMN enabled TINYINT(1) DEFAULT 1 COMMENT '是否启用'")
+        alter_stmts.append("ALTER TABLE fy_publish_rules ADD COLUMN enabled TINYINT DEFAULT 1 COMMENT '是否启用'")
         logger.info("检测到 fy_publish_rules 缺失字段 enabled，将自动添加")
     if "remark" not in columns:
         alter_stmts.append("ALTER TABLE fy_publish_rules ADD COLUMN remark VARCHAR(255) DEFAULT NULL COMMENT '备注'")
@@ -391,7 +391,7 @@ async def _check_delete_rules_columns(conn: AsyncConnection, existing_tables: li
         alter_stmts.append("ALTER TABLE fy_delete_rules ADD COLUMN min_publish_days INT DEFAULT 7 COMMENT '发布满多少天才能删除'")
         logger.info("检测到 fy_delete_rules 缺失字段 min_publish_days，将自动添加")
     if "enabled" not in columns:
-        alter_stmts.append("ALTER TABLE fy_delete_rules ADD COLUMN enabled TINYINT(1) DEFAULT 1 COMMENT '是否启用'")
+        alter_stmts.append("ALTER TABLE fy_delete_rules ADD COLUMN enabled TINYINT DEFAULT 1 COMMENT '是否启用'")
         logger.info("检测到 fy_delete_rules 缺失字段 enabled，将自动添加")
     if "remark" not in columns:
         alter_stmts.append("ALTER TABLE fy_delete_rules ADD COLUMN remark VARCHAR(255) DEFAULT NULL COMMENT '备注'")
