@@ -238,8 +238,9 @@ async def mtop_call(
                     res_json = await resp.json(content_type=None)
                     set_cookies = extract_cookies_from_response(resp)
         except Exception as exc:  # noqa: BLE001
-            last_error = f"请求异常: {exc}"
+            last_error = f"请求异常: {type(exc).__name__}: {exc!r}"
             logger.warning(f"【{account_id}】{api} {last_error}")
+            logger.opt(exception=True).debug(f"【{account_id}】{api} 请求异常详情")
             await asyncio.sleep(0.5)
             continue
 
