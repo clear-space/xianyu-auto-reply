@@ -62,4 +62,7 @@ class ProductMaterial(TimestampMixin, Base):
     stock: Mapped[int] = mapped_column(Integer, default=9999, comment="库存数量")
     remark: Mapped[str | None] = mapped_column(String(500), comment="备注（仅内部使用，不发布到闲鱼）")
     risk: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="风险状态：0-正常,1-危险,2-禁用")
+    product_code: Mapped[str | None] = mapped_column(String(16), comment="商品编号（批量导入时从文件夹名提取，同一编号多版本合并）")
+    versions: Mapped[list | None] = mapped_column(JSON, comment="素材版本列表（每项：version/title/description/images）")
+    default_version: Mapped[int | None] = mapped_column(Integer, comment="默认版本号（发布使用该版本内容）")
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, comment="是否已删除（软删除）")

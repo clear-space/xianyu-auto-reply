@@ -8,6 +8,7 @@ import { useUIStore } from '@/store/uiStore'
 import {
   createMaterial,
   type MaterialCreateParams,
+  type MaterialVersion,
   type MaterialVideo,
   type ProductMaterial,
   type PublishSpecification,
@@ -21,7 +22,7 @@ import ProductVideoUploader from './ProductVideoUploader'
 import { ImageUploadGrid } from './ImageUploadGrid'
 import { buildSkuKey, DEFAULT_PLATFORM_CATEGORIES, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
 
-type MaterialFormState = PublishForm & { images: string[]; remark: string; stock: number }
+type MaterialFormState = PublishForm & { images: string[]; remark: string; stock: number; versions: MaterialVersion[]; selectedVersion: number | null }
 
 interface Props {
   initial: ProductMaterial | null
@@ -63,6 +64,8 @@ function hasSavedPlatformCategory(material: ProductMaterial | null): boolean {
 const initialForm = (material: ProductMaterial | null): MaterialFormState => {
   const specifications = createInternalSpecifications(material?.specifications)
   const fallbackCategory = DEFAULT_PLATFORM_CATEGORIES[0]
+  const versions = material?.versions?.length ? material.versions.map(v => ({ ...v })) : []
+  const selectedVersion = material?.default_version ?? (versions.length ? versions[0].version : null)
   return {
   account_id: '',
   title: material?.title ?? '',
@@ -95,11 +98,19 @@ const initialForm = (material: ProductMaterial | null): MaterialFormState => {
   sku_rows: createInternalSkuRows(material?.sku_rows, specifications),
   images: material?.images ?? [],
   remark: material?.remark ?? '',
+  versions,
+  selectedVersion,
   }
 }
 
-function toMaterialPayload(form: MaterialFormState): MaterialCreateParams {
+function toMaterialPayload(form: MaterialFormState, initial: ProductMaterial | null): MaterialCreateParams {
   const price = form.specifications.length > 0 ? Number(form.sku_rows[0]?.price || form.price) : Number(form.price)
+  // 把当前表单内容写回选中的版本，保存时该版本成为新的默认版本
+  const versions = form.versions.map(v =>
+    v.version === form.selectedVersion
+      ? { ...v, title: form.title.trim(), description: form.description, images: form.images }
+      : v
+  )
   return {
     title: form.title.trim(),
     description: form.description,
@@ -135,6 +146,9 @@ function toMaterialPayload(form: MaterialFormState): MaterialCreateParams {
     brand: form.brand.trim() || null,
     condition: form.condition,
     remark: form.remark.trim() || null,
+    product_code: initial?.product_code ?? null,
+    versions: versions.length ? versions : undefined,
+    default_version: form.selectedVersion ?? null,
   }
 }
 
@@ -209,6 +223,28 @@ export function MaterialFormModal({ initial, onClose, onSaved, draftSubmit }: Pr
     }
   }
 
+  /** 切换版本：先把当前表单内容写回内存中上一个版本，再加载目标版本的标题/描述/图片 */
+  const handleVersionChange = (version: number) => {
+    setForm((current) => {
+      if (current.selectedVersion === version) return current
+      const versions = current.versions.map((v) =>
+        v.version === current.selectedVersion
+          ? { ...v, title: current.title, description: current.description, images: current.images }
+          : v
+      )
+      const target = current.versions.find((v) => v.version === version)
+      if (!target) return current
+      return {
+        ...current,
+        versions,
+        selectedVersion: version,
+        title: target.title,
+        description: target.description,
+        images: target.images,
+      }
+    })
+  }
+
   const handleSave = async () => {
     if (!form.title.trim()) return addToast({ type: 'warning', message: '请填写商品标题' })
     if (!form.description.trim()) return addToast({ type: 'warning', message: '请填写商品描述' })
@@ -221,7 +257,7 @@ export function MaterialFormModal({ initial, onClose, onSaved, draftSubmit }: Pr
     if (form.specifications.length > 0 && !form.sku_rows.length) return addToast({ type: 'warning', message: '请等待规格组合生成后再保存' })
     const invalidSku = form.sku_rows.find((row) => !row.price || Number(row.price) <= 0 || !row.stock.trim() || Number(row.stock) < 0)
     if (invalidSku) return addToast({ type: 'warning', message: '请完善所有规格的价格和库存' })
-    const payload = toMaterialPayload(form)
+    const payload = toMaterialPayload(form, initial)
     if (!payload.price || payload.price <= 0) return addToast({ type: 'warning', message: '请填写有效价格' })
     setSaving(true)
     try {
@@ -268,7 +304,30 @@ export function MaterialFormModal({ initial, onClose, onSaved, draftSubmit }: Pr
             onCategoryEdit={() => setCategoryLocked(false)}
           />
 
-          <div className="input-group"><label className="input-label">备注（内部使用，不公开）</label><input className="input-ios" maxLength={500} placeholder="选填" value={form.remark} onChange={(event) => setForm((current) => ({ ...current, remark: event.target.value }))} /></div>
+          {/* 备注 + 版本选择并排（多版本时显示版本下拉，保存时选中版本成为默认版本） */}
+          <div className="flex items-end gap-3">
+            <div className="input-group flex-1">
+              <label className="input-label">备注（内部使用，不公开）</label>
+              <input className="input-ios" maxLength={500} placeholder="选填" value={form.remark} onChange={(event) => setForm((current) => ({ ...current, remark: event.target.value }))} />
+            </div>
+            {form.versions.length > 1 && (
+              <div className="input-group w-44 flex-shrink-0">
+                <label className="input-label">默认版本</label>
+                <select
+                  className="input-ios"
+                  value={form.selectedVersion ?? ''}
+                  onChange={(event) => handleVersionChange(Number(event.target.value))}
+                  disabled={saving}
+                >
+                  {[...form.versions].sort((a, b) => a.version - b.version).map((v) => (
+                    <option key={v.version} value={v.version}>
+                      版本{v.version}{v.version === initial?.default_version ? '（当前默认）' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
         </div>
         <div className="modal-footer flex-shrink-0"><button type="button" className="btn-ios-secondary" onClick={onClose} disabled={saving}>取消</button><button type="button" className="btn-ios-primary" onClick={handleSave} disabled={saving || uploading}>{saving && <Loader2 className="w-4 h-4 animate-spin" />}{initial ? '保存修改' : '创建素材'}</button></div>
       </div>

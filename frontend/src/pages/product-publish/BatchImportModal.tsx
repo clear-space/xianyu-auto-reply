@@ -7,14 +7,17 @@
  * 3. 预览扫描结果，统一设置字段，也可逐条单独调整
  * 4. 确认后上传图片 + 元数据到服务器，批量导入到素材库
  *
- * 目录结构要求：每个子文件夹为一个素材，包含：
- * - 一个 .txt 文件（文件名=标题，最后非空行=编号，其余行=描述）
- * - 若干 .jpg/.png 图片（按文件名中数字排序）
+ * 目录格式（两种可混用，本质都是 A001_XXX_N 版本文件夹）：
+ * - 格式一（商品文件夹）：A001_XXX/A001_XXX_1/、A001_XXX_2/…，商品文件夹直属文件（原.png、购买+原购买链接.txt）忽略
+ * - 格式二（版本文件夹平铺）：A001_XXX_1/、A001_XXX_2/… 直接在所选目录下
+ * 文件夹名：前4位 A001 = 商品编号（唯一），中间 = 文件夹名，末尾 _N = 版本号。
+ * 版本文件夹内：1.jpg 为首页图（后续按数字排序）；txt 文件名 = 商品名（去【xxx】前缀），内容 = 商品文案。
+ * 同一编号导入全部版本，默认版本 = 版本号最大者；不带 _N 的老格式文件夹仍按旧规则解析。
  */
 import { useState, useEffect, useRef } from 'react'
 import { X, Loader2, FolderOpen, Image, ChevronDown, ChevronUp, Pencil, FolderUp, Sparkles } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { batchImportMaterialsUpload, recommendPlatformCategory, uploadProductImages, type MaterialCreateParams, type PlatformCategoryCandidate, type ProductMaterial } from '@/api/productPublish'
+import { batchImportMaterialsUpload, recommendPlatformCategory, uploadProductImages, type MaterialCreateParams, type MaterialVersion, type PlatformCategoryCandidate, type ProductMaterial } from '@/api/productPublish'
 import { DEFAULT_PLATFORM_CATEGORIES, preferredCandidate, SHIPPING_OPTIONS, type ShippingMethod } from './publishTypes'
 import { MaterialFormModal } from './MaterialFormModal'
 import { ImageUploadGrid } from './ImageUploadGrid'
@@ -22,22 +25,39 @@ import { ImageUploadGrid } from './ImageUploadGrid'
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '电子资料', '其他闲置']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
-const TXT_EXT = '.txt'
+
+/** 版本文件夹：A001_XXX_N（前4位=商品编号，中间=文件夹名，末尾_N=版本号） */
+const VERSION_FOLDER_RE = /^([A-Za-z]\d{3})_(.+)_(\d+)$/
+/** 商品编号前缀：A001_ */
+const PRODUCT_PREFIX_RE = /^[A-Za-z]\d{3}_/
 
 /** 单次批量导入请求最多携带的素材条数。
  * 一次请求塞太多素材时 multipart 请求体过大，浏览器序列化内存溢出 / 代理截断，
  * 后端收到不完整请求体后 multipart 解析失败返回 400，故改为小批量分批上传。 */
 const IMPORT_BATCH_SIZE = 10
 
-/** 单条素材的本地数据 */
+/** 单个版本（一个 A001_XXX_N 文件夹）的本地数据 */
+interface LocalVersion {
+  version: number
+  title: string
+  description: string
+  image_count: number
+}
+
+/** 单条素材的本地数据（按商品编号合并所有版本） */
 interface LocalMaterial {
+  /** 内部唯一键：新格式 = 商品编号；老格式 = legacy:文件夹路径 */
+  uid: string
   code: string
+  product_code: string | null
   folder_name: string
   title: string
   description: string
   image_count: number
   category: string
   price: number
+  default_version: number
+  versions: LocalVersion[]
 }
 
 /** 单条素材的可编辑字段 */
@@ -75,7 +95,7 @@ function inferCategory(txtContent: string): string {
   return '虚拟商品'
 }
 
-/** 解析 txt：标题 = txt 文件名（去掉【xxx】前缀）；最后非空行 = 编号；其余 = 描述 */
+/** 解析老格式 txt：标题 = txt 文件名（去掉【xxx】前缀）；最后非空行 = 编号；其余 = 描述 */
 function parseTxtContent(text: string, fileName: string, folderName: string): { title: string; code: string; description: string } {
   // 标题 = txt 文件名，不是从内容里提取
   const title = fileName.replace(/\.txt$/i, '').replace(/^【[^】]*】\s*/, '').trim() || folderName
@@ -157,17 +177,17 @@ export function BatchImportModal({ onClose, onImported }: Props) {
   const [materials, setMaterials] = useState<LocalMaterial[]>([])
   const [scanned, setScanned] = useState(false)
 
-  // 存储原始 File 对象（按 code 索引）：code → 图片 File[]
-  const materialFilesRef = useRef<Map<string, File[]>>(new Map())
+  // 存储原始 File 对象（按 uid → 版本号 → 图片 File[]）
+  const materialFilesRef = useRef<Map<string, Map<number, File[]>>>(new Map())
   // blob URL 列表（用于清理）
   const blobUrlsRef = useRef<string[]>([])
-  // 缩略图缓存：code → 第一张图片的 blob URL
+  // 缩略图缓存：`${uid}:${版本号}` → 第一张图片的 blob URL
   const thumbnailCacheRef = useRef<Map<string, string>>(new Map())
 
   // 选择状态
   const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set())
 
-  // 展开单条编辑的素材编号
+  // 展开单条编辑的素材 uid
   const [expandedCode, setExpandedCode] = useState<string | null>(null)
 
   // 清理定时器
@@ -203,7 +223,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     quantity: '9999',
   })
 
-  // 逐条覆盖值：{ code: Partial<ItemSettings> }
+  // 逐条覆盖值：{ uid: Partial<ItemSettings> }
   const [overrides, setOverrides] = useState<Record<string, Partial<ItemSettings>>>({})
 
   // 编号插入位置：none | title | description | both
@@ -218,7 +238,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
   const [unifiedImagesUploading, setUnifiedImagesUploading] = useState(false)
   const [unifiedOverflowMode, setUnifiedOverflowMode] = useState<'trim_products' | 'skip_unified'>('trim_products')
 
-  // 智能识别状态：识别出的平台分类（code → 候选），随导入写入素材
+  // 智能识别状态：识别出的平台分类（uid → 候选），随导入写入素材
   const [recognizing, setRecognizing] = useState(false)
   const [recognizeProgress, setRecognizeProgress] = useState({ done: 0, total: 0 })
   const [recognizedCategories, setRecognizedCategories] = useState<Record<string, PlatformCategoryCandidate>>({})
@@ -258,21 +278,21 @@ export function BatchImportModal({ onClose, onImported }: Props) {
   }
 
   /** 获取某条素材的最终设置 */
-  const getSettings = (code: string): ItemSettings =>
-    buildItemSettings(defaults, overrides[code] || {})
+  const getSettings = (uid: string): ItemSettings =>
+    buildItemSettings(defaults, overrides[uid] || {})
 
   /** 更新某条素材的单个字段 */
-  const updateOverride = (code: string, field: keyof ItemSettings, value: string | boolean) => {
+  const updateOverride = (uid: string, field: keyof ItemSettings, value: string | boolean) => {
     setOverrides(prev => {
-      const current = prev[code] || {}
+      const current = prev[uid] || {}
       const updated = { ...current, [field]: value }
       if (updated[field] === defaults[field]) {
         const { [field]: _, ...rest } = updated
         return Object.keys(rest).length > 0
-          ? { ...prev, [code]: rest }
-          : Object.fromEntries(Object.entries(prev).filter(([k]) => k !== code))
+          ? { ...prev, [uid]: rest }
+          : Object.fromEntries(Object.entries(prev).filter(([k]) => k !== uid))
       }
-      return { ...prev, [code]: updated }
+      return { ...prev, [uid]: updated }
     })
   }
 
@@ -284,7 +304,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
   /** 对选中素材逐条智能识别平台分类（让识别结果自己选，与素材弹窗按钮一致） */
   const handleRecognize = async () => {
-    const selected = materials.filter(m => selectedCodes.has(m.code))
+    const selected = materials.filter(m => selectedCodes.has(m.uid))
     if (selected.length === 0) {
       addToast({ type: 'warning', message: '请至少选择一条素材' })
       return
@@ -302,7 +322,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
         if (response.success && response.data?.candidates?.length) {
           const chosen = preferredCandidate(response.data.candidates)
           if (chosen) {
-            setRecognizedCategories(prev => ({ ...prev, [m.code]: chosen }))
+            setRecognizedCategories(prev => ({ ...prev, [m.uid]: chosen }))
             succeeded += 1
           } else {
             failed += 1
@@ -322,6 +342,27 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     })
   }
 
+  /** 解析一个版本文件夹（A001_XXX_N）：标题 = txt 文件名（去【xxx】前缀），文案 = txt 全文 */
+  async function parseVersionFolder(folderPath: string, folderName: string, byFolder: Map<string, File[]>): Promise<{ version: number; title: string; description: string; files: File[] } | null> {
+    const files = byFolder.get(folderPath)
+    if (!files) return null
+    const txtFiles = files.filter(f => f.name.toLowerCase().endsWith('.txt'))
+    if (txtFiles.length === 0) {
+      console.warn(`跳过无txt文件的版本目录: ${folderName}`)
+      return null
+    }
+    const txtFile = txtFiles.sort((a, b) => a.name.localeCompare(b.name))[0]
+    const txtContent = await readTxtFile(txtFile)
+    const title = txtFile.name.replace(/\.txt$/i, '').replace(/^【[^】]*】\s*/, '').trim() || folderName
+    const nonEmpty = txtContent.split('\n').map(l => l.trim()).filter(Boolean)
+    const description = nonEmpty.join('\n').trim() || title
+    const imgFiles = files.filter(f => IMAGE_EXTS.has('.' + f.name.split('.').pop()?.toLowerCase()))
+    const sorted = sortByNumericFilename(imgFiles)
+    const match = VERSION_FOLDER_RE.exec(folderName)
+    if (!match) return null
+    return { version: parseInt(match[3], 10), title, description, files: sorted }
+  }
+
   /** 处理文件夹选择（webkitdirectory） */
   const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
@@ -333,101 +374,155 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     setSelectedCodes(new Set())
     setOverrides({})
     setRecognizedCategories({})
+    setEditedDrafts({})
     setExpandedCode(null)
     setImportResult(null)
     revokeAllBlobs()
 
     try {
-      // 按直接子目录分组
-      const folderMap = new Map<string, { txtFiles: File[]; imgFiles: File[] }>()
-
+      // 按文件夹路径分组（路径 = 文件去掉文件名部分）
+      const byFolder = new Map<string, File[]>()
       for (let i = 0; i < files.length; i++) {
         const file = files[i]
         // webkitRelativePath: "素材目录/A001/1.jpg"
         const relativePath = (file as any).webkitRelativePath || file.name
         const parts = relativePath.split('/')
         if (parts.length < 2) continue // 跳过根目录文件
-
-        const folderName = parts[parts.length - 2] // 直接父目录名
-        const fileName = parts[parts.length - 1]
-        const ext = '.' + fileName.split('.').pop()?.toLowerCase()
-
-        if (!folderMap.has(folderName)) {
-          folderMap.set(folderName, { txtFiles: [], imgFiles: [] })
+        const folderPath = parts.slice(0, -1).join('/')
+        if (!byFolder.has(folderPath)) {
+          byFolder.set(folderPath, [])
         }
-        const entry = folderMap.get(folderName)!
+        byFolder.get(folderPath)!.push(file)
+      }
 
-        if (ext === TXT_EXT || fileName.endsWith('.txt')) {
-          entry.txtFiles.push(file)
-        } else if (IMAGE_EXTS.has(ext)) {
-          entry.imgFiles.push(file)
+      // 版本文件夹 = 目录名匹配 A001_XXX_N；其父目录视为商品文件夹（直属记录文件原.png/购买+原购买链接.txt 忽略）
+      const versionFolderPaths: string[] = []
+      const productFolderPaths = new Set<string>()
+      for (const folderPath of byFolder.keys()) {
+        const folderName = folderPath.split('/').pop() || ''
+        if (VERSION_FOLDER_RE.test(folderName)) {
+          versionFolderPaths.push(folderPath)
+          const parentPath = folderPath.split('/').slice(0, -1).join('/')
+          if (parentPath) productFolderPaths.add(parentPath)
         }
       }
 
-      if (folderMap.size === 0) {
-        addToast({ type: 'warning', message: '未找到有效的素材子目录，请确认目录结构' })
-        return
-      }
-
-      // 解析每个子目录
-      const parsed: LocalMaterial[] = []
-      const fileMap = new Map<string, File[]>()
-
-      // 按文件夹名排序
-      const sortedFolders = [...folderMap.entries()].sort(([a], [b]) => a.localeCompare(b))
-
-      for (const [folderName, { txtFiles, imgFiles }] of sortedFolders) {
-        try {
-          if (txtFiles.length === 0) {
-            console.warn(`跳过无txt文件的目录: ${folderName}`)
-            continue
+      // 按商品编号分组版本；其余文件夹按老格式处理
+      const codeGroups = new Map<string, Map<number, { folderPath: string; folderName: string }>>()
+      const legacyFolders: { folderPath: string; folderName: string }[] = []
+      for (const [folderPath, folderFiles] of byFolder.entries()) {
+        const folderName = folderPath.split('/').pop() || ''
+        if (versionFolderPaths.includes(folderPath)) {
+          const match = VERSION_FOLDER_RE.exec(folderName)!
+          const code = match[1]
+          const version = parseInt(match[3], 10)
+          const group = codeGroups.get(code) ?? new Map()
+          group.set(version, { folderPath, folderName })
+          codeGroups.set(code, group)
+        } else if (!productFolderPaths.has(folderPath)) {
+          const hasTxt = folderFiles.some(f => f.name.toLowerCase().endsWith('.txt'))
+          if (hasTxt) {
+            legacyFolders.push({ folderPath, folderName })
           }
+        }
+        // 商品文件夹直属文件忽略（整理过程记录，不导入）
+      }
 
-          // 读第一个 txt 文件
+      const parsed: LocalMaterial[] = []
+      const fileMap = new Map<string, Map<number, File[]>>()
+
+      // 解析新格式：每个编号一条素材，携带全部版本
+      for (const [code, versionDirs] of codeGroups) {
+        const sortedVersions = [...versionDirs.entries()].sort(([a], [b]) => a - b)
+        const parsedVersions: LocalVersion[] = []
+        const filesByVersion = new Map<number, File[]>()
+        for (const [version, { folderPath, folderName }] of sortedVersions) {
+          const parsedVersion = await parseVersionFolder(folderPath, folderName, byFolder)
+          if (!parsedVersion) continue
+          parsedVersions.push({
+            version,
+            title: parsedVersion.title,
+            description: parsedVersion.description,
+            image_count: parsedVersion.files.length,
+          })
+          filesByVersion.set(version, parsedVersion.files)
+        }
+        if (parsedVersions.length === 0) continue
+
+        const defaultVersion = Math.max(...parsedVersions.map(v => v.version))
+        const defaultItem = parsedVersions.find(v => v.version === defaultVersion)!
+        // 商品文件夹名 = 版本文件夹名去掉 _N 后缀（格式二的"文件夹名"同样由版本文件夹名推导）
+        const defaultFolderName = versionDirs.get(defaultVersion)!.folderName.replace(/_\d+$/, '')
+
+        parsed.push({
+          uid: code,
+          code,
+          product_code: code,
+          folder_name: defaultFolderName,
+          title: defaultItem.title,
+          description: defaultItem.description,
+          image_count: defaultItem.image_count,
+          category: inferCategory(defaultItem.description),
+          price: 0,
+          default_version: defaultVersion,
+          versions: parsedVersions,
+        })
+        fileMap.set(code, filesByVersion)
+      }
+
+      // 解析老格式：txt 最后非空行 = 编号（保持旧行为；文件夹名带编号前缀时同样并入同编号版本）
+      for (const lf of legacyFolders) {
+        try {
+          const folderFiles = byFolder.get(lf.folderPath)!
+          const txtFiles = folderFiles.filter(f => f.name.toLowerCase().endsWith('.txt'))
+          if (txtFiles.length === 0) continue
           const txtFile = txtFiles.sort((a, b) => a.name.localeCompare(b.name))[0]
           const txtContent = await readTxtFile(txtFile)
-          const parsed2 = parseTxtContent(txtContent, txtFile.name, folderName)
-
-          // 排序图片（超出9张在导入校验时统一截取）
-          const sorted = sortByNumericFilename(imgFiles)
-
-          // 推断分类
-          const category = inferCategory(txtContent)
+          const legacyParsed = parseTxtContent(txtContent, txtFile.name, lf.folderName)
+          const imgFiles = sortByNumericFilename(folderFiles.filter(f => IMAGE_EXTS.has('.' + f.name.split('.').pop()?.toLowerCase())))
 
           parsed.push({
-            code: parsed2.code,
-            folder_name: folderName,
-            title: parsed2.title,
-            description: parsed2.description,
-            image_count: sorted.length,
-            category,
+            uid: `legacy:${lf.folderPath}`,
+            code: legacyParsed.code,
+            product_code: PRODUCT_PREFIX_RE.test(lf.folderName) ? lf.folderName.slice(0, 4) : null,
+            folder_name: lf.folderName,
+            title: legacyParsed.title,
+            description: legacyParsed.description,
+            image_count: imgFiles.length,
+            category: inferCategory(txtContent),
             price: 0,
+            default_version: 1,
+            versions: [{ version: 1, title: legacyParsed.title, description: legacyParsed.description, image_count: imgFiles.length }],
           })
-
-          fileMap.set(parsed2.code, sorted)
+          fileMap.set(`legacy:${lf.folderPath}`, new Map([[1, imgFiles]]))
         } catch (err) {
-          console.warn(`解析目录异常 ${folderName}:`, err)
+          console.warn(`解析目录异常 ${lf.folderName}:`, err)
         }
       }
 
       if (parsed.length === 0) {
-        addToast({ type: 'warning', message: '未找到有效的素材，请确认每个子目录包含 .txt 和图片文件' })
+        addToast({ type: 'warning', message: '未找到有效的素材，请确认每个版本目录包含 .txt 和图片文件' })
         return
       }
 
+      // 按编号排序
+      parsed.sort((a, b) => a.code.localeCompare(b.code))
+
       materialFilesRef.current = fileMap
 
-      // 预创建缩略图 blob URL
-      fileMap.forEach((imgFiles, code) => {
-        if (imgFiles.length > 0) {
-          const url = URL.createObjectURL(imgFiles[0])
-          blobUrlsRef.current.push(url)
-          thumbnailCacheRef.current.set(code, url)
-        }
+      // 预创建缩略图 blob URL（每个版本取第一张图）
+      fileMap.forEach((filesByVersion, uid) => {
+        filesByVersion.forEach((imgFiles, version) => {
+          if (imgFiles.length > 0) {
+            const url = URL.createObjectURL(imgFiles[0])
+            blobUrlsRef.current.push(url)
+            thumbnailCacheRef.current.set(`${uid}:${version}`, url)
+          }
+        })
       })
 
       setMaterials(parsed)
-      setSelectedCodes(new Set(parsed.map(m => m.code)))
+      setSelectedCodes(new Set(parsed.map(m => m.uid)))
       setScanned(true)
       addToast({ type: 'success', message: `扫描完成，发现 ${parsed.length} 个素材` })
     } catch (err) {
@@ -440,9 +535,9 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     }
   }
 
-  /** 获取某条素材的缩略图 blob URL（从缓存读取） */
-  const getThumbnail = (code: string): string | undefined => {
-    return thumbnailCacheRef.current.get(code)
+  /** 获取某条素材某版本的缩略图 blob URL（从缓存读取） */
+  const getThumbnail = (uid: string, version: number): string | undefined => {
+    return thumbnailCacheRef.current.get(`${uid}:${version}`)
   }
 
   /** 全选/取消全选 */
@@ -451,16 +546,16 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     if (selectedCodes.size === materials.length) {
       setSelectedCodes(new Set())
     } else {
-      setSelectedCodes(new Set(materials.map(m => m.code)))
+      setSelectedCodes(new Set(materials.map(m => m.uid)))
     }
   }
 
   /** 切换单条选中 */
-  const toggleSelect = (code: string) => {
+  const toggleSelect = (uid: string) => {
     setSelectedCodes(prev => {
       const next = new Set(prev)
-      if (next.has(code)) next.delete(code)
-      else next.add(code)
+      if (next.has(uid)) next.delete(uid)
+      else next.add(uid)
       return next
     })
   }
@@ -516,25 +611,36 @@ export function BatchImportModal({ onClose, onImported }: Props) {
     return { keepLocal: localTotal, appendUrls: unifiedImages.slice(0, Math.max(0, room)) }
   }
 
-  /** 打开完整修改弹窗：懒上传该条图片后进入编辑素材弹窗（草稿模式，不落库） */
+  /** 打开完整修改弹窗：懒上传该条全部版本的图片后进入编辑素材弹窗（草稿模式，不落库） */
   const handleFullEdit = async (m: LocalMaterial) => {
-    const draft = editedDrafts[m.code]
-    setFullEditLoadingCode(m.code)
+    const draft = editedDrafts[m.uid]
+    setFullEditLoadingCode(m.uid)
     try {
-      let images: string[] = draft?.images ?? []
+      let versions: MaterialVersion[] = draft?.versions ?? []
       if (!draft) {
-        const imgFiles = materialFilesRef.current.get(m.code) || []
-        if (imgFiles.length > 0) {
-          const up = await uploadProductImages(imgFiles)
-          if (!up.success || !up.data) {
-            addToast({ type: 'error', message: up.message || '图片上传失败' })
-            return
+        const filesByVersion = materialFilesRef.current.get(m.uid)
+        const uploadedVersions: MaterialVersion[] = []
+        if (filesByVersion) {
+          for (const lv of m.versions) {
+            const files = filesByVersion.get(lv.version) || []
+            let urls: string[] = []
+            if (files.length > 0) {
+              const up = await uploadProductImages(files)
+              if (!up.success || !up.data) {
+                addToast({ type: 'error', message: up.message || '图片上传失败' })
+                return
+              }
+              urls = up.data.urls
+            }
+            uploadedVersions.push({ version: lv.version, title: lv.title, description: lv.description, images: urls })
           }
-          images = up.data.urls
         }
+        versions = uploadedVersions
       }
-      const s = getSettings(m.code)
-      const recognized = recognizedCategories[m.code]
+      const defaultVersion = draft?.default_version ?? m.default_version
+      const defaultV = versions.find(v => v.version === defaultVersion) ?? versions[0]
+      const s = getSettings(m.uid)
+      const recognized = recognizedCategories[m.uid]
       const pseudo = {
         id: 0,
         user_id: 0,
@@ -553,7 +659,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
         platform_attributes: draft?.platform_attributes ?? [],
         category_source: 'manual',
         category_confidence: undefined,
-        images,
+        images: draft?.images ?? defaultV?.images ?? [],
         videos: draft?.videos ?? [],
         specifications: draft?.specifications ?? [],
         sku_rows: draft?.sku_rows ?? [],
@@ -568,9 +674,12 @@ export function BatchImportModal({ onClose, onImported }: Props) {
         condition: draft?.condition ?? s.condition,
         stock: draft?.stock ?? 9999,
         remark: draft?.remark ?? '',
+        versions,
+        default_version: defaultVersion,
+        product_code: draft?.product_code ?? m.product_code,
       } as unknown as ProductMaterial
       setDraftInitial(pseudo)
-      setFullEditCode(m.code)
+      setFullEditCode(m.uid)
     } catch {
       addToast({ type: 'error', message: '准备完整修改失败，请重试' })
     } finally {
@@ -580,13 +689,20 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
   /** 实际执行导入（校验已通过或用户选择继续导入） */
   const doImport = async () => {
-    const selected = materials.filter(m => selectedCodes.has(m.code))
+    const selected = materials.filter(m => selectedCodes.has(m.uid))
     // 继续导入时：标题截取前30字、描述截取前1500字；无图条目失败（已配置统一图除外）；图片按统一图策略裁剪至9张内
     const localFailed: { code: string; reason: string }[] = []
     const validItems = selected.filter((m) => {
-      if (editedDrafts[m.code]) return true // 完整修改已在编辑弹窗中校验
-      if (m.image_count === 0 && unifiedImages.length === 0) {
+      const draft = editedDrafts[m.uid]
+      if (draft) return true // 完整修改已在编辑弹窗中校验
+      const defaultV = m.versions.find(v => v.version === m.default_version)
+      if ((defaultV?.image_count ?? 0) === 0 && unifiedImages.length === 0) {
         localFailed.push({ code: m.code, reason: '缺少图片（至少1张）' })
+        return false
+      }
+      const emptyVersion = m.versions.find(v => v.version !== m.default_version && v.image_count === 0)
+      if (emptyVersion) {
+        localFailed.push({ code: m.code, reason: `版本${emptyVersion.version} 缺少图片（至少1张）` })
         return false
       }
       return true
@@ -618,28 +734,48 @@ export function BatchImportModal({ onClose, onImported }: Props) {
         const batch = batches[b]
         const formData = new FormData()
 
-        // 统一图片插入下的合并方案：每个条目保留的商品图数量与追加的统一图 URL（完整修改条目以草稿图片数为基数）
+        // 统一图片插入下的合并方案：每条素材按默认版本的图片数计算（完整修改条目以草稿默认版本图片数为基数），
+        // 统一图仅插入默认版本，其余版本各自截取前9张
         const imagePlans = new Map(batch.map((m) => {
-          const draft = editedDrafts[m.code]
-          return [m.code, buildImagePlan(draft ? (draft.images?.length ?? 0) : m.image_count)]
+          const draft = editedDrafts[m.uid]
+          const baseCount = draft
+            ? (draft.versions?.find(v => v.version === (draft.default_version ?? m.default_version))?.images?.length ?? draft.images?.length ?? 0)
+            : (m.versions.find(v => v.version === m.default_version)?.image_count ?? 0)
+          return [m.uid, buildImagePlan(baseCount)]
         }))
 
         // 构建本批元数据数组（不含图片文件本身；图片字段下标使用批内局部索引）
         const metadataList = batch.map((m) => {
-          const s = getSettings(m.code)
-          const recognized = recognizedCategories[m.code]
-          const draft = editedDrafts[m.code]
+          const s = getSettings(m.uid)
+          const recognized = recognizedCategories[m.uid]
+          const draft = editedDrafts[m.uid]
           if (draft) {
-            // 完整修改过的条目：图片已在服务器（URL 直传），统一文字/编号/图片插入同样生效
-            const { title, description } = buildFinalContent(draft.title, draft.description, m.code)
-            const imagePlan = imagePlans.get(m.code)!
+            // 完整修改过的条目：图片已在服务器（URL 直传），统一文字/编号/图片插入同样生效（每个版本）
+            const defaultVersionNum = draft.default_version ?? m.default_version
+            const draftVersions = draft.versions?.length
+              ? draft.versions
+              : [{ version: defaultVersionNum ?? 1, title: draft.title, description: draft.description, images: draft.images ?? [] }]
+            const versionsMeta = draftVersions.map(v => {
+              const { title, description } = buildFinalContent(v.title, v.description, m.code)
+              const imagePlan = v.version === defaultVersionNum
+                ? imagePlans.get(m.uid)!
+                : { keepLocal: Math.min(v.images?.length ?? 0, 9), appendUrls: [] as string[] }
+              return {
+                version: v.version,
+                title: title.slice(0, 30),
+                description: description.slice(0, 1500),
+                images: [...(v.images || []).slice(0, imagePlan.keepLocal), ...imagePlan.appendUrls],
+              }
+            })
+            const defaultMeta = versionsMeta.find(v => v.version === defaultVersionNum) ?? versionsMeta[0]
             return {
               code: m.code,
+              product_code: draft.product_code ?? m.product_code,
               folder_name: m.folder_name,
-              title: title.slice(0, 30),
-              description: description.slice(0, 1500),
+              title: defaultMeta?.title ?? draft.title.slice(0, 30),
+              description: defaultMeta?.description ?? draft.description.slice(0, 1500),
               image_count: 0,
-              images: [...(draft.images || []).slice(0, imagePlan.keepLocal), ...imagePlan.appendUrls],
+              images: defaultMeta?.images ?? [],
               price: draft.price,
               original_price: draft.original_price ?? null,
               category: draft.category ?? '',
@@ -664,17 +800,30 @@ export function BatchImportModal({ onClose, onImported }: Props) {
               address: draft.address ?? null,
               address_expected_text: draft.address_expected_text ?? null,
               remark: draft.remark ?? null,
+              versions: versionsMeta,
             }
           }
-          const { title, description } = buildFinalContent(m.title, m.description, m.code)
-          const imagePlan = imagePlans.get(m.code)!
+          const versionsMeta = m.versions.map(v => {
+            const { title, description } = buildFinalContent(v.title, v.description, m.code)
+            const imagePlan = v.version === m.default_version
+              ? imagePlans.get(m.uid)!
+              : { keepLocal: Math.min(v.image_count, 9), appendUrls: [] as string[] }
+            return {
+              version: v.version,
+              title: title.slice(0, 30),
+              description: description.slice(0, 1500),
+              image_count: imagePlan.keepLocal,
+              ...(imagePlan.appendUrls.length > 0 ? { append_images: imagePlan.appendUrls } : {}),
+            }
+          })
+          const defaultMeta = versionsMeta.find(v => v.version === m.default_version)!
           return {
             code: m.code,
+            product_code: m.product_code,
             folder_name: m.folder_name,
-            title: title.slice(0, 30),
-            description: description.slice(0, 1500),
-            image_count: imagePlan.keepLocal,
-            ...(imagePlan.appendUrls.length > 0 ? { append_images: imagePlan.appendUrls } : {}),
+            title: defaultMeta.title,
+            description: defaultMeta.description,
+            image_count: defaultMeta.image_count,
             price: parseFloat(s.price) || 0,
             original_price: s.original_price ? parseFloat(s.original_price) : null,
             category: s.category,
@@ -694,22 +843,27 @@ export function BatchImportModal({ onClose, onImported }: Props) {
               platform_tb_category_id: recognized.tb_cat_id ?? '',
               platform_category_path: recognized.path ?? [],
             } : {}),
+            versions: versionsMeta,
           }
         })
 
         formData.append('materials', JSON.stringify(metadataList))
 
-        // 添加图片文件：img_{批内索引}_{图片索引}（完整修改过的条目图片已在服务器，跳过；
+        // 添加图片文件：img_{批内索引}_{版本号}_{图片索引}（完整修改过的条目图片已在服务器，跳过；
         // 保留数量按统一图策略计算，与追加的统一图合计不超过9张）
         batch.forEach((m, i) => {
-          if (editedDrafts[m.code]) return
-          const imgFiles = materialFilesRef.current.get(m.code)
-          if (imgFiles) {
-            const keepLocal = imagePlans.get(m.code)?.keepLocal ?? Math.min(m.image_count, 9)
-            imgFiles.slice(0, keepLocal).forEach((file, j) => {
-              formData.append(`img_${i}_${j}`, file, file.name)
+          if (editedDrafts[m.uid]) return
+          const filesByVersion = materialFilesRef.current.get(m.uid)
+          if (!filesByVersion) return
+          m.versions.forEach(v => {
+            const isDefault = v.version === m.default_version
+            const keepLocal = isDefault
+              ? (imagePlans.get(m.uid)?.keepLocal ?? Math.min(v.image_count, 9))
+              : Math.min(v.image_count, 9)
+            ;(filesByVersion.get(v.version) || []).slice(0, keepLocal).forEach((file, j) => {
+              formData.append(`img_${i}_${v.version}_${j}`, file, file.name)
             })
-          }
+          })
         })
 
         try {
@@ -764,7 +918,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
   /** 执行导入：先校验，有问题先弹窗提示（返回修改 / 继续导入） */
   const handleImport = () => {
-    const selected = materials.filter(m => selectedCodes.has(m.code))
+    const selected = materials.filter(m => selectedCodes.has(m.uid))
     if (selected.length === 0) {
       addToast({ type: 'warning', message: '请至少选择一条素材' })
       return
@@ -772,24 +926,50 @@ export function BatchImportModal({ onClose, onImported }: Props) {
 
     const issueList: { code: string; title: string; issues: string[] }[] = []
     selected.forEach((m) => {
-      const draft = editedDrafts[m.code]
-      // 统一文字/编号插入对完整修改条目同样生效，因此也参与长度校验
-      const { title, description } = buildFinalContent(
-        draft ? draft.title : m.title,
-        draft ? draft.description : m.description,
-        m.code,
-      )
+      const draft = editedDrafts[m.uid]
+      const defaultVersionNum = draft?.default_version ?? m.default_version
       const issues: string[] = []
-      if (title.length > 30) issues.push(`标题超过30字（当前${title.length}字，继续导入将截取前30字）`)
-      if (description.length > 1500) issues.push(`描述超过1500字（当前${description.length}字，继续导入将截取前1500字）`)
-      if (!draft && m.image_count > 9) {
-        if (unifiedImages.length > 0 && unifiedOverflowMode === 'trim_products') {
-          issues.push(`图片超过9张（商品图${m.image_count}张+统一图${unifiedImages.length}张，继续导入将保留前${9 - unifiedImages.length}张商品图并插入统一图）`)
-        } else {
-          issues.push(`图片超过9张（当前${m.image_count}张，继续导入将取前9张）`)
+      if (draft) {
+        // 完整修改条目：校验草稿默认版本，其余版本缺图报错
+        const draftVersions = draft.versions?.length
+          ? draft.versions
+          : [{ version: defaultVersionNum ?? 1, title: draft.title, description: draft.description, images: draft.images ?? [] }]
+        const defaultV = draftVersions.find(v => v.version === defaultVersionNum) ?? draftVersions[0]
+        if (defaultV) {
+          // 统一文字/编号插入对完整修改条目同样生效，因此也参与长度校验
+          const { title, description } = buildFinalContent(defaultV.title, defaultV.description, m.code)
+          if (title.length > 30) issues.push(`标题超过30字（当前${title.length}字，继续导入将截取前30字）`)
+          if (description.length > 1500) issues.push(`描述超过1500字（当前${description.length}字，继续导入将截取前1500字）`)
+          const defaultImages = defaultV.images?.length ?? 0
+          if (defaultImages > 9 && unifiedImages.length === 0) issues.push(`图片超过9张（当前${defaultImages}张，继续导入将取前9张）`)
+          if (defaultImages === 0 && unifiedImages.length === 0) issues.push('缺少图片（至少1张，继续导入该条将失败）')
         }
+        draftVersions.filter(v => v.version !== defaultVersionNum).forEach(v => {
+          if (!(v.images?.length)) issues.push(`版本${v.version} 缺少图片（至少1张，继续导入该条将失败）`)
+        })
+      } else {
+        const defaultV = m.versions.find(v => v.version === m.default_version)
+        const { title, description } = buildFinalContent(
+          defaultV?.title ?? m.title,
+          defaultV?.description ?? m.description,
+          m.code,
+        )
+        if (title.length > 30) issues.push(`标题超过30字（当前${title.length}字，继续导入将截取前30字）`)
+        if (description.length > 1500) issues.push(`描述超过1500字（当前${description.length}字，继续导入将截取前1500字）`)
+        const defaultCount = defaultV?.image_count ?? 0
+        if (defaultCount > 9) {
+          if (unifiedImages.length > 0 && unifiedOverflowMode === 'trim_products') {
+            issues.push(`图片超过9张（商品图${defaultCount}张+统一图${unifiedImages.length}张，继续导入将保留前${9 - unifiedImages.length}张商品图并插入统一图）`)
+          } else {
+            issues.push(`图片超过9张（当前${defaultCount}张，继续导入将取前9张）`)
+          }
+        }
+        if (defaultCount === 0 && unifiedImages.length === 0) issues.push('缺少图片（至少1张，继续导入该条将失败）')
+        m.versions.filter(v => v.version !== m.default_version).forEach(v => {
+          if (v.image_count === 0) issues.push(`版本${v.version} 缺少图片（至少1张，继续导入该条将失败）`)
+          else if (v.image_count > 9) issues.push(`版本${v.version} 图片超过9张（将取前9张）`)
+        })
       }
-      if (!draft && m.image_count === 0 && unifiedImages.length === 0) issues.push('缺少图片（至少1张，继续导入该条将失败）')
       if (issues.length > 0) {
         issueList.push({ code: m.code, title: draft ? draft.title : m.title, issues })
       }
@@ -851,7 +1031,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                   点击选择包含素材的本地文件夹
                 </p>
                 <p className="text-xs text-slate-400 mt-1">
-                  每个子文件夹 = 一个素材（含 .txt 元数据 + 图片）
+                  版本文件夹 = A001_XXX_N（编号_文件夹名_版本号，含 .txt 文案 + 图片）
                 </p>
               </div>
 
@@ -1137,19 +1317,36 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                   </div>
                   <div className="max-h-[50vh] overflow-y-auto divide-y divide-slate-100 dark:divide-slate-700">
                     {materials.map(m => {
-                      const isExpanded = expandedCode === m.code
-                      const isSelected = selectedCodes.has(m.code)
-                      const hasOverride = !!overrides[m.code]
-                      const s = getSettings(m.code)
-                      const draft = editedDrafts[m.code]
+                      const isExpanded = expandedCode === m.uid
+                      const isSelected = selectedCodes.has(m.uid)
+                      const hasOverride = !!overrides[m.uid]
+                      const s = getSettings(m.uid)
+                      const draft = editedDrafts[m.uid]
                       const displayTitle = draft?.title || m.title
                       const displayDescription = draft?.description || m.description
-                      const displayImageCount = draft ? (draft.images?.length ?? 0) : m.image_count
-                      const thumbnail = draft ? (draft.images?.[0] || null) : getThumbnail(m.code)
-                      const fullEditBusy = fullEditLoadingCode === m.code
+                      const defaultVersionNum = draft?.default_version ?? m.default_version
+                      const draftVersions = draft?.versions?.length ? draft.versions : null
+                      // 统一为视图对象：草稿（URL 图片）与本地（blob 缩略图 + 数量）两种来源
+                      const displayVersions = (draftVersions ?? m.versions).map(v => ({
+                        version: v.version,
+                        title: v.title,
+                        thumbnail: draft
+                          ? ((v as MaterialVersion).images?.[0] ?? null)
+                          : getThumbnail(m.uid, v.version),
+                        count: draft
+                          ? ((v as MaterialVersion).images?.length ?? 0)
+                          : (v as LocalVersion).image_count,
+                      }))
+                      const displayImageCount = draft
+                        ? (draftVersions?.find(v => v.version === defaultVersionNum)?.images?.length ?? draft.images?.length ?? 0)
+                        : m.image_count
+                      const thumbnail = draft
+                        ? (draftVersions?.find(v => v.version === defaultVersionNum)?.images?.[0] ?? draft.images?.[0] ?? null)
+                        : getThumbnail(m.uid, m.default_version)
+                      const fullEditBusy = fullEditLoadingCode === m.uid
 
                       return (
-                        <div key={m.code}>
+                        <div key={m.uid}>
                           {/* 素材行 */}
                           <div
                             className={`flex items-start gap-3 px-4 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/50 ${
@@ -1160,11 +1357,11 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                               <input
                                 type="checkbox"
                                 checked={isSelected}
-                                onChange={() => toggleSelect(m.code)}
+                                onChange={() => toggleSelect(m.uid)}
                                 className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                               />
                             </label>
-                            {/* 缩略图 */}
+                            {/* 缩略图（默认版本首页图） */}
                             <div className="w-14 h-14 flex-shrink-0 rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600">
                               {thumbnail ? (
                                 <img
@@ -1184,7 +1381,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                             {/* 信息区 */}
                             <div
                               className="flex-1 min-w-0 cursor-pointer"
-                              onClick={() => toggleSelect(m.code)}
+                              onClick={() => toggleSelect(m.uid)}
                             >
                               <p className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
                                 {displayTitle}
@@ -1198,12 +1395,17 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                   <Image className="w-3 h-3 inline mr-0.5" />
                                   {displayImageCount} 张图
                                 </span>
+                                {displayVersions.length > 1 && (
+                                  <span className="text-xs text-purple-500 bg-purple-50 dark:bg-purple-900/20 px-1 rounded">
+                                    共 {displayVersions.length} 个版本 · 默认V{defaultVersionNum}
+                                  </span>
+                                )}
                                 <span className="text-xs text-amber-600 font-medium">¥{s.price}</span>
                                 <span className="text-xs text-slate-400">{s.category}</span>
-                                {recognizedCategories[m.code] && !draft && (
+                                {recognizedCategories[m.uid] && !draft && (
                                   <span className="text-xs text-blue-500">
                                     <Sparkles className="w-2.5 h-2.5 inline mr-0.5" />
-                                    平台分类：{recognizedCategories[m.code].cat_name || recognizedCategories[m.code].channel_cat_name || '已识别'}
+                                    平台分类：{recognizedCategories[m.uid].cat_name || recognizedCategories[m.uid].channel_cat_name || '已识别'}
                                   </span>
                                 )}
                                 {hasOverride && (
@@ -1236,7 +1438,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                               className="flex-shrink-0 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                               onClick={e => {
                                 e.stopPropagation()
-                                setExpandedCode(isExpanded ? null : m.code)
+                                setExpandedCode(isExpanded ? null : m.uid)
                               }}
                               title={isExpanded ? '收起' : '单独设置'}
                             >
@@ -1251,6 +1453,49 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                           {/* 展开的单条编辑区 */}
                           {isExpanded && (
                             <div className="px-4 py-3 bg-slate-50/80 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-700">
+                              {/* 版本列表 */}
+                              {displayVersions.length > 1 && (
+                                <div className="mb-3">
+                                  <p className="text-xs font-medium text-slate-500 mb-1.5">
+                                    版本列表（共 {displayVersions.length} 个，默认 版本{defaultVersionNum}）
+                                  </p>
+                                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                    {[...displayVersions].sort((a, b) => a.version - b.version).map(v => (
+                                      <div
+                                        key={v.version}
+                                        className={`rounded-lg border p-2 ${
+                                          v.version === defaultVersionNum
+                                            ? 'border-blue-300 bg-blue-50/60 dark:bg-blue-900/10'
+                                            : 'border-slate-200 dark:border-slate-700'
+                                        }`}
+                                      >
+                                        <div className="w-full h-14 rounded overflow-hidden bg-slate-100 dark:bg-slate-700 mb-1">
+                                          {v.thumbnail ? (
+                                            <img
+                                              src={v.thumbnail}
+                                              alt=""
+                                              className="w-full h-full object-cover"
+                                              onError={e => { ;(e.target as HTMLImageElement).style.display = 'none' }}
+                                            />
+                                          ) : (
+                                            <div className="w-full h-full flex items-center justify-center">
+                                              <Image className="w-4 h-4 text-slate-300" />
+                                            </div>
+                                          )}
+                                        </div>
+                                        <p className="text-xs text-slate-700 dark:text-slate-200 truncate" title={v.title}>
+                                          <span className="font-mono text-blue-500">V{v.version}</span>
+                                          {v.version === defaultVersionNum && <span className="text-blue-500">（默认）</span>} {v.title}
+                                        </p>
+                                        <p className="text-xs text-slate-400 mt-0.5">
+                                          {v.count} 张图
+                                        </p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
                               <div className="flex items-center justify-between mb-2">
                                 <p className="text-xs font-medium text-slate-500">
                                   单独设置 — <span className="font-mono text-blue-500">{m.code}</span>
@@ -1260,7 +1505,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                   onClick={() => {
                                     setOverrides(prev =>
                                       Object.fromEntries(
-                                        Object.entries(prev).filter(([k]) => k !== m.code)
+                                        Object.entries(prev).filter(([k]) => k !== m.uid)
                                       )
                                     )
                                   }}
@@ -1277,7 +1522,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                     min="0" step="0.01"
                                     placeholder={defaults.price}
                                     value={s.price !== defaults.price ? s.price : ''}
-                                    onChange={e => updateOverride(m.code, 'price', e.target.value)}
+                                    onChange={e => updateOverride(m.uid, 'price', e.target.value)}
                                     disabled={importing}
                                   />
                                 </div>
@@ -1289,7 +1534,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                     min="0" step="0.01"
                                     placeholder={defaults.original_price || '划线价'}
                                     value={s.original_price !== defaults.original_price ? s.original_price : ''}
-                                    onChange={e => updateOverride(m.code, 'original_price', e.target.value)}
+                                    onChange={e => updateOverride(m.uid, 'original_price', e.target.value)}
                                     disabled={importing}
                                   />
                                 </div>
@@ -1298,7 +1543,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                   <select
                                     className="input-ios text-sm"
                                     value={s.category}
-                                    onChange={e => updateOverride(m.code, 'category', e.target.value)}
+                                    onChange={e => updateOverride(m.uid, 'category', e.target.value)}
                                     disabled={importing}
                                   >
                                     {CATEGORIES.map(c => (
@@ -1311,7 +1556,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                   <select
                                     className="input-ios text-sm"
                                     value={s.condition}
-                                    onChange={e => updateOverride(m.code, 'condition', e.target.value)}
+                                    onChange={e => updateOverride(m.uid, 'condition', e.target.value)}
                                     disabled={importing}
                                   >
                                     {CONDITIONS.map(c => (
@@ -1325,7 +1570,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                     className="input-ios text-sm"
                                     placeholder={defaults.brand || '选填'}
                                     value={s.brand !== defaults.brand ? s.brand : ''}
-                                    onChange={e => updateOverride(m.code, 'brand', e.target.value)}
+                                    onChange={e => updateOverride(m.uid, 'brand', e.target.value)}
                                     disabled={importing}
                                   />
                                 </div>
@@ -1336,9 +1581,9 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                       <label key={option.value} className="inline-flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
                                         <input
                                           type="radio"
-                                          name={`batch_shipping_${m.code}`}
+                                          name={`batch_shipping_${m.uid}`}
                                           checked={s.shipping_method === option.value}
-                                          onChange={() => updateOverride(m.code, 'shipping_method', option.value)}
+                                          onChange={() => updateOverride(m.uid, 'shipping_method', option.value)}
                                           disabled={importing}
                                         />
                                         {option.label}
@@ -1349,7 +1594,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                       <input
                                         type="checkbox"
                                         checked={s.support_pickup}
-                                        onChange={e => updateOverride(m.code, 'support_pickup', e.target.checked)}
+                                        onChange={e => updateOverride(m.uid, 'support_pickup', e.target.checked)}
                                         disabled={importing}
                                       />
                                     </label>
@@ -1364,7 +1609,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                       min="0" step="0.01"
                                       placeholder={defaults.postage}
                                       value={s.postage !== defaults.postage ? s.postage : ''}
-                                      onChange={e => updateOverride(m.code, 'postage', e.target.value)}
+                                      onChange={e => updateOverride(m.uid, 'postage', e.target.value)}
                                       disabled={importing}
                                     />
                                   </div>
@@ -1377,7 +1622,7 @@ export function BatchImportModal({ onClose, onImported }: Props) {
                                     min="1" step="1"
                                     placeholder={defaults.quantity}
                                     value={s.quantity !== defaults.quantity ? s.quantity : ''}
-                                    onChange={e => updateOverride(m.code, 'quantity', e.target.value)}
+                                    onChange={e => updateOverride(m.uid, 'quantity', e.target.value)}
                                     disabled={importing}
                                   />
                                 </div>

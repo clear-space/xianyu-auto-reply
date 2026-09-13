@@ -111,6 +111,14 @@ class PublishSkuRowRequest(BaseModel):
     price: float = Field(..., gt=0)
     stock: int = Field(0, ge=0, le=999999)
 
+class MaterialVersionRequest(BaseModel):
+    """素材单个版本内容（标题/文案/图片按版本区分，价格等商品级字段共用）。"""
+    version: int = Field(..., ge=1, description="版本号")
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(..., min_length=1)
+    images: List[str] = Field(default_factory=list, max_length=9, description="该版本图片URL列表")
+
+
 class MaterialCreateRequest(BaseModel):
     """创建素材请求"""
     title: str = Field(..., min_length=1, max_length=200, description="商品标题")
@@ -143,6 +151,9 @@ class MaterialCreateRequest(BaseModel):
     condition: str = Field("全新", description="成色")
     stock: int = Field(9999, ge=0, description="库存数量")
     remark: Optional[str] = Field(None, max_length=500, description="备注（内部使用）")
+    product_code: Optional[str] = Field(None, max_length=16, description="商品编号（同一编号多版本合并）")
+    versions: Optional[List[MaterialVersionRequest]] = Field(None, description="素材版本列表")
+    default_version: Optional[int] = Field(None, ge=1, description="默认版本号")
 
     @model_validator(mode="after")
     def normalize_delivery_method(self) -> "MaterialCreateRequest":
@@ -184,6 +195,9 @@ class MaterialUpdateRequest(BaseModel):
     stock: Optional[int] = Field(None, ge=0, description="库存数量")
     remark: Optional[str] = Field(None, max_length=500)
     risk: Optional[int] = Field(None, ge=0, le=2, description="风险状态：0-正常,1-危险,2-禁用")
+    product_code: Optional[str] = Field(None, max_length=16, description="商品编号（同一编号多版本合并）")
+    versions: Optional[List[MaterialVersionRequest]] = Field(None, description="素材版本列表")
+    default_version: Optional[int] = Field(None, ge=1, description="默认版本号")
 
     @model_validator(mode="after")
     def normalize_delivery_method(self) -> "MaterialUpdateRequest":
@@ -781,7 +795,7 @@ class BatchImportMaterialItem(BaseModel):
     folder_name: str = Field(..., description="文件夹名")
     title: str = Field(..., min_length=1, max_length=200)
     description: str = Field(..., min_length=1)
-    images: List[str] = Field(default=[], description="本地图片路径列表")
+    images: List[str] = Field(default=[], description="本地图片路径列表（无版本信息的单版本素材）")
     price: float = Field(..., gt=0)
     original_price: Optional[float] = Field(None, description="原价（划线价）")
     category: str = Field("虚拟商品", max_length=100)
@@ -790,6 +804,8 @@ class BatchImportMaterialItem(BaseModel):
     delivery_method: str = Field("express")
     postage: float = Field(0, ge=0)
     stock: int = Field(9999, ge=0, description="库存数量")
+    product_code: Optional[str] = Field(None, max_length=16, description="商品编号（同一编号多版本合并）")
+    versions: Optional[List[MaterialVersionRequest]] = Field(None, description="素材版本列表（每项 images 为本地图片路径）")
 
 
 class BatchImportRequest(BaseModel):
@@ -804,9 +820,13 @@ async def scan_directory(
 ) -> Dict[str, Any]:
     """扫描本地目录，解析素材（txt元数据 + 图片文件）
 
-    目录结构要求：每个子文件夹为一个素材，包含：
-    - 一个 .txt 文件（第一行=标题，最后非空行=编号，中间=描述）
-    - 若干 .jpg/.png 图片（按文件名排序）
+    支持两种目录格式（可混用）：
+    - 格式一（商品文件夹）：A001_XXX/A001_XXX_1/（1.jpg…+标题.txt），一个商品编号下多个版本；
+    - 格式二（版本文件夹平铺）：A001_XXX_1/ 直接在所选目录下。
+    文件夹名 A001_XXX_N：前4位=商品编号，中间=文件夹名，末尾_N=版本号；
+    txt 文件名=商品名（去【xxx】前缀），内容=商品文案；1.jpg 为首页图。
+    商品文件夹直属的 原.png / 购买+原购买链接.txt 等记录文件忽略。
+    不带 _N 的老格式文件夹仍按旧规则解析（txt 最后非空行=编号）。
     """
     import os
     import re
@@ -822,6 +842,119 @@ async def scan_directory(
 
     materials: List[Dict[str, Any]] = []
     IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}
+    VERSION_RE = re.compile(r'^([A-Za-z]\d{3})_(.+)_(\d+)$')
+    PRODUCT_PREFIX_RE = re.compile(r'^[A-Za-z]\d{3}_')
+
+    def infer_category(content: str) -> str:
+        if "虚拟商品" in content:
+            return "虚拟商品"
+        if any(kw in content for kw in ["数码", "手机", "电脑", "电子"]):
+            return "数码家电"
+        if any(kw in content for kw in ["服饰", "鞋", "包", "衣服", "穿"]):
+            return "服饰鞋包"
+        if any(kw in content for kw in ["家居", "日用", "家具", "收纳"]):
+            return "家居日用"
+        if any(kw in content for kw in ["书", "音像", "DVD", "CD"]):
+            return "图书音像"
+        if any(kw in content for kw in ["美妆", "护肤", "化妆", "个护"]):
+            return "美妆个护"
+        if any(kw in content for kw in ["母婴", "宝宝", "孕"]):
+            return "母婴用品"
+        if any(kw in content for kw in ["运动", "户外", "健身", "瑜伽"]):
+            return "运动户外"
+        if any(kw in content for kw in ["食品", "生鲜", "零食", "饮料"]):
+            return "食品生鲜"
+        return "虚拟商品"
+
+    def parse_version_dir(vdir: Path) -> Optional[Dict[str, Any]]:
+        """解析一个版本文件夹（A001_XXX_N），返回该版本的内容。"""
+        match = VERSION_RE.match(vdir.name)
+        if not match:
+            return None
+        txt_files = sorted(vdir.glob("*.txt"))
+        if not txt_files:
+            logger.warning(f"跳过无txt文件的版本目录: {vdir.name}")
+            return None
+        txt_path = txt_files[0]
+        try:
+            txt_content = txt_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            try:
+                txt_content = txt_path.read_text(encoding="gbk")
+            except Exception:
+                logger.warning(f"无法读取txt文件编码: {txt_path}")
+                return None
+        # 标题 = txt 文件名（去掉【xxx】前缀）
+        title = re.sub(r'^【[^】]*】\s*', '', txt_path.stem).strip() or vdir.name
+        # 描述 = txt 全文（商品文案）
+        non_empty = [l.strip() for l in txt_content.split("\n") if l.strip()]
+        description = "\n".join(non_empty).strip() or title
+        images = sorted(
+            [str(p) for p in vdir.iterdir() if p.suffix.lower() in IMAGE_EXTS],
+            key=lambda p: (
+                int(re.search(r'(\d+)', os.path.basename(p)).group(1))
+                if re.search(r'(\d+)', os.path.basename(p))
+                else os.path.basename(p)
+            ),
+        )
+        return {
+            "code": match.group(1),
+            "folder_name": vdir.name,
+            "version": int(match.group(3)),
+            "title": title,
+            "description": description,
+            "images": images,
+            "image_count": len(images),
+            "category": infer_category(txt_content),
+        }
+
+    def parse_legacy_dir(subdir: Path) -> Optional[Dict[str, Any]]:
+        """老格式文件夹（无 _N 后缀）：txt 最后非空行=编号，其余=描述。"""
+        txt_files = sorted(subdir.glob("*.txt"))
+        if not txt_files:
+            logger.warning(f"跳过无txt文件的目录: {subdir.name}")
+            return None
+        txt_path = txt_files[0]
+        try:
+            txt_content = txt_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            try:
+                txt_content = txt_path.read_text(encoding="gbk")
+            except Exception:
+                logger.warning(f"无法读取txt文件编码: {txt_path}")
+                return None
+        non_empty = [l.strip() for l in txt_content.split("\n") if l.strip()]
+        title = re.sub(r'^【[^】]*】\s*', '', txt_path.stem).strip() or subdir.name
+        code = non_empty[-1].strip() if non_empty else title
+        description = "\n".join(non_empty[:-1]).strip() or title
+        images = sorted(
+            [str(p) for p in subdir.iterdir() if p.suffix.lower() in IMAGE_EXTS],
+            key=lambda p: (
+                int(re.search(r'(\d+)', os.path.basename(p)).group(1))
+                if re.search(r'(\d+)', os.path.basename(p))
+                else os.path.basename(p)
+            ),
+        )
+        version_item = {
+            "version": 1,
+            "title": title,
+            "description": description,
+            "images": images,
+            "image_count": len(images),
+        }
+        return {
+            "code": code,
+            "folder_name": subdir.name,
+            "title": title,
+            "description": description,
+            "images": images,
+            "image_count": len(images),
+            "category": infer_category(txt_content),
+            "price": 0,  # 前端统一设置
+            "product_code": subdir.name[:4] if PRODUCT_PREFIX_RE.match(subdir.name) else None,
+            "versions": [version_item],
+            "default_version": 1,
+        }
 
     try:
         subdirs = sorted(
@@ -836,89 +969,77 @@ async def scan_directory(
 
     for subdir in subdirs:
         try:
-            # 查找 .txt 文件
-            txt_files = sorted(subdir.glob("*.txt"))
-            if not txt_files:
-                logger.warning(f"跳过无txt文件的目录: {subdir.name}")
+            version_match = VERSION_RE.match(subdir.name)
+            if version_match:
+                # 格式二：版本文件夹直接平铺
+                parsed = parse_version_dir(subdir)
+                if not parsed:
+                    continue
+                version_item = {
+                    "version": parsed["version"],
+                    "title": parsed["title"],
+                    "description": parsed["description"],
+                    "images": parsed["images"],
+                    "image_count": parsed["image_count"],
+                }
+                materials.append({
+                    "code": parsed["code"],
+                    "folder_name": subdir.name,
+                    "title": parsed["title"],
+                    "description": parsed["description"],
+                    "images": parsed["images"],
+                    "image_count": parsed["image_count"],
+                    "category": parsed["category"],
+                    "price": 0,  # 前端统一设置
+                    "product_code": parsed["code"],
+                    "versions": [version_item],
+                    "default_version": parsed["version"],
+                })
                 continue
 
-            txt_path = txt_files[0]
-            try:
-                txt_content = txt_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                try:
-                    txt_content = txt_path.read_text(encoding="gbk")
-                except Exception:
-                    logger.warning(f"无法读取txt文件编码: {txt_path}")
+            if PRODUCT_PREFIX_RE.match(subdir.name):
+                # 可能的商品文件夹（格式一）：收集其下的版本子文件夹
+                version_dirs = sorted(
+                    [d for d in subdir.iterdir() if d.is_dir() and VERSION_RE.match(d.name)],
+                    key=lambda d: d.name,
+                )
+                if version_dirs:
+                    version_items: List[Dict[str, Any]] = []
+                    for vdir in version_dirs:
+                        parsed = parse_version_dir(vdir)
+                        if parsed:
+                            version_items.append({
+                                "version": parsed["version"],
+                                "title": parsed["title"],
+                                "description": parsed["description"],
+                                "images": parsed["images"],
+                                "image_count": parsed["image_count"],
+                            })
+                    if not version_items:
+                        continue
+                    default_version = max(v["version"] for v in version_items)
+                    default_item = next(v for v in version_items if v["version"] == default_version)
+                    product_code = VERSION_RE.match(version_dirs[0].name).group(1)
+                    # 商品文件夹直属文件（原.png / 购买+原购买链接.txt）为整理记录，忽略
+                    materials.append({
+                        "code": product_code,
+                        "folder_name": subdir.name,
+                        "title": default_item["title"],
+                        "description": default_item["description"],
+                        "images": default_item["images"],
+                        "image_count": default_item["image_count"],
+                        "category": infer_category(default_item["description"]),
+                        "price": 0,  # 前端统一设置
+                        "product_code": product_code,
+                        "versions": version_items,
+                        "default_version": default_version,
+                    })
                     continue
 
-            lines = [l.strip() for l in txt_content.split("\n")]
-            # 过滤掉完全空的行
-            non_empty = [l for l in lines if l]
-
-            # 标题 = txt 文件名（去掉【xxx】前缀），不是从内容里提取
-            title = re.sub(r'^【[^】]*】\s*', '', txt_path.stem).strip() or subdir.name
-
-            if non_empty:
-                # 最后非空行 = 编号
-                code = non_empty[-1].strip()
-                # 描述 = 除编号外的全文
-                description = "\n".join(non_empty[:-1]).strip()
-            else:
-                # txt 无内容：编号用文件名，描述用标题兜底
-                code = title
-                description = title
-
-            if not description:
-                description = title
-
-            # 查找图片
-            images = sorted(
-                [
-                    str(p) for p in subdir.iterdir()
-                    if p.suffix.lower() in IMAGE_EXTS
-                ],
-                key=lambda p: (
-                    # 按数字排序：1.jpg, 2.jpg, ...
-                    int(re.search(r'(\d+)', os.path.basename(p)).group(1))
-                    if re.search(r'(\d+)', os.path.basename(p))
-                    else os.path.basename(p)
-                ),
-            )
-
-            # 从描述中提取分类
-            category = "虚拟商品"
-            if "虚拟商品" in txt_content:
-                category = "虚拟商品"
-            elif any(kw in txt_content for kw in ["数码", "手机", "电脑", "电子"]):
-                category = "数码家电"
-            elif any(kw in txt_content for kw in ["服饰", "鞋", "包", "衣服", "穿"]):
-                category = "服饰鞋包"
-            elif any(kw in txt_content for kw in ["家居", "日用", "家具", "收纳"]):
-                category = "家居日用"
-            elif any(kw in txt_content for kw in ["书", "音像", "DVD", "CD"]):
-                category = "图书音像"
-            elif any(kw in txt_content for kw in ["美妆", "护肤", "化妆", "个护"]):
-                category = "美妆个护"
-            elif any(kw in txt_content for kw in ["母婴", "宝宝", "孕"]):
-                category = "母婴用品"
-            elif any(kw in txt_content for kw in ["运动", "户外", "健身", "瑜伽"]):
-                category = "运动户外"
-            elif any(kw in txt_content for kw in ["食品", "生鲜", "零食", "饮料"]):
-                category = "食品生鲜"
-            elif any(kw in txt_content for kw in ["PPT", "模板", "简历", "教程", "素材", "资料", "网盘", "电子"]):
-                category = "虚拟商品"
-
-            materials.append({
-                "code": code,
-                "folder_name": subdir.name,
-                "title": title,
-                "description": description,
-                "images": images,
-                "image_count": len(images),
-                "category": category,
-                "price": 0,  # 前端统一设置
-            })
+            # 老格式文件夹：保持旧解析逻辑
+            legacy = parse_legacy_dir(subdir)
+            if legacy:
+                materials.append(legacy)
         except Exception as e:
             logger.warning(f"解析目录异常 {subdir.name}: {e}")
             continue
@@ -951,31 +1072,46 @@ async def batch_import_materials(
     failed = 0
     failed_items: List[Dict[str, str]] = []
 
+    def copy_images(src_paths: List[str]) -> List[str]:
+        """复制本地图片到上传目录，返回 URL 列表。"""
+        saved: List[str] = []
+        for src_path in src_paths:
+            src = os.path.normpath(src_path)
+            if not os.path.isfile(src):
+                logger.warning(f"图片不存在，跳过: {src}")
+                continue
+
+            ext = os.path.splitext(src)[1].lower()
+            if ext not in {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}:
+                ext = '.jpg'
+
+            # 生成唯一文件名
+            unique_name = f"{uuid_mod.uuid4().hex}{ext}"
+            dest_dir = str(UPLOADS_PRODUCTS)
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, unique_name)
+
+            shutil.copy2(src, dest)
+            saved.append(f"/static/uploads/products/{unique_name}")
+        return saved
+
     for material_data in req.materials:
         try:
-            # 复制图片到上传目录
+            # 复制图片到上传目录（多版本按版本分组，无版本信息时用顶层 images）
+            saved_versions: List[Dict[str, Any]] = []
+            for version_item in (material_data.versions or []):
+                saved_versions.append({
+                    "version": int(version_item.version),
+                    "title": version_item.title.strip(),
+                    "description": (version_item.description or "").strip(),
+                    "images": copy_images(list(version_item.images or [])),
+                })
+
             saved_urls: List[str] = []
-            for src_path in material_data.images:
-                src = os.path.normpath(src_path)
-                if not os.path.isfile(src):
-                    logger.warning(f"图片不存在，跳过: {src}")
-                    continue
-
-                ext = os.path.splitext(src)[1].lower()
-                if ext not in {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}:
-                    ext = '.jpg'
-
-                # 生成唯一文件名
-                unique_name = f"{uuid_mod.uuid4().hex}{ext}"
-                dest_dir = str(UPLOADS_PRODUCTS)
-                os.makedirs(dest_dir, exist_ok=True)
-                dest = os.path.join(dest_dir, unique_name)
-
-                shutil.copy2(src, dest)
-                saved_urls.append(f"/static/uploads/products/{unique_name}")
-
-            if not saved_urls and material_data.images:
-                logger.warning(f"素材 {material_data.code} 没有成功复制任何图片")
+            if not saved_versions:
+                saved_urls = copy_images(list(material_data.images))
+                if not saved_urls and material_data.images:
+                    logger.warning(f"素材 {material_data.code} 没有成功复制任何图片")
 
             # 补充可能被清洗的字段
             title = material_data.title.strip() or material_data.folder_name
@@ -998,7 +1134,11 @@ async def batch_import_materials(
             }
             create_data.update(_platform_category_fields())
 
-            await svc.create(current_user.id, create_data)
+            if saved_versions:
+                create_data["product_code"] = material_data.product_code
+                create_data["versions"] = saved_versions
+
+            await svc.import_material(current_user.id, create_data)
             imported += 1
             logger.info(f"[批量导入] 成功: {material_data.code} - {title}")
         except Exception as e:
@@ -1062,49 +1202,78 @@ async def batch_import_materials_upload(
     failed_items: List[Dict[str, str]] = []
     IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}
 
+    async def save_uploaded_files(field_prefix: str, max_count: int) -> List[str]:
+        """按字段前缀顺序保存上传的图片文件，返回 URL 列表。"""
+        saved: List[str] = []
+        j = 0
+        while j < max_count:
+            field_name = f"{field_prefix}_{j}"
+            upload_file = form.get(field_name)
+            if upload_file is None:
+                break
+            if not hasattr(upload_file, "filename"):
+                break
+
+            filename_parts = getattr(upload_file, "filename", None)
+            if not filename_parts:
+                j += 1
+                continue
+
+            ext = os.path.splitext(str(filename_parts))[1].lower()
+            if ext not in IMAGE_EXTS:
+                ext = '.jpg'
+
+            unique_name = f"{uuid_mod.uuid4().hex}{ext}"
+            dest_dir = str(UPLOADS_PRODUCTS)
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, unique_name)
+
+            content = await upload_file.read()
+            with open(dest, "wb") as f:
+                f.write(content)
+            saved.append(f"/static/uploads/products/{unique_name}")
+            j += 1
+        return saved
+
     for i, mat in enumerate(materials_list):
         try:
-            # 收集该素材的图片文件；完整修改过的条目图片已在服务器，直接用元数据中的 URL
-            preprovided_images = [str(u) for u in (mat.get("images") or []) if str(u).strip()]
-            saved_urls: List[str] = list(preprovided_images)
-            if not saved_urls:
-                j = 0
-                max_images = int(mat.get("image_count", 20))
+            # 多版本素材：versions 每项携带该版本的标题/文案/图片（完整修改过的版本图片已是服务器URL，
+            # 其余版本按 img_{i}_{版本号}_{j} 字段读取上传文件）；无版本信息走老路径
+            versions_raw = mat.get("versions")
+            saved_versions: List[Dict[str, Any]] = []
+            saved_urls: List[str] = []
+            if isinstance(versions_raw, list) and versions_raw:
+                for version_item in versions_raw:
+                    if not isinstance(version_item, dict):
+                        continue
+                    vnum = version_item.get("version")
+                    vtitle = str(version_item.get("title") or "").strip()
+                    if vnum is None or not vtitle:
+                        continue
+                    vimages = [str(u) for u in (version_item.get("images") or []) if str(u).strip()]
+                    if not vimages:
+                        vimages = await save_uploaded_files(
+                            f"img_{i}_{int(vnum)}", int(version_item.get("image_count") or 9)
+                        )
+                    # 统一图片插入：追加在默认版本商品图片之后（前端已按策略裁剪，总数不超过9张）
+                    vimages.extend([str(u) for u in (version_item.get("append_images") or []) if str(u).strip()])
+                    saved_versions.append({
+                        "version": int(vnum),
+                        "title": vtitle,
+                        "description": str(version_item.get("description") or "").strip() or vtitle,
+                        "images": vimages[:9],
+                    })
             else:
-                j = 0
-                max_images = 0
-            while j < max_images:
-                field_name = f"img_{i}_{j}"
-                upload_file = form.get(field_name)
-                if upload_file is None:
-                    break
-                if not hasattr(upload_file, "filename"):
-                    break
-
-                filename_parts = getattr(upload_file, "filename", None)
-                if not filename_parts:
-                    j += 1
-                    continue
-
-                ext = os.path.splitext(str(filename_parts))[1].lower()
-                if ext not in IMAGE_EXTS:
-                    ext = '.jpg'
-
-                unique_name = f"{uuid_mod.uuid4().hex}{ext}"
-                dest_dir = str(UPLOADS_PRODUCTS)
-                os.makedirs(dest_dir, exist_ok=True)
-                dest = os.path.join(dest_dir, unique_name)
-
-                content = await upload_file.read()
-                with open(dest, "wb") as f:
-                    f.write(content)
-                saved_urls.append(f"/static/uploads/products/{unique_name}")
-                j += 1
-
-            # 统一图片插入：追加在商品图片之后（前端已按策略裁剪商品图，总数不超过9张）
-            append_images = [str(u) for u in (mat.get("append_images") or []) if str(u).strip()]
-            saved_urls.extend(append_images)
-            saved_urls = saved_urls[:9]
+                # 老路径：完整修改过的条目图片已在服务器，直接用元数据中的 URL
+                saved_urls = [str(u) for u in (mat.get("images") or []) if str(u).strip()]
+                if saved_urls:
+                    max_images = 0
+                else:
+                    max_images = int(mat.get("image_count", 20))
+                saved_urls.extend(await save_uploaded_files(f"img_{i}", max_images))
+                # 统一图片插入：追加在商品图片之后（前端已按策略裁剪商品图，总数不超过9张）
+                saved_urls.extend([str(u) for u in (mat.get("append_images") or []) if str(u).strip()])
+                saved_urls = saved_urls[:9]
 
             # 构建创建数据
             title = str(mat.get("title", mat.get("folder_name", ""))).strip()
@@ -1136,7 +1305,17 @@ async def batch_import_materials_upload(
             create_data.update(_platform_category_fields(mat))
             create_data["platform_attributes"] = mat.get("platform_attributes") or []
 
-            await svc.create(current_user.id, create_data)
+            if saved_versions:
+                create_data["product_code"] = mat.get("product_code") or None
+                create_data["versions"] = saved_versions
+                # 主行字段镜像默认版本（最大版本号），由 import_material 统一处理
+                default_version = max(v["version"] for v in saved_versions)
+                default_v = next(v for v in saved_versions if v["version"] == default_version)
+                create_data["title"] = default_v["title"]
+                create_data["description"] = default_v["description"]
+                create_data["images"] = default_v["images"]
+
+            await svc.import_material(current_user.id, create_data)
             imported += 1
             logger.info(f"[批量导入上传] 成功: {mat.get('code', '?')} - {title}")
         except Exception as e:

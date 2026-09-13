@@ -373,6 +373,11 @@ export function ProductMaterials() {
                   )}
                   <td className="max-w-[200px]">
                     <span className="truncate block font-medium text-slate-800 dark:text-slate-100" title={m.title}>{m.title}</span>
+                    {(m.versions?.length ?? 0) > 1 && (
+                      <span className="badge-info inline-block mt-0.5">
+                        {m.versions!.length} 个版本{typeof m.default_version === 'number' ? ` · 默认V${m.default_version}` : ''}
+                      </span>
+                    )}
                   </td>
                   <td>
                     <span className="text-amber-600 font-medium">{m.price}</span>

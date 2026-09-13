@@ -110,6 +110,14 @@ export interface PublishSkuRow {
   stock: number
 }
 
+/** 素材单个版本内容：标题/文案/图片按版本区分，价格等商品级字段共用。 */
+export interface MaterialVersion {
+  version: number
+  title: string
+  description: string
+  images: string[]
+}
+
 export interface ProductMaterial {
   id: number
   user_id: number
@@ -145,6 +153,9 @@ export interface ProductMaterial {
   stock?: number
   remark?: string | null
   risk?: number  // 风险状态：0-正常,1-危险,2-禁用
+  product_code?: string | null  // 商品编号（同一编号多版本合并）
+  versions?: MaterialVersion[]  // 素材版本列表（多版本时编辑弹窗可切换）
+  default_version?: number | null  // 默认版本号（发布使用该版本内容）
   created_at: string
   updated_at: string
 }
@@ -181,6 +192,9 @@ export interface MaterialCreateParams {
   stock?: number
   remark?: string | null
   risk?: 0 | 1 | 2
+  product_code?: string | null  // 商品编号（同一编号多版本合并）
+  versions?: MaterialVersion[]  // 素材版本列表
+  default_version?: number | null  // 默认版本号
 }
 
 export interface MaterialListResponse {

@@ -95,6 +95,34 @@ def _normalize_material_json(data: dict) -> dict:
     return normalized
 
 
+def _normalize_versions(value: Any) -> list[dict]:
+    """规范化素材版本 JSON：每项 {version, title, description, images}，按版本号升序去重。"""
+    if not isinstance(value, list):
+        return []
+    seen: dict[int, dict] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        try:
+            version = int(item.get("version"))
+        except (TypeError, ValueError):
+            continue
+        if version <= 0:
+            continue
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        images = item.get("images") if isinstance(item.get("images"), list) else []
+        if not title:
+            continue
+        seen[version] = {
+            "version": version,
+            "title": title[:200],
+            "description": description or title,
+            "images": [str(u) for u in images if str(u).strip()][:9],
+        }
+    return [seen[key] for key in sorted(seen)]
+
+
 class ProductMaterialService:
     """商品素材库 CRUD 服务"""
 
@@ -140,11 +168,61 @@ class ProductMaterialService:
             stock=int(data.get("stock", 9999)),
             remark=data.get("remark"),
             risk=int(data.get("risk", 0)),
+            product_code=data.get("product_code"),
+            versions=_normalize_versions(data.get("versions")),
+            default_version=int(data["default_version"]) if data.get("default_version") is not None else None,
         )
         self.session.add(material)
         await self.session.commit()
         await self.session.refresh(material)
         return material
+
+    async def import_material(self, user_id: int, data: dict) -> ProductMaterial:
+        """导入素材：同一商品编号保留所有版本（按版本号覆盖合并），默认版本 = 最大版本号。
+
+        - 带 product_code + versions：主行 title/description/images 镜像默认版本内容；
+        - 无版本信息（老格式/手工路径）：按普通创建处理，行为与旧版一致。
+        """
+        data = _normalize_material_json(data)
+        product_code = str(data.get("product_code") or "").strip() or None
+        versions = _normalize_versions(data.get("versions"))
+        if not product_code or not versions:
+            data.pop("product_code", None)
+            data.pop("versions", None)
+            data.pop("default_version", None)
+            return await self.create(user_id, data)
+
+        default_version = max(v["version"] for v in versions)
+        data["product_code"] = product_code
+        data["default_version"] = default_version
+        data["versions"] = versions
+
+        stmt = select(ProductMaterial).where(
+            ProductMaterial.user_id == user_id,
+            ProductMaterial.product_code == product_code,
+            ProductMaterial.is_deleted.is_(False),
+        )
+        existing = (await self.session.execute(stmt)).scalar_one_or_none()
+
+        if existing:
+            # 合并版本：本次导入的版本覆盖同名版本号，库中其他版本保留
+            merged = {v["version"]: v for v in _normalize_versions(existing.versions)}
+            for version_item in versions:
+                merged[version_item["version"]] = version_item
+            merged_versions = [merged[key] for key in sorted(merged)]
+            data["versions"] = merged_versions
+            data["default_version"] = max(merged)
+            default_item = merged[data["default_version"]]
+            data["title"] = default_item["title"]
+            data["description"] = default_item["description"]
+            data["images"] = default_item["images"]
+            return await self.update(existing.id, user_id, data)
+
+        default_item = next(v for v in versions if v["version"] == default_version)
+        data["title"] = default_item["title"]
+        data["description"] = default_item["description"]
+        data["images"] = default_item["images"]
+        return await self.create(user_id, data)
 
     async def list_materials(
         self, user_id: int = None, page: int = 1, page_size: int = 20,
@@ -366,6 +444,7 @@ class ProductMaterialService:
             "platform_leaf_id", "platform_tb_category_id", "platform_category_path", "platform_attributes",
             "category_source", "category_confidence", "images", "videos", "specifications", "sku_rows", "quantity",
             "delivery_method", "shipping_method", "support_pickup", "postage", "address", "address_expected_text", "brand", "condition", "stock", "remark", "risk",
+            "product_code", "versions", "default_version",
         ]
         for field in updatable:
             if field in data:
@@ -374,6 +453,10 @@ class ProductMaterialService:
                     value = float(value) if value else (None if field == "original_price" else 0)
                 if field in ("stock", "risk"):
                     value = int(value)
+                elif field == "default_version":
+                    value = int(value) if value is not None else None
+                elif field == "versions":
+                    value = _normalize_versions(value)
                 elif field == "support_pickup":
                     # 兼容表单/历史调用传入的布尔字符串，避免 bool("false") 被当作 True。
                     value = as_bool(value)
@@ -455,6 +538,9 @@ def _material_to_dict(m: ProductMaterial) -> dict:
         "stock": int(m.stock) if m.stock is not None else 9999,
         "remark": m.remark,
         "risk": int(m.risk) if m.risk is not None else 0,
+        "product_code": m.product_code,
+        "versions": m.versions or [],
+        "default_version": int(m.default_version) if m.default_version is not None else None,
         "created_at": safe_isoformat(m.created_at),
         "updated_at": safe_isoformat(m.updated_at),
     }

@@ -1575,12 +1575,16 @@ class DatabaseInitializer:
                 stock INT DEFAULT 9999 COMMENT '库存数量',
                 remark VARCHAR(500) DEFAULT NULL COMMENT '备注（仅内部使用）',
                 risk TINYINT NOT NULL DEFAULT 0 COMMENT '风险状态：0-正常,1-危险,2-禁用',
+                product_code VARCHAR(16) DEFAULT NULL COMMENT '商品编号（批量导入时从文件夹名提取，同一编号多版本合并）',
+                versions JSON DEFAULT NULL COMMENT '素材版本列表（每项：version/title/description/images）',
+                default_version INT DEFAULT NULL COMMENT '默认版本号（发布使用该版本内容）',
                 is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_user_id (user_id),
                 INDEX idx_created_at (created_at),
-                INDEX idx_pm_user_created (user_id, created_at)
+                INDEX idx_pm_user_created (user_id, created_at),
+                UNIQUE INDEX uk_pm_user_code (user_id, product_code)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品素材库表';
         """,
 
@@ -2419,6 +2423,9 @@ class DatabaseInitializer:
             ("is_deleted", "TINYINT NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "remark"),
             ("stock", "INT DEFAULT 9999 COMMENT '库存数量'", "condition"),
             ("risk", "TINYINT NOT NULL DEFAULT 0 COMMENT '风险状态：0-正常,1-危险,2-禁用'", "remark"),
+            ("product_code", "VARCHAR(16) DEFAULT NULL COMMENT '商品编号（批量导入时从文件夹名提取，同一编号多版本合并）'", "risk"),
+            ("versions", "JSON DEFAULT NULL COMMENT '素材版本列表（每项：version/title/description/images）'", "product_code"),
+            ("default_version", "INT DEFAULT NULL COMMENT '默认版本号（发布使用该版本内容）'", "versions"),
         ],
         "xy_listing_monitor_tasks": [
             ("monitor_type", "VARCHAR(20) NOT NULL DEFAULT 'listing' COMMENT '监控类型：listing-上新监控，price_drop-降价监控'", "owner_id"),
@@ -3645,6 +3652,23 @@ class DatabaseInitializer:
                     logger.info("✓ xy_product_materials: 创建 idx_pm_platform_category 索引")
             except Exception as e:
                 logger.warning(f"✗ xy_product_materials idx_pm_platform_category 创建失败: {e}")
+
+            # 为 xy_product_materials 补建 (user_id, product_code) 唯一索引（同一编号多版本合并的前提）
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_product_materials'
+                    AND INDEX_NAME = 'uk_pm_user_code'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_product_materials ADD UNIQUE INDEX uk_pm_user_code (user_id, product_code)"
+                    ))
+                    logger.info("✓ xy_product_materials: 创建 uk_pm_user_code 唯一索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_product_materials uk_pm_user_code 创建失败: {e}")
 
             # 为 xy_publish_logs 补建 (user_id, created_at) 复合索引
             try:
