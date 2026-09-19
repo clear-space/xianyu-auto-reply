@@ -48,6 +48,7 @@ from app.services.scheduler.image_cleanup_task import image_cleanup_task_service
 from app.services.scheduler.data_retention_task import data_retention_task_service
 from app.services.scheduler.stale_temp_cleanup_task import stale_temp_cleanup_task_service
 from app.services.scheduler.system_metrics_task import system_metrics_task_service
+from app.services.scheduler.auto_relist_task import auto_relist_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -81,6 +82,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_DATA_RETENTION,
     TASK_CODE_STALE_TEMP_CLEANUP,
     TASK_CODE_SYSTEM_METRICS,
+    TASK_CODE_AUTO_RELIST,
 )
 from common.db.session import async_session_maker
 
@@ -124,6 +126,7 @@ class SchedulerService:
         self._data_retention_cleanup_task_handle: Optional[asyncio.Task] = None
         self._stale_temp_cleanup_task_handle: Optional[asyncio.Task] = None
         self._system_metrics_collect_task_handle: Optional[asyncio.Task] = None
+        self._auto_relist_task_handle: Optional[asyncio.Task] = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -155,7 +158,7 @@ class SchedulerService:
         self._data_retention_cleanup_task = data_retention_task_service
         self._stale_temp_cleanup_task = stale_temp_cleanup_task_service
         self._system_metrics_collect_task = system_metrics_task_service
-
+        self._auto_relist_task = auto_relist_task_service
     @classmethod
     def get_instance(cls) -> "SchedulerService":
         """获取单例实例"""
@@ -214,6 +217,7 @@ class SchedulerService:
             TASK_CODE_IMAGE_CLEANUP,
         ]:
             await self.reload_task_config(task_code)
+        await self.reload_task_config(TASK_CODE_AUTO_RELIST)
     
     def start(self) -> None:
         """启动定时任务"""
@@ -254,6 +258,7 @@ class SchedulerService:
         self._data_retention_cleanup_task_handle = asyncio.create_task(self._run_data_retention_cleanup_loop())
         self._stale_temp_cleanup_task_handle = asyncio.create_task(self._run_stale_temp_cleanup_loop())
         self._system_metrics_collect_task_handle = asyncio.create_task(self._run_system_metrics_collect_loop())
+        self._auto_relist_task_handle = asyncio.create_task(self._run_auto_relist_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -356,6 +361,9 @@ class SchedulerService:
         if self._system_metrics_collect_task_handle:
             self._system_metrics_collect_task_handle.cancel()
             self._system_metrics_collect_task_handle = None
+        if self._auto_relist_task_handle:
+            self._auto_relist_task_handle.cancel()
+            self._auto_relist_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
@@ -391,6 +399,8 @@ class SchedulerService:
         data_retention_config = ScheduledTaskService.get_cached_config(TASK_CODE_DATA_RETENTION)
         stale_temp_cleanup_config = ScheduledTaskService.get_cached_config(TASK_CODE_STALE_TEMP_CLEANUP)
         system_metrics_config = ScheduledTaskService.get_cached_config(TASK_CODE_SYSTEM_METRICS)
+
+        auto_relist_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_RELIST)
 
         return {
             "running": self._running,
@@ -612,6 +622,13 @@ class SchedulerService:
                         and not self._system_metrics_collect_task_handle.done()
                     ),
                 },
+                TASK_CODE_AUTO_RELIST: {
+                    "config": auto_relist_config or {"interval_seconds": 30, "enabled": True},
+                    "task_running": (
+                        self._auto_relist_task_handle is not None
+                        and not self._auto_relist_task_handle.done()
+                    ),
+                },
             }
         }
     
@@ -715,6 +732,12 @@ class SchedulerService:
         elif task_code == TASK_CODE_SYSTEM_METRICS:
             logger.info("[定时任务调度] 手动触发系统运行指标采集任务")
             await self._system_metrics_collect_task.execute()
+        elif task_code == TASK_CODE_AUTO_RELIST:
+            logger.info("[定时任务调度] [自动续售] 手动触发商品自动续售任务")
+            try:
+                await self._auto_relist_task.execute()
+            finally:
+                logger.info("[定时任务调度] [自动续售] 手动触发商品自动续售任务结束")
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
     
@@ -1806,6 +1829,31 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 系统运行指标采集任务循环结束")
+    async def _run_auto_relist_loop(self) -> None:
+        """商品自动续售唯一 runner 循环。"""
+        logger.info("[定时任务调度] [自动续售] 商品自动续售任务循环开始")
+        await self.reload_task_config(TASK_CODE_AUTO_RELIST)
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_RELIST) or {
+                "interval_seconds": 30,
+                "enabled": True,
+            }
+            if config.get("enabled", True):
+                logger.info("[定时任务调度] [自动续售] 商品自动续售任务本轮开始")
+                try:
+                    await self._auto_relist_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] [自动续售] 商品自动续售任务被取消")
+                    break
+                except Exception as exc:
+                    logger.error(f"[定时任务调度] [自动续售] 商品自动续售任务执行异常: {exc}")
+                finally:
+                    logger.info("[定时任务调度] [自动续售] 商品自动续售任务本轮结束")
+            try:
+                await asyncio.sleep(max(5, int(config.get("interval_seconds", 30))))
+            except asyncio.CancelledError:
+                break
+        logger.info("[定时任务调度] [自动续售] 商品自动续售任务循环结束")
 
 
 # 全局实例获取函数

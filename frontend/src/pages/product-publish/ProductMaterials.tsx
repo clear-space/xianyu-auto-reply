@@ -11,7 +11,7 @@
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, Sparkles, X, FolderOpen, ChevronDown } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, Sparkles, X, FolderOpen, ChevronDown, Repeat2 } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { getMaterials, deleteMaterial, batchDeleteMaterials, updateMaterial, type ProductMaterial } from '@/api/productPublish'
@@ -20,6 +20,7 @@ import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { MaterialFormModal } from './MaterialFormModal'
 import { BatchImportModal } from './BatchImportModal'
 import { AiListingModal } from './ai-listing/AiListingModal'
+import { AutoRelistModal } from './AutoRelistModal'
 import { useAiListingTask } from './ai-listing/useAiListingTask'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
@@ -76,6 +77,7 @@ export function ProductMaterials() {
 
   // AI 铺货
   const [showAiModal, setShowAiModal] = useState(false)
+  const [relistTarget, setRelistTarget] = useState<ProductMaterial | null>(null)
 
   // 风险状态切换下拉（打开下拉的素材ID）
   const [riskMenuId, setRiskMenuId] = useState<number | null>(null)
@@ -341,6 +343,7 @@ export function ProductMaterials() {
                 <th>媒体</th>
                 <th>创建时间</th>
                 <th>风险</th>
+                <th>自动续售</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -428,7 +431,18 @@ export function ProductMaterials() {
                     </div>
                   </td>
                   <td>
+                    <div className="flex items-center gap-1">
+                      <span className={`badge-${m.auto_relist?.status === 'active' ? 'success' : m.auto_relist ? 'warning' : 'gray'}`}>
+                        {m.auto_relist ? (m.auto_relist.status_text || m.auto_relist.status) : '未配置'}
+                      </span>
+                    </div>
+                  </td>
+                  <td>
                     <div className="table-actions">
+                      <button className="table-action-btn" title={m.auto_relist_can_configure === false ? '管理员只读，查看自动续售' : '自动续售'}
+                        onClick={() => setRelistTarget(m)}>
+                        <Repeat2 className={`w-4 h-4 ${m.auto_relist_can_configure === false ? 'text-slate-300' : 'text-emerald-500'}`} />
+                      </button>
                       <button className="table-action-btn" title="编辑"
                         onClick={() => { setEditTarget(m); setShowModal(true) }}>
                         <Pencil className="w-4 h-4 text-blue-500" />
@@ -490,6 +504,14 @@ export function ProductMaterials() {
           onStartTracking={aiTask.startTracking}
           onResetTask={aiTask.resetTask}
           onClose={() => setShowAiModal(false)}
+        />
+      )}
+
+      {relistTarget && (
+        <AutoRelistModal
+          material={relistTarget}
+          onClose={() => setRelistTarget(null)}
+          onSaved={() => { setRelistTarget(null); load(page, pageSize) }}
         />
       )}
 

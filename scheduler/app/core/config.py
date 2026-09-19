@@ -43,6 +43,17 @@ class SchedulerConfig(BaseConfig):
         """兼容旧字段名（scheduled_publish_task / offline_task 仍在使用）。"""
         return self.backend_web_service_url
 
+    # 自动续售执行参数：周期由定时任务配置表控制，批量和租约通过环境变量调节。
+    auto_relist_batch_size: int = Field(
+        default=10, alias="AUTO_RELIST_BATCH_SIZE", ge=1, le=100
+    )
+    auto_relist_lease_seconds: int = Field(
+        default=900, alias="AUTO_RELIST_LEASE_SECONDS", ge=120, le=86400
+    )
+    auto_relist_max_retries: int = Field(
+        default=3, alias="AUTO_RELIST_MAX_RETRIES", ge=1, le=20
+    )
+
 
 @lru_cache
 def get_settings() -> SchedulerConfig:

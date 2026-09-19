@@ -50,6 +50,7 @@ TASK_CODE_IMAGE_CLEANUP = "image_cleanup"
 TASK_CODE_DATA_RETENTION = "data_retention_cleanup"
 TASK_CODE_STALE_TEMP_CLEANUP = "stale_temp_cleanup"
 TASK_CODE_SYSTEM_METRICS = "system_metrics_collect"
+TASK_CODE_AUTO_RELIST = "auto_relist_scan"
 
 # 默认配置（数据库无配置时使用）
 DEFAULT_CONFIGS = {
@@ -84,6 +85,7 @@ DEFAULT_CONFIGS = {
     TASK_CODE_DATA_RETENTION: {"interval_seconds": 3600, "enabled": True},
     TASK_CODE_STALE_TEMP_CLEANUP: {"interval_seconds": 3600, "enabled": True},
     TASK_CODE_SYSTEM_METRICS: {"interval_seconds": 60, "enabled": True},
+    TASK_CODE_AUTO_RELIST: {"interval_seconds": 30, "enabled": True},
 }
 
 

@@ -1680,6 +1680,8 @@ class XianyuAsync:
                 logger.info(f"[{msg_time}] 【{self.cookie_id}】订单 {order_id} 自动评价成功")
                 # 更新订单评价状态
                 await update_order_rated_status(order_id, True)
+                # 好评后自动发送消息（#232）：发送失败仅记日志，不影响评价主流程
+                await self._send_thanks_message_after_rate(order_id, parsed_message, websocket, msg_time)
             else:
                 logger.warning(f"[{msg_time}] 【{self.cookie_id}】订单 {order_id} 自动评价失败: {result.get('message')}")
                 
@@ -1687,6 +1689,69 @@ class XianyuAsync:
             logger.error(f"【{self.cookie_id}】处理评价请求消息异常: {e}")
             import traceback
             logger.error(traceback.format_exc())
+    
+    async def _send_thanks_message_after_rate(self, order_id: str, parsed_message: dict, websocket, msg_time: str) -> None:
+        """好评成功后自动向买家发送配置的致谢消息（#232）
+        
+        与确认收货消息同一发送方式：复用当前会话(chat_id)直接发送文本。
+        通过订单 is_thanks_sent 标记去重（定时补评价路径共用同一标记），
+        任何异常仅记录日志，不影响自动评价主流程。
+        """
+        try:
+            from common.services.rate_service import (
+                get_thanks_message_content, get_order_buyer_id,
+                is_order_thanks_sent, mark_order_thanks_sent,
+            )
+            
+            content = await get_thanks_message_content(self.cookie_id)
+            if not content:
+                return
+            
+            if await is_order_thanks_sent(order_id):
+                logger.debug(f"[{msg_time}] 【{self.cookie_id}】订单 {order_id} 好评后消息已发送过，跳过")
+                return
+            
+            chat_id = parsed_message.get("chat_id", "")
+            send_user_id = parsed_message.get("send_user_id", "")
+            if not chat_id:
+                logger.warning(
+                    f"[{msg_time}] 【{self.cookie_id}】订单 {order_id} 好评后消息缺少 chat_id，跳过发送"
+                )
+                return
+            
+            # 收件人优先取订单表中的买家ID：评价请求是系统卡片消息，
+            # 其 send_user_id 不一定是买家；订单缺失时回退为消息发送者
+            recipient_id = await get_order_buyer_id(order_id) or send_user_id
+            if not recipient_id:
+                logger.warning(
+                    f"[{msg_time}] 【{self.cookie_id}】订单 {order_id} 好评后消息无法确定收件人，跳过发送"
+                )
+                return
+            
+            send_result = await self.send_msg(websocket, chat_id, recipient_id, content)
+            if send_result.get("success"):
+                # 等待服务端响应，识别是否被安全拦截（与 Scheduler/Backend 路径逻辑对齐）
+                send_future = send_result.get("send_future")
+                mid = send_result.get("mid")
+                if send_future:
+                    reject_reason = await self.wait_send_reject_reason(send_future, mid, timeout=10.0)
+                    if reject_reason:
+                        # 被拦截，不标记去重，保留错误日志供排查
+                        logger.warning(
+                            f"[{msg_time}] 【{self.cookie_id}】订单 {order_id} 好评后消息被拦截: {reject_reason}"
+                        )
+                        return
+
+                # 成功发送或超时未确认（服务端无响应），均视为已发出，标记去重避免重复发送
+                await mark_order_thanks_sent(order_id)
+                logger.info(f"[{msg_time}] 【好评后消息发出】订单 {order_id}: {content[:50]}...")
+            else:
+                logger.warning(
+                    f"[{msg_time}] 【{self.cookie_id}】订单 {order_id} 好评后消息发送失败: "
+                    f"{send_result.get('error_message')}"
+                )
+        except Exception as e:
+            logger.error(f"[{msg_time}] 【{self.cookie_id}】订单 {order_id} 好评后消息发送异常: {e}")
     
     async def _handle_confirm_receipt_message(self, parsed_message: dict, websocket):
         """处理买家确认收货消息，发送配置的确认收货回复
