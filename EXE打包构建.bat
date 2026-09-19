@@ -175,6 +175,10 @@ python -m nuitka ^
     --nofollow-import-to=pydoc ^
     --nofollow-import-to=doctest ^
     --nofollow-import-to=unittest ^
+    --nofollow-import-to=mypy ^
+    --nofollow-import-to=numba ^
+    --nofollow-import-to=matplotlib ^
+    --noinclude-numba-mode=nofollow ^
     --enable-plugin=tk-inter ^
     --assume-yes-for-downloads launcher\main.py
 if errorlevel 1 (
