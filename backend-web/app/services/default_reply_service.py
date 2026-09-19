@@ -33,6 +33,11 @@ class DefaultReplyService:
             "reply_image": reply.reply_image or "",
             "api_url": reply.api_url or "",
             "api_timeout": reply.api_timeout or 80,
+            "location_name": reply.location_name or "",
+            "location_longitude": reply.location_longitude or "",
+            "location_latitude": reply.location_latitude or "",
+            "location_title": reply.location_title or "",
+            "location_subtitle": reply.location_subtitle or "",
             "reply_once": reply.reply_once,
         }
 
@@ -46,6 +51,11 @@ class DefaultReplyService:
         reply_type: str = "text",
         api_url: str = "",
         api_timeout: int = 80,
+        location_name: str = "",
+        location_longitude: str = "",
+        location_latitude: str = "",
+        location_title: str = "",
+        location_subtitle: str = "",
     ) -> bool:
         """保存默认回复设置（账号级别，item_id为空）"""
         stmt = select(DefaultReply).where(
@@ -62,6 +72,11 @@ class DefaultReplyService:
             reply.reply_image = reply_image
             reply.api_url = api_url
             reply.api_timeout = api_timeout
+            reply.location_name = location_name
+            reply.location_longitude = location_longitude
+            reply.location_latitude = location_latitude
+            reply.location_title = location_title
+            reply.location_subtitle = location_subtitle
             reply.reply_once = reply_once
         else:
             reply = DefaultReply(
@@ -73,6 +88,11 @@ class DefaultReplyService:
                 reply_image=reply_image,
                 api_url=api_url,
                 api_timeout=api_timeout,
+                location_name=location_name,
+                location_longitude=location_longitude,
+                location_latitude=location_latitude,
+                location_title=location_title,
+                location_subtitle=location_subtitle,
                 reply_once=reply_once,
             )
             self.session.add(reply)
@@ -118,6 +138,11 @@ class DefaultReplyService:
                 "reply_image": reply.reply_image or "",
                 "api_url": reply.api_url or "",
                 "api_timeout": reply.api_timeout or 80,
+                "location_name": reply.location_name or "",
+                "location_longitude": reply.location_longitude or "",
+                "location_latitude": reply.location_latitude or "",
+                "location_title": reply.location_title or "",
+                "location_subtitle": reply.location_subtitle or "",
                 "reply_once": reply.reply_once,
             }
             for reply in replies
@@ -171,6 +196,11 @@ class DefaultReplyService:
             "reply_image": reply.reply_image or "",
             "api_url": reply.api_url or "",
             "api_timeout": reply.api_timeout or 80,
+            "location_name": reply.location_name or "",
+            "location_longitude": reply.location_longitude or "",
+            "location_latitude": reply.location_latitude or "",
+            "location_title": reply.location_title or "",
+            "location_subtitle": reply.location_subtitle or "",
             "reply_once": reply.reply_once,
             "item_id": reply.item_id,
         }
@@ -186,6 +216,11 @@ class DefaultReplyService:
         reply_type: str = "text",
         api_url: str = "",
         api_timeout: int = 80,
+        location_name: str = "",
+        location_longitude: str = "",
+        location_latitude: str = "",
+        location_title: str = "",
+        location_subtitle: str = "",
     ) -> bool:
         """保存商品级别的默认回复设置"""
         stmt = select(DefaultReply).where(
@@ -202,6 +237,11 @@ class DefaultReplyService:
             reply.reply_image = reply_image
             reply.api_url = api_url
             reply.api_timeout = api_timeout
+            reply.location_name = location_name
+            reply.location_longitude = location_longitude
+            reply.location_latitude = location_latitude
+            reply.location_title = location_title
+            reply.location_subtitle = location_subtitle
             reply.reply_once = reply_once
         else:
             reply = DefaultReply(
@@ -213,6 +253,11 @@ class DefaultReplyService:
                 reply_image=reply_image,
                 api_url=api_url,
                 api_timeout=api_timeout,
+                location_name=location_name,
+                location_longitude=location_longitude,
+                location_latitude=location_latitude,
+                location_title=location_title,
+                location_subtitle=location_subtitle,
                 reply_once=reply_once,
             )
             self.session.add(reply)

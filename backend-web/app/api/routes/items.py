@@ -14,6 +14,8 @@ from common.models.item_stats_daily import ItemStatsDaily
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.default_reply_api import validate_api_url, normalize_api_timeout
+from common.utils.default_reply_location import EXTERNAL_CONTACT_REPLY_TYPE, validate_external_contact_fields
+from common.models.user_setting import UserSetting
 from common.schemas.item import (
     ItemBatchDeleteRequest,
     ItemBatchOfflineRequest,
@@ -303,9 +305,14 @@ class ItemDefaultReplyRequest(PydanticBaseModel):
     reply_image: str = ""
     enabled: bool = True
     reply_once: bool = False
-    reply_type: str = "text"  # text-文本(可附带图片)，api-接口
+    reply_type: str = "text"  # text-文本(可附带图片)，api-接口，external_contact-站外联系方式
     api_url: str = ""
     api_timeout: int = 80
+    location_name: str = ""
+    location_longitude: str = ""
+    location_latitude: str = ""
+    location_title: str = ""
+    location_subtitle: str = ""
 
 
 @items_router.get("/{cookie_id}/{item_id}/default-reply")
@@ -340,6 +347,11 @@ async def get_item_default_reply(
                     "reply_type": reply_config.get("reply_type", "text"),
                     "api_url": reply_config.get("api_url", ""),
                     "api_timeout": reply_config.get("api_timeout", 80),
+                    "location_name": reply_config.get("location_name", ""),
+                    "location_longitude": reply_config.get("location_longitude", ""),
+                    "location_latitude": reply_config.get("location_latitude", ""),
+                    "location_title": reply_config.get("location_title", ""),
+                    "location_subtitle": reply_config.get("location_subtitle", ""),
                 }
             )
         else:
@@ -355,6 +367,11 @@ async def get_item_default_reply(
                     "reply_type": "text",
                     "api_url": "",
                     "api_timeout": 80,
+                    "location_name": "",
+                    "location_longitude": "",
+                    "location_latitude": "",
+                    "location_title": "",
+                    "location_subtitle": "",
                 }
             )
     except Exception as e:
@@ -385,6 +402,27 @@ async def save_item_default_reply(
         valid, err = validate_api_url(payload.api_url)
         if not valid:
             return ApiResponse(success=False, message=err)
+    if payload.reply_type == EXTERNAL_CONTACT_REPLY_TYPE:
+        setting_result = await default_reply_service.session.execute(select(UserSetting.key, UserSetting.value).where(
+            UserSetting.user_id == account.owner_id,
+            UserSetting.key.in_(
+                ("location_chat.remote_url", "location_chat.remote_secret_key")
+            ),
+        ))
+        location_settings = {str(key): str(value or "").strip() for key, value in setting_result.all()}
+        remote_url = location_settings.get("location_chat.remote_url", "")
+        if not location_settings.get("location_chat.remote_secret_key"):
+            return ApiResponse(success=False, message="请先到个人设置的远程URL配置中填写位置聊天远程URL和秘钥")
+        location_error = validate_external_contact_fields(
+            remote_url=remote_url,
+            location_name=payload.location_name,
+            longitude=payload.location_longitude,
+            latitude=payload.location_latitude,
+            title=payload.location_title,
+            subtitle=payload.location_subtitle,
+        )
+        if location_error:
+            return ApiResponse(success=False, message=location_error)
 
     try:
         success = await default_reply_service.save_item_default_reply(
@@ -397,6 +435,11 @@ async def save_item_default_reply(
             reply_type=payload.reply_type,
             api_url=payload.api_url,
             api_timeout=api_timeout,
+            location_name=payload.location_name,
+            location_longitude=payload.location_longitude,
+            location_latitude=payload.location_latitude,
+            location_title=payload.location_title,
+            location_subtitle=payload.location_subtitle,
         )
         
         if success:
@@ -485,9 +528,14 @@ class BatchItemDefaultReplyRequest(PydanticBaseModel):
     reply_image: str = ""
     enabled: bool = True
     reply_once: bool = False
-    reply_type: str = "text"  # text-文本(可附带图片)，api-接口
+    reply_type: str = "text"  # text-文本(可附带图片)，api-接口，external_contact-站外联系方式
     api_url: str = ""
     api_timeout: int = 80
+    location_name: str = ""
+    location_longitude: str = ""
+    location_latitude: str = ""
+    location_title: str = ""
+    location_subtitle: str = ""
 
 
 @items_router.post("/{cookie_id}/batch-default-reply/upload-image")
@@ -546,6 +594,27 @@ async def batch_save_item_default_reply(
         valid, err = validate_api_url(payload.api_url)
         if not valid:
             return ApiResponse(success=False, message=err)
+    if payload.reply_type == EXTERNAL_CONTACT_REPLY_TYPE:
+        setting_result = await default_reply_service.session.execute(select(UserSetting.key, UserSetting.value).where(
+            UserSetting.user_id == account.owner_id,
+            UserSetting.key.in_(
+                ("location_chat.remote_url", "location_chat.remote_secret_key")
+            ),
+        ))
+        location_settings = {str(key): str(value or "").strip() for key, value in setting_result.all()}
+        remote_url = location_settings.get("location_chat.remote_url", "")
+        if not location_settings.get("location_chat.remote_secret_key"):
+            return ApiResponse(success=False, message="请先到个人设置的远程URL配置中填写位置聊天远程URL和秘钥")
+        location_error = validate_external_contact_fields(
+            remote_url=remote_url,
+            location_name=payload.location_name,
+            longitude=payload.location_longitude,
+            latitude=payload.location_latitude,
+            title=payload.location_title,
+            subtitle=payload.location_subtitle,
+        )
+        if location_error:
+            return ApiResponse(success=False, message=location_error)
 
     return await _execute_batch_item_operation(
         item_ids=payload.item_ids,
@@ -559,6 +628,11 @@ async def batch_save_item_default_reply(
             reply_type=payload.reply_type,
             api_url=payload.api_url,
             api_timeout=api_timeout,
+            location_name=payload.location_name,
+            location_longitude=payload.location_longitude,
+            location_latitude=payload.location_latitude,
+            location_title=payload.location_title,
+            location_subtitle=payload.location_subtitle,
         ),
         action_verb="保存",
         subject="默认回复",
