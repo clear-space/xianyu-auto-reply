@@ -41,6 +41,10 @@ DEFAULT_RETENTION_DAYS = 30
 # 超过该天数后才物理删除（避免误删「即将被续期流程重新写入」的行）
 DEFAULT_TOKEN_CACHE_BUFFER_DAYS = 7
 
+# 商品管理已删除商品（item_status=deleted）物理清除天数：
+# 权重算法删除惩罚 max(0, 100 − 删除天数×1) 在 100 天归零，默认 120 天留缓冲
+DEFAULT_CATALOG_DELETED_PURGE_DAYS = 120
+
 # 审计日志自身保留天数
 DEFAULT_CLEANUP_LOG_DAYS = 30
 
@@ -64,7 +68,8 @@ CONFIG_CLEANUP_LOG_DAYS = "data_retention.cleanup_log_days"
 
 # ============ 表注册表（硬编码白名单） ============
 # 条目结构：(表名, 时间列, 保留天数配置键, 清理模式)
-# 清理模式：created_at=按时间列批量删除；token_cache=软过期缓冲删除
+# 清理模式：created_at=按时间列批量删除；token_cache=软过期缓冲删除；
+#          catalog_deleted_purge=商品管理已删商品超期物理清除（时间在 metadata JSON 列内）
 # 注意：xy_goofish_crawl_items 的时间列为 fetched_at（该表无 created_at）
 
 _CLEANUP_TABLES: tuple[tuple[str, str, str, str], ...] = (
@@ -79,6 +84,8 @@ _CLEANUP_TABLES: tuple[tuple[str, str, str, str], ...] = (
     ("xy_goofish_crawl_items", "fetched_at", "data_retention.goofish_crawl_item_days", "created_at"),
     ("xy_scheduled_close_notice_log", "created_at", CONFIG_SCHEDULED_TASK_LOG_DAYS, "created_at"),
     ("xy_token_cache", "expire_at", "data_retention.token_cache_soft_expired_days", "token_cache"),
+    # 商品管理已删商品超期物理清除（软删状态与时间存于 metadata JSON 列）
+    ("xy_catalog_items", "metadata", "data_retention.catalog_deleted_purge_days", "catalog_deleted_purge"),
     # 审计日志自身也纳入清理，避免其无限增长
     ("xy_data_cleanup_log", "created_at", CONFIG_CLEANUP_LOG_DAYS, "created_at"),
     # 系统信息看板的指标表（分钟明细/小时聚合/告警事件），同样纳入保留清理
@@ -206,6 +213,46 @@ async def _cleanup_token_cache_table(
     return deleted
 
 
+async def _cleanup_catalog_deleted_table(
+    session: AsyncSession, log_prefix: str = "[数据保留清理]"
+) -> int:
+    """清理 xy_catalog_items 中「已删除且超过保留天数」的商品行。
+
+    商品管理删除是软标记（metadata.item_status='deleted' + metadata.deleted_at），
+    行保留供权重算法计算删除恢复信号（删除惩罚 100 天归零）。
+    默认 120 天（>100 天恢复曲线，留缓冲）后物理删除，防止已删行无限累计。
+    deleted_at 以 ISO 字符串存储（get_beijing_now().isoformat()），与截止时间
+    做字典序比较即等价于时间先后。
+    """
+    days = await get_setting_int(
+        "data_retention.catalog_deleted_purge_days", DEFAULT_CATALOG_DELETED_PURGE_DAYS
+    )
+    cutoff = (get_beijing_now_naive() - timedelta(days=days)).isoformat()
+    batch_size = await get_setting_int(CONFIG_BATCH_SIZE, DEFAULT_BATCH_SIZE)
+    max_batches = await get_setting_int(CONFIG_MAX_BATCHES, DEFAULT_MAX_BATCHES_PER_TABLE)
+
+    condition = (
+        "JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.item_status')) = 'deleted'"
+        " AND JSON_EXTRACT(`metadata`, '$.deleted_at') IS NOT NULL"
+        " AND JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.deleted_at')) < :cutoff"
+    )
+    sql = text(f"DELETE FROM `xy_catalog_items` WHERE {condition} LIMIT :batch_size")
+    total = 0
+    for _ in range(max_batches):
+        result = await session.execute(sql, {"cutoff": cutoff, "batch_size": batch_size})
+        await session.commit()
+        deleted = int(result.rowcount or 0)
+        total += deleted
+        if deleted < batch_size:
+            break
+        await asyncio.sleep(BATCH_SLEEP_SECONDS)
+    if total > 0:
+        logger.info(
+            f"{log_prefix} 表 xy_catalog_items 已物理删除 {total} 条删除超过 {days} 天的商品记录（截止: {cutoff}）"
+        )
+    return total
+
+
 async def _sample_remaining_rows(session: AsyncSession, table_name: str) -> Optional[int]:
     """取样统计某表当前总行数（用于审计记录，失败返回 None 不影响主流程）。"""
     try:
@@ -242,6 +289,8 @@ async def run_all_cleanup() -> list[dict]:
             try:
                 if mode == "token_cache":
                     deleted = await _cleanup_token_cache_table(session)
+                elif mode == "catalog_deleted_purge":
+                    deleted = await _cleanup_catalog_deleted_table(session)
                 else:
                     deleted = await cleanup_created_at_table(
                         session, table_name, config_key, column=column
@@ -295,7 +344,7 @@ async def get_policy_table_stats() -> list[dict]:
     任何单表统计失败仅跳过该表，不影响整体。
     """
     results: list[dict] = []
-    for table_name, column, config_key, _mode in _CLEANUP_TABLES:
+    for table_name, column, config_key, mode in _CLEANUP_TABLES:
         days = await get_retention_days(config_key)
         stats: dict = {
             "table_name": table_name,
@@ -307,17 +356,24 @@ async def get_policy_table_stats() -> list[dict]:
         }
         try:
             async with async_session_maker() as session:
-                result = await session.execute(
-                    text(
-                        f"SELECT COUNT(*), MIN(`{column}`), MAX(`{column}`) "
-                        f"FROM `{table_name}`"
+                if mode == "catalog_deleted_purge":
+                    # 该模式时间存于 metadata JSON 列内，只统计总行数，不取最旧/最新
+                    result = await session.execute(text(f"SELECT COUNT(*) FROM `{table_name}`"))
+                    row = result.fetchone()
+                    if row:
+                        stats["rows"] = int(row[0] or 0)
+                else:
+                    result = await session.execute(
+                        text(
+                            f"SELECT COUNT(*), MIN(`{column}`), MAX(`{column}`) "
+                            f"FROM `{table_name}`"
+                        )
                     )
-                )
-                row = result.fetchone()
-                if row:
-                    stats["rows"] = int(row[0] or 0)
-                    stats["oldest"] = row[1].isoformat() if row[1] else None
-                    stats["newest"] = row[2].isoformat() if row[2] else None
+                    row = result.fetchone()
+                    if row:
+                        stats["rows"] = int(row[0] or 0)
+                        stats["oldest"] = row[1].isoformat() if row[1] else None
+                        stats["newest"] = row[2].isoformat() if row[2] else None
         except Exception:
             pass
         results.append(stats)

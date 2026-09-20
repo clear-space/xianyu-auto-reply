@@ -121,7 +121,7 @@ class UserPublishAddressService:
         return record
 
     async def batch_delete(self, owner_id: int, address_ids: Sequence[int]) -> int:
-        """批量软删除个人地址。"""
+        """批量物理删除个人地址。"""
         normalized_ids: List[int] = []
         for raw_id in address_ids:
             try:
@@ -141,7 +141,7 @@ class UserPublishAddressService:
         )
         records = (await self.session.execute(stmt)).scalars().all()
         for record in records:
-            record.is_deleted = True
+            await self.session.delete(record)
 
         await self.session.commit()
         return len(records)

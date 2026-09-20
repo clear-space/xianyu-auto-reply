@@ -191,7 +191,7 @@ async def delete_announcement(
     current_user: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """删除公告（仅管理员，软删除）"""
+    """删除公告（仅管理员，硬删除）"""
     result = await db.execute(
         select(Announcement).where(
             Announcement.id == announcement_id,
@@ -199,12 +199,11 @@ async def delete_announcement(
         )
     )
     announcement = result.scalar_one_or_none()
-    
+
     if not announcement:
         return ApiResponse(success=False, message="公告不存在")
-    
-    # 软删除
-    announcement.is_deleted = True
+
+    await db.delete(announcement)
     await db.commit()
-    
+
     return ApiResponse(success=True, message="公告删除成功")

@@ -710,7 +710,7 @@ class ListingMonitorService:
         return task
 
     async def batch_delete(self, owner_id: Optional[int], task_ids: Sequence[int]) -> int:
-        """批量软删除监控任务。"""
+        """批量物理删除监控任务。"""
         normalized_ids: List[int] = []
         for raw_id in task_ids:
             try:
@@ -727,10 +727,8 @@ class ListingMonitorService:
         conditions.append(ListingMonitorTask.id.in_(normalized_ids))
         stmt = select(ListingMonitorTask).where(*conditions)
         tasks = (await self.session.execute(stmt)).scalars().all()
-        now = get_beijing_now_naive()
         for task in tasks:
-            task.is_deleted = True
-            task.updated_at = now
+            await self.session.delete(task)
 
         await self.session.commit()
         return len(tasks)

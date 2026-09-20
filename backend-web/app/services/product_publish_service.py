@@ -486,43 +486,72 @@ class ProductMaterialService:
         return names
 
     def _cleanup_material_files(
-        self, materials: List[ProductMaterial], live_names: set[str]
+        self, deleted_names: set[str], live_names: set[str]
     ) -> None:
         """删除素材后级联清理本地文件（仅删不再被任何有效素材引用的文件）。
 
         uploads/products/ 与单品发布上传共用，因此只删除「本次删除素材引用、
         且没有任何未删除素材引用」的文件；删除失败仅记日志不影响主流程。
+        注意：素材行已物理删除，deleted_names 须在删行前收集好。
         """
         from common.utils.image_utils import delete_static_file
+
+        removed = 0
+        for name in sorted(deleted_names - live_names):
+            if delete_static_file(f"/static/uploads/products/{name}"):
+                removed += 1
+        # 删除后失效本进程目录体积缓存，存储分布回退统计立即反映新体积
+        if removed:
+            try:
+                from common.services.system_metrics import invalidate_dir_size_cache
+
+                invalidate_dir_size_cache()
+            except Exception:
+                pass
+
+    def _collect_material_file_basenames(
+        self, materials: List[ProductMaterial]
+    ) -> set[str]:
+        """收集素材全字段（images/videos/specifications/versions）引用的本地文件名。"""
         from common.utils.material_file_refs import extract_file_basenames
 
-        deleted_names: set[str] = set()
+        names: set[str] = set()
         for material in materials:
-            deleted_names |= extract_file_basenames(
+            names |= extract_file_basenames(
                 material.images, material.videos, material.specifications, material.versions
             )
-        for name in sorted(deleted_names - live_names):
-            delete_static_file(f"/static/uploads/products/{name}")
+        return names
 
     async def delete(self, material_id: int, user_id: int = None) -> bool:
-        """删除素材（user_id=None时管理员可操作任意素材）"""
+        """物理删除素材（user_id=None时管理员可操作任意素材）
+
+        级联顺序：关闭自动续售规则（规则关闭流程需要素材行）→ 删行前收集文件引用
+        → 物理删除 → 清理仅被本素材引用的本地文件。
+        """
+        from app.services.auto_relist_rule_service import AutoRelistRuleService
+
         material = await self.get(material_id, user_id)
         if not material:
             return False
-        material.is_deleted = True
+        # 先关规则：close_rule 内部 commit，规则关闭流程依赖素材行仍存在
+        await AutoRelistRuleService(self.session).close_rule(material.id, material.user_id)
+        deleted_names = self._collect_material_file_basenames([material])
+        await self.session.delete(material)
         await self.session.commit()
         # 级联清理本地文件（仅删不再被任何有效素材引用的文件，best-effort）
         live_names = await self._live_material_file_basenames()
-        self._cleanup_material_files([material], live_names)
+        self._cleanup_material_files(deleted_names, live_names)
         return True
 
     async def batch_delete(self, material_ids: List[int], user_id: int = None) -> int:
-        """批量删除素材，返回实际删除数量
+        """批量物理删除素材，返回实际删除数量
 
         Args:
             material_ids: 素材ID列表
             user_id: 用户ID，为None时管理员可操作任意素材
         """
+        from app.services.auto_relist_rule_service import AutoRelistRuleService
+
         if not material_ids:
             return 0
         conds = [ProductMaterial.id.in_(material_ids), ProductMaterial.is_deleted.is_(False)]
@@ -530,12 +559,19 @@ class ProductMaterialService:
             conds.append(ProductMaterial.user_id == user_id)
         stmt = select(ProductMaterial).where(*conds)
         rows = (await self.session.execute(stmt)).scalars().all()
+        if not rows:
+            return 0
+        # 先关规则（逐条，close_rule 内部 commit），再收集文件引用，最后物理删行
+        relist_service = AutoRelistRuleService(self.session)
         for row in rows:
-            row.is_deleted = True
+            await relist_service.close_rule(row.id, row.user_id)
+        deleted_names = self._collect_material_file_basenames(list(rows))
+        for row in rows:
+            await self.session.delete(row)
         await self.session.commit()
         # 级联清理本地文件（仅删不再被任何有效素材引用的文件，best-effort）
         live_names = await self._live_material_file_basenames()
-        self._cleanup_material_files(list(rows), live_names)
+        self._cleanup_material_files(deleted_names, live_names)
         return len(rows)
 
 

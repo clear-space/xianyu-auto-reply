@@ -212,7 +212,10 @@ class AiListingConfigService:
         return config
 
     async def delete(self, config_id: int, owner_id: int) -> bool:
-        """软删除配置（保留历史数据，不做物理删除）
+        """物理删除配置。
+
+        历史任务通过 config_name/params 快照仍可读（「配置改名或删除后仍可读」），
+        运行中的任务查不到配置时优雅报错，不影响历史展示。
 
         Args:
             config_id: 配置ID。
@@ -223,7 +226,7 @@ class AiListingConfigService:
         config = await self.get(config_id, owner_id)
         if not config:
             return False
-        config.is_deleted = True
+        await self.session.delete(config)
         await self.session.commit()
         return True
 

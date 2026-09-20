@@ -746,13 +746,13 @@ async def delete_material(
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """删除素材（管理员可删除任意素材）"""
+    """删除素材（物理删除，管理员可删除任意素材）"""
     svc = ProductMaterialService(session)
     query_user_id = None if _is_admin(current_user) else current_user.id
     deleted = await svc.delete(material_id, query_user_id)
     if not deleted:
         return ApiResponse(success=False, message="素材不存在或无权删除")
-    return ApiResponse(success=True, message="素材已移出素材库")
+    return ApiResponse(success=True, message="素材已删除")
 
 
 # ==================== 发布接口 ====================

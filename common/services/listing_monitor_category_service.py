@@ -226,7 +226,7 @@ class ListingMonitorCategoryService:
         }
 
     async def delete_category(self, category_id: int, owner_id: int) -> None:
-        """软删除分类
+        """物理删除分类
 
         删除前检查是否有关联数据：
         - 该分类下是否有监控任务（未删除）
@@ -313,8 +313,8 @@ class ListingMonitorCategoryService:
         if scope_owner_id is not None:
             await self._warn_orphaned_references(category_id, category.name, owner_id)
 
-        # 软删除
-        category.is_deleted = True
+        # 物理删除
+        await self.session.delete(category)
         await self.session.flush()
 
     async def _warn_orphaned_references(

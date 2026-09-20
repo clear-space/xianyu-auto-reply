@@ -68,6 +68,11 @@ services:
       dockerfile: backend-web/Dockerfile
     container_name: xianyu-backend-web
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - ENVIRONMENT=production
       - MYSQL_HOST=mysql
@@ -140,6 +145,11 @@ services:
       dockerfile: websocket/Dockerfile
     container_name: xianyu-websocket
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - ENVIRONMENT=production
       - MYSQL_HOST=mysql
@@ -198,6 +208,11 @@ services:
       dockerfile: scheduler/Dockerfile
     container_name: xianyu-scheduler
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - ENVIRONMENT=production
       - MYSQL_HOST=mysql

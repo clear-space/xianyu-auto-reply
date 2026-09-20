@@ -225,7 +225,7 @@ async def delete_popup_announcement(
     current_user: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """删除弹窗公告（仅管理员，软删除）"""
+    """删除弹窗公告（仅管理员，硬删除）"""
     result = await db.execute(
         select(PopupAnnouncement).where(
             PopupAnnouncement.id == popup_id,
@@ -237,7 +237,7 @@ async def delete_popup_announcement(
     if not item:
         return ApiResponse(success=False, message="弹窗公告不存在")
 
-    item.is_deleted = True
+    await db.delete(item)
     await db.commit()
 
     return ApiResponse(success=True, message="弹窗公告删除成功")

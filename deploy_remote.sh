@@ -151,6 +151,11 @@ services:
     image: ${IMAGE_REGISTRY:-registry.cn-shanghai.aliyuncs.com/zhinian-software}/xianyu-backend-web:${IMAGE_TAG:-latest}
     container_name: xianyu-backend-web
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - ENVIRONMENT=production
       - MYSQL_HOST=${MYSQL_HOST}
@@ -215,6 +220,11 @@ services:
     image: ${IMAGE_REGISTRY:-registry.cn-shanghai.aliyuncs.com/zhinian-software}/xianyu-websocket:${IMAGE_TAG:-latest}
     container_name: xianyu-websocket
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - ENVIRONMENT=production
       - MYSQL_HOST=${MYSQL_HOST}
@@ -267,6 +277,11 @@ services:
     image: ${IMAGE_REGISTRY:-registry.cn-shanghai.aliyuncs.com/zhinian-software}/xianyu-scheduler:${IMAGE_TAG:-latest}
     container_name: xianyu-scheduler
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - ENVIRONMENT=production
       - MYSQL_HOST=${MYSQL_HOST}

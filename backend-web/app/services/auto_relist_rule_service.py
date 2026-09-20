@@ -106,6 +106,43 @@ class AutoRelistRuleService:
             for row in rows
         }
 
+    async def close_rule(self, material_id: int, user_id: int) -> bool:
+        """关闭素材的自动续售规则（素材删除时的级联关闭）。
+
+        与 save(enabled=False) 的区别：规则不存在时不创建 disabled 占位行，
+        直接幂等返回 False；存在且已禁用时同样 no-op。
+        关闭时把未决事件置 skipped，避免续售循环继续尝试发布。
+
+        Returns:
+            True 表示存在并实际关闭了规则；False 表示无需关闭。
+        """
+        rule = await self._get_for_update(material_id, user_id)
+        if not rule or not rule.enabled:
+            return False
+        rule.enabled = False
+        rule.status = "disabled"
+        rule.next_retry_at = None
+        rule.paused_reason = None
+        rule.version = int(rule.version or 0) + 1
+        await self.session.execute(
+            update(AutoRelistEvent)
+            .where(
+                AutoRelistEvent.rule_id == rule.id,
+                AutoRelistEvent.status.in_(["pending", "retry", "claimed", "checking"]),
+            )
+            .values(
+                status="skipped",
+                error_message="素材已删除，自动续售已关闭",
+                next_retry_at=None,
+                claim_token=None,
+                claimed_at=None,
+                lease_expires_at=None,
+            )
+        )
+        await self.session.commit()
+        await self.session.refresh(rule)
+        return True
+
     async def save(
         self,
         *,

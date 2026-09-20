@@ -423,6 +423,8 @@ class ImageCleanupTaskService:
         start_time = time.time()
 
         static_root = self._resolve_static_root()
+        # 显式记录实际扫描的静态根目录，便于远程部署排查「scheduler 与 backend-web 目录不一致」
+        logger.info(f"【{self.task_name}】静态目录: {static_root}，存在: {static_root.is_dir()}")
         total = {"deleted": 0, "kept_ref": 0, "kept_recent": 0, "failed": 0, "freed": 0}
 
         # ===== 1. 清理卡券图片（卡券硬删除，引用清单=全部卡券）=====
@@ -552,6 +554,15 @@ class ImageCleanupTaskService:
             f"未到保留期保留: {total['kept_recent']}, 失败: {total['failed']}, "
             f"释放空间: {freed_mb:.2f}MB, 耗时: {elapsed:.2f}秒"
         )
+        # 清理后失效目录体积缓存：存储分布看板下一次采样（≤60s）立即反映新体积，
+        # 避免手动触发清理后看板数字「没变」造成清理无效的错觉
+        if total["deleted"]:
+            try:
+                from common.services.system_metrics import invalidate_dir_size_cache
+
+                invalidate_dir_size_cache()
+            except Exception as e:
+                logger.warning(f"【{self.task_name}】失效目录体积缓存失败: {e}")
 
 
 # 创建全局实例

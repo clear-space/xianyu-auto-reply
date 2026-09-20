@@ -410,6 +410,11 @@ class DatabaseInitializer:
             "系统告警事件保留天数（xy_system_alerts）",
         ),
         (
+            "data_retention.catalog_deleted_purge_days",
+            "120",
+            "商品管理已删除商品物理清除天数（权重删除惩罚100天归零，默认120天留缓冲）",
+        ),
+        (
             "system_info.alert_cpu_percent",
             "90",
             "系统信息看板CPU告警阈值(%)，连续3次采样超过阈值触发告警",
@@ -2696,6 +2701,9 @@ class DatabaseInitializer:
                     # 9. 为历史用户回填分销秘钥（secret_key 为空的存量用户）
                     await self.backfill_user_secret_keys()
 
+                    # 10. 清除历史软删素材行（先清文件→关规则→删行，幂等，见 purge_soft_deleted_materials）
+                    await self.purge_soft_deleted_materials()
+
             logger.info("数据库初始化完成")
             logger.info("=" * 50)
 
@@ -4976,6 +4984,28 @@ class DatabaseInitializer:
 
         except Exception as e:
             logger.warning(f"✗ 分销秘钥回填失败（不影响系统运行）: {e}")
+
+    async def purge_soft_deleted_materials(self):
+        """清除历史软删素材行（升级前的 is_deleted=1 遗留数据，幂等）。
+
+        素材删除已改为物理删除，此步清空存量软删行：先按行内引用清理其独占
+        本地文件（行是文件引用的唯一依据，必须在删行前完成），再关闭仍启用的
+        自动续售规则（规则关闭流程依赖素材行），最后分批物理删行，
+        释放 uk_pm_user_code(user_id, product_code) 唯一索引槽位。
+        """
+        try:
+            from common.services.material_soft_delete_purge import (
+                purge_soft_deleted_materials as _purge,
+            )
+
+            async with async_session_maker() as session:
+                stats = await _purge(session)
+                if stats.get("found"):
+                    logger.info(f"✓ 软删素材清除完成: {stats}")
+                else:
+                    logger.info("✓ 无软删素材行，跳过清除")
+        except Exception as e:
+            logger.warning(f"✗ 软删素材清除失败（不影响系统运行）: {e}")
 
 
 async def init_database():
