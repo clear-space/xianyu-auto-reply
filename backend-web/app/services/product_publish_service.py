@@ -469,6 +469,41 @@ class ProductMaterialService:
         await self.session.refresh(material)
         return material
 
+    async def _live_material_file_basenames(self) -> set[str]:
+        """收集全部未删除素材引用的本地文件名（文件在磁盘上全局共享，跨用户保护）。"""
+        from common.utils.material_file_refs import extract_file_basenames
+
+        names: set[str] = set()
+        stmt = select(
+            ProductMaterial.images,
+            ProductMaterial.videos,
+            ProductMaterial.specifications,
+            ProductMaterial.versions,
+        ).where(ProductMaterial.is_deleted.is_(False))
+        rows = (await self.session.execute(stmt)).all()
+        for images, videos, specifications, versions in rows:
+            names |= extract_file_basenames(images, videos, specifications, versions)
+        return names
+
+    def _cleanup_material_files(
+        self, materials: List[ProductMaterial], live_names: set[str]
+    ) -> None:
+        """删除素材后级联清理本地文件（仅删不再被任何有效素材引用的文件）。
+
+        uploads/products/ 与单品发布上传共用，因此只删除「本次删除素材引用、
+        且没有任何未删除素材引用」的文件；删除失败仅记日志不影响主流程。
+        """
+        from common.utils.image_utils import delete_static_file
+        from common.utils.material_file_refs import extract_file_basenames
+
+        deleted_names: set[str] = set()
+        for material in materials:
+            deleted_names |= extract_file_basenames(
+                material.images, material.videos, material.specifications, material.versions
+            )
+        for name in sorted(deleted_names - live_names):
+            delete_static_file(f"/static/uploads/products/{name}")
+
     async def delete(self, material_id: int, user_id: int = None) -> bool:
         """删除素材（user_id=None时管理员可操作任意素材）"""
         material = await self.get(material_id, user_id)
@@ -476,11 +511,14 @@ class ProductMaterialService:
             return False
         material.is_deleted = True
         await self.session.commit()
+        # 级联清理本地文件（仅删不再被任何有效素材引用的文件，best-effort）
+        live_names = await self._live_material_file_basenames()
+        self._cleanup_material_files([material], live_names)
         return True
 
     async def batch_delete(self, material_ids: List[int], user_id: int = None) -> int:
         """批量删除素材，返回实际删除数量
-        
+
         Args:
             material_ids: 素材ID列表
             user_id: 用户ID，为None时管理员可操作任意素材
@@ -495,6 +533,9 @@ class ProductMaterialService:
         for row in rows:
             row.is_deleted = True
         await self.session.commit()
+        # 级联清理本地文件（仅删不再被任何有效素材引用的文件，best-effort）
+        live_names = await self._live_material_file_basenames()
+        self._cleanup_material_files(list(rows), live_names)
         return len(rows)
 
 

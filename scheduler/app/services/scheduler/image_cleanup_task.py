@@ -106,31 +106,29 @@ class ImageCleanupTaskService:
         return referenced
 
     async def _material_filenames_by_deleted(self, is_deleted: bool) -> set[str]:
-        """收集指定删除状态的素材当前引用的图片文件名（images）
+        """收集指定删除状态的素材引用的本地商品文件名（images/videos/specifications/versions 全字段）
 
         Args:
-            is_deleted: True 收集已删除素材的图片；False 收集未删除素材的图片
+            is_deleted: True 收集已删除素材的文件；False 收集未删除素材的文件
 
         Raises:
             Exception: 数据库读取失败时向上抛出，由调用方跳过素材清理
         """
+        from common.utils.material_file_refs import extract_file_basenames
+
         referenced: set[str] = set()
         async with async_session_maker() as session:
-            stmt = select(ProductMaterial.images).where(
-                ProductMaterial.is_deleted.is_(is_deleted)
-            )
+            stmt = select(
+                ProductMaterial.images,
+                ProductMaterial.videos,
+                ProductMaterial.specifications,
+                ProductMaterial.versions,
+            ).where(ProductMaterial.is_deleted.is_(is_deleted))
             result = await session.execute(stmt)
-            for (images,) in result.fetchall():
-                if not images:
-                    continue
-                # images 为 JSON 列，通常已是 list；兼容历史字符串存储
-                if isinstance(images, str):
-                    try:
-                        images = json.loads(images)
-                    except (ValueError, TypeError):
-                        images = [images]
-                if isinstance(images, list):
-                    referenced |= _basename_set_from(images)
+            for images, videos, specifications, versions in result.fetchall():
+                referenced |= extract_file_basenames(
+                    images, videos, specifications, versions
+                )
         return referenced
 
     async def _misc_referenced_filenames(self) -> set[str]:
@@ -365,6 +363,7 @@ class ImageCleanupTaskService:
         deletable: set[str],
         label: str,
         retention_hours: int = ORPHAN_RETENTION_HOURS,
+        allowed_exts: set[str] = IMAGE_EXTS,
     ) -> dict:
         """精准删除：只删除文件名在 deletable 白名单内的文件（用于共用目录）
 
@@ -376,6 +375,7 @@ class ImageCleanupTaskService:
             deletable: 明确允许删除的文件名集合（= 已删除素材引用 - 未删除素材引用）
             label: 日志标识
             retention_hours: 保留期（小时），文件 mtime 超过该时长才允许删除
+            allowed_exts: 允许删除的文件扩展名集合（素材目录含视频，需显式放行）
 
         Returns:
             统计信息字典
@@ -395,8 +395,8 @@ class ImageCleanupTaskService:
 
         for filename in deletable:
             try:
-                # 仅处理图片文件，跳过视频、.gitkeep 等
-                if os.path.splitext(filename)[1].lower() not in IMAGE_EXTS:
+                # 仅处理允许扩展名的文件（图片/视频），跳过 .gitkeep 等
+                if os.path.splitext(filename)[1].lower() not in allowed_exts:
                     continue
                 file_path = target_dir / filename
                 if not file_path.is_file():
@@ -436,9 +436,11 @@ class ImageCleanupTaskService:
             for k in total:
                 total[k] += card_stats[k]
 
-        # ===== 2. 清理素材库图片（素材软删除，products/ 与单品发布共用目录）=====
+        # ===== 2. 清理素材库文件（素材软删除，products/ 与单品发布共用目录）=====
         # 精准删除：只删「被已删除素材引用」且「未被任何未删除素材引用」的文件，
-        # 单品发布图片及其它非素材文件永不被触碰。
+        # 单品发布图片/视频及其它非素材文件永不被触碰。
+        # 引用收集覆盖 images/videos/specifications/versions 全字段（多版本素材的
+        # 非默认版本图片、规格图、视频只在对应 JSON 字段中，漏收会永远清不掉）。
         try:
             live_referenced = await self._material_filenames_by_deleted(False)
             deleted_referenced = await self._material_filenames_by_deleted(True)
@@ -448,12 +450,15 @@ class ImageCleanupTaskService:
             # 被已删除素材引用、但仍被某个未删除素材引用的文件必须保留
             deletable = deleted_referenced - live_referenced
             logger.info(
-                f"【{self.task_name}】未删除素材引用图片 {len(live_referenced)} 个，"
-                f"已删除素材引用图片 {len(deleted_referenced)} 个，"
+                f"【{self.task_name}】未删除素材引用文件 {len(live_referenced)} 个，"
+                f"已删除素材引用文件 {len(deleted_referenced)} 个，"
                 f"可清理 {len(deletable)} 个"
             )
             material_stats = self._clean_targeted(
-                static_root / "uploads" / "products", deletable, "素材库"
+                static_root / "uploads" / "products",
+                deletable,
+                "素材库",
+                allowed_exts=IMAGE_EXTS | VIDEO_EXTS,
             )
             for k in total:
                 total[k] += material_stats[k]
