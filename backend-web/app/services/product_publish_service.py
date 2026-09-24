@@ -24,7 +24,11 @@ from app.services.xianyu_item_snapshot import as_bool
 from common.utils.time_utils import safe_isoformat
 
 
-class MaterialSpecificationError(ValueError):
+class MaterialValidationError(ValueError):
+    """商品素材不符合保存规则。"""
+
+
+class MaterialSpecificationError(MaterialValidationError):
     """商品素材规格不符合保存规则。"""
 
 
@@ -129,8 +133,12 @@ class ProductMaterialService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create(self, user_id: int, data: dict) -> ProductMaterial:
-        """创建素材"""
+    async def create(
+        self,
+        user_id: int,
+        data: dict,
+    ) -> ProductMaterial:
+        """创建商品素材，平台分类字段按请求原样保存。"""
         data = _normalize_material_json(data)
         shipping_method = str(data.get("shipping_method") or "free")
         material = ProductMaterial(
@@ -425,8 +433,13 @@ class ProductMaterialService:
             material_ids = await self.list_material_ids(user_id)
         return await self.list_by_ids(material_ids, user_id)
 
-    async def update(self, material_id: int, user_id: int = None, data: dict = None) -> Optional[ProductMaterial]:
-        """更新素材（user_id=None时管理员可操作任意素材）"""
+    async def update(
+        self,
+        material_id: int,
+        user_id: int = None,
+        data: dict = None,
+    ) -> Optional[ProductMaterial]:
+        """更新素材（user_id=None时管理员可操作任意素材）；平台分类字段按请求原样保存。"""
         data = data or {}
         material = await self.get(material_id, user_id)
         if not material:

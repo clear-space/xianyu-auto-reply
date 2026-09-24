@@ -302,6 +302,7 @@ export function MaterialFormModal({ initial, onClose, onSaved, draftSubmit }: Pr
             onUploadSpecImage={handleSpecUpload}
             categoryLocked={categoryLocked}
             onCategoryEdit={() => setCategoryLocked(false)}
+            unlockCategoryOnTextChange={false}
           />
 
           {/* 备注 + 版本选择并排（多版本时显示版本下拉，保存时选中版本成为默认版本） */}
