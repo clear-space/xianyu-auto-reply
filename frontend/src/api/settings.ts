@@ -44,7 +44,8 @@ const DEFAULT_LOGIN_BRANDING_SETTINGS: LoginBrandingSettings = {
 }
 
 const DEFAULT_AUTH_FOOTER_AD_SETTINGS: AuthFooterAdSettings = {
-  'auth.footer_ad_html': '© 2026 划算云服务器 ·<a href="http://www.hsykj.com" target="_BLANK">www.hsykj.com</a>',
+  // 默认无页脚广告（空字符串），可在系统设置中填写广告 HTML
+  'auth.footer_ad_html': '',
 }
 
 const DISCLAIMER_SETTING_KEYS: Array<keyof DisclaimerSettings> = [

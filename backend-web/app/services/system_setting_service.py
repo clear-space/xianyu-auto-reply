@@ -50,7 +50,8 @@ DEFAULT_DISCLAIMER_CONTENT = (
 
 DEFAULT_LOGIN_SYSTEM_TITLE = "高效专业的\n闲鱼自动化管理平台"
 DEFAULT_LOGIN_SYSTEM_DESCRIPTION = "自动回复、智能客服、订单管理、数据分析，一站式解决闲鱼运营难题"
-DEFAULT_AUTH_FOOTER_AD_HTML = "© 2026 划算云服务器 ·<a href=\"http://www.hsykj.com\" target=\"_BLANK\">www.hsykj.com</a>"
+# 默认无页脚广告（空字符串），如需展示可在系统设置中填写广告 HTML
+DEFAULT_AUTH_FOOTER_AD_HTML = ""
 
 DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     "disclaimer.title": ("免责声明", "系统免责声明标题"),

@@ -130,6 +130,11 @@ RATE_INTERVAL=20
 
 # 验证码并发数
 MAX_CAPTCHA_CONCURRENT=3
+
+# 远程官方内容合并展示（原作者官方服务器的广告/公告/弹窗公告）——默认关闭，如需合并可改为 true
+ENABLE_REMOTE_ADS=false
+ENABLE_REMOTE_ANNOUNCEMENTS=false
+ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=false
 ENVEOF
     echo -e "${GREEN}✓ 已生成 .env 文件，如需修改请编辑后重新运行${NC}"
     echo ""

@@ -149,12 +149,12 @@ FRONTEND_PUBLIC_URL=
 AUTO_START_CRAWL_JOBS=true
 # 远程官方服务基址（仪表盘广告、系统公告 = 本地内容 + 远程官方内容）
 REMOTE_OFFICIAL_BASE_URL=https://xy.zhinianboke.com
-# 是否启用远程官方广告合并展示（官方服务器自身部署建议设为 false）
-ENABLE_REMOTE_ADS=true
-# 是否启用远程官方公告合并展示（官方服务器自身部署建议设为 false）
-ENABLE_REMOTE_ANNOUNCEMENTS=true
-# 是否启用远程官方弹窗公告合并展示（官方服务器自身部署建议设为 false）
-ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=true
+# 是否启用远程官方广告合并展示（默认关闭，如需合并原作者官方内容可改为 true）
+ENABLE_REMOTE_ADS=false
+# 是否启用远程官方公告合并展示（默认关闭，如需合并原作者官方内容可改为 true）
+ENABLE_REMOTE_ANNOUNCEMENTS=false
+# 是否启用远程官方弹窗公告合并展示（默认关闭，如需合并原作者官方内容可改为 true）
+ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=false
 ENVEOF
     echo -e "${GREEN}✓ 已生成 .env.remote 文件${NC}"
     echo -e "${RED}[重要] 请先编辑 $ENV_FILE 填写远程 MYSQL_HOST / REDIS_HOST 等连接信息，${NC}"
@@ -230,9 +230,9 @@ services:
       - FRONTEND_PUBLIC_URL=${FRONTEND_PUBLIC_URL:-}
       - AUTO_START_CRAWL_JOBS=${AUTO_START_CRAWL_JOBS:-true}
       - REMOTE_OFFICIAL_BASE_URL=${REMOTE_OFFICIAL_BASE_URL:-https://xy.zhinianboke.com}
-      - ENABLE_REMOTE_ADS=${ENABLE_REMOTE_ADS:-true}
-      - ENABLE_REMOTE_ANNOUNCEMENTS=${ENABLE_REMOTE_ANNOUNCEMENTS:-true}
-      - ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=${ENABLE_REMOTE_POPUP_ANNOUNCEMENTS:-true}
+      - ENABLE_REMOTE_ADS=${ENABLE_REMOTE_ADS:-false}
+      - ENABLE_REMOTE_ANNOUNCEMENTS=${ENABLE_REMOTE_ANNOUNCEMENTS:-false}
+      - ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=${ENABLE_REMOTE_POPUP_ANNOUNCEMENTS:-false}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-false}
