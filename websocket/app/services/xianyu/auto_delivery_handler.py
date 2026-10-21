@@ -2783,6 +2783,9 @@ class AutoDeliveryHandler:
                 
                 # 校验2：根据层级检查金额是否覆盖手续费和成本
                 if dock_level == 1:
+                    # 免费卡券（对接价为 0）免收手续费：与结算逻辑保持一致
+                    if card_price <= 0:
+                        fee_amount = Decimal('0')
                     # 一级代理：售价 >= 手续费 + 卡券成本
                     required = fee_amount + card_price
                     if sale_price < required:
@@ -2831,7 +2834,11 @@ class AutoDeliveryHandler:
                         sub_dock_price = parent_result.scalar()
                         if sub_dock_price:
                             level2_cost = Decimal(sub_dock_price)
-                    
+
+                    # 免费卡券（对接价为 0）免收手续费：与结算逻辑保持一致
+                    if level2_cost <= 0:
+                        fee_amount = Decimal('0')
+
                     # 售价 >= 手续费 + 二级拿货价
                     required = fee_amount + level2_cost
                     if sale_price < required:
@@ -3002,7 +3009,14 @@ class AutoDeliveryHandler:
                 
                 # 二级拿货价即为对接价格
                 dock_price = level2_cost
-            
+
+            # 免费卡券（拿货价为 0）免收手续费：与发货前校验规则保持一致
+            try:
+                if Decimal(dock_price) <= 0:
+                    fee_amount = '0'
+            except (InvalidOperation, ValueError):
+                pass
+
             # 计算利润（售价 - 拿货价）
             try:
                 profit = str(Decimal(sale_price) - Decimal(dock_price))

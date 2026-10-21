@@ -226,8 +226,9 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
     }
     if (formData.price.trim()) {
       const priceVal = Number(formData.price.trim())
-      if (isNaN(priceVal) || priceVal <= 0) {
-        addToast({ type: 'warning', message: '对接价格必须是大于0的数字' })
+      // 允许 0：免费引流卡场景（货主以 0 价开放对接，结算/手续费跳过）
+      if (isNaN(priceVal) || priceVal < 0) {
+        addToast({ type: 'warning', message: '对接价格不能为负数' })
         return false
       }
       if (!/^\d+(\.\d{1,2})?$/.test(formData.price.trim())) {

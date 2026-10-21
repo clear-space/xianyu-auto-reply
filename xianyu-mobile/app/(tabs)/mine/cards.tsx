@@ -225,7 +225,7 @@ function validateForm(f: CardFormState): string {
     if (!f.dockVisibility) return '勾选可对接时，对接类型必选';
   }
   if (f.price.trim()) {
-    if (!/^\d+(\.\d{1,2})?$/.test(f.price.trim())) return '对接价格必须是大于0且最多两位小数的数字';
+    if (!/^\d+(\.\d{1,2})?$/.test(f.price.trim())) return '对接价格需为大于等于0且最多两位小数的数字';
   }
   if (f.minPrice.trim()) {
     if (!/^\d+(\.\d{1,2})?$/.test(f.minPrice.trim())) return '最低售价必须是大于0且最多两位小数的数字';

@@ -311,7 +311,13 @@ class PickupService:
 
         distribution.fee_type: fixed-固定金额 / percent-百分比
         distribution.fee_rate: 数值（百分比时为百分数，如 5 表示 5%）
+
+        免费卡券规则：提货金额=对接价，对接价为 0（免费引流卡）时不收手续费。
         """
+        # 对接价为 0 的免费卡券免收手续费（固定手续费同样跳过）
+        if sale_price <= 0:
+            return Decimal('0')
+
         fee_type = 'fixed'
         fee_rate = Decimal('0')
         try:
