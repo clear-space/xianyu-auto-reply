@@ -6,9 +6,21 @@ interface MenuVisibilitySettingsProps {
   onChange: (keys: string[]) => void
   excludedMenuKeys?: string[]
   saving?: boolean
+  /** 登录页导航栏「关于」入口是否隐藏（默认隐藏） */
+  hidePublicAbout?: boolean
+  onHidePublicAboutChange?: (hidden: boolean) => void
+  publicAboutSaving?: boolean
 }
 
-export function MenuVisibilitySettings({ hiddenMenuKeys, onChange, excludedMenuKeys = [], saving = false }: MenuVisibilitySettingsProps) {
+export function MenuVisibilitySettings({
+  hiddenMenuKeys,
+  onChange,
+  excludedMenuKeys = [],
+  saving = false,
+  hidePublicAbout = true,
+  onHidePublicAboutChange,
+  publicAboutSaving = false,
+}: MenuVisibilitySettingsProps) {
   const menuOptions = getHideableFirstLevelMenuOptions(excludedMenuKeys)
   const hiddenCount = hiddenMenuKeys.filter((key) => menuOptions.some((option) => option.key === key)).length
 
@@ -65,6 +77,32 @@ export function MenuVisibilitySettings({ hiddenMenuKeys, onChange, excludedMenuK
               </div>
             )
           })}
+          </div>
+        </div>
+
+        {/* 登录页「关于」入口开关 */}
+        <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium leading-5 text-slate-700 dark:text-slate-200">
+              登录页「关于」菜单
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              {hidePublicAbout ? '登录页导航栏不显示「关于」入口' : '登录页导航栏显示「关于」入口'}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <span className={hidePublicAbout ? 'text-xs text-amber-600 dark:text-amber-400' : 'text-xs text-emerald-600 dark:text-emerald-400'}>
+              {hidePublicAbout ? '已隐藏' : '显示中'}
+            </span>
+            <label className="switch-ios">
+              <input
+                type="checkbox"
+                checked={hidePublicAbout}
+                disabled={saving || publicAboutSaving}
+                onChange={(e) => onHidePublicAboutChange?.(e.target.checked)}
+              />
+              <span className="switch-slider"></span>
+            </label>
           </div>
         </div>
       </div>

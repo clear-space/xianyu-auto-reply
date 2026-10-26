@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { MessageSquare, User, Lock, Mail, KeyRound, Eye, EyeOff } from 'lucide-react'
+import { User, Lock, Mail, KeyRound, Eye, EyeOff } from 'lucide-react'
 import { AuthNavbar } from '@/components/common/AuthNavbar'
 import { SafeHtml } from '@/components/common/SafeHtml'
 import { getDefaultAuthFooterAdSettings } from '@/api/settings'
@@ -221,9 +221,16 @@ export function Register() {
       <div className="w-full max-w-md">
         {/* Mobile header */}
         <div className="text-center mb-6">
-          <div className="w-12 h-12 rounded-xl bg-blue-600 text-white mx-auto mb-4 flex items-center justify-center">
-            <MessageSquare className="w-6 h-6" />
-          </div>
+          <img
+            src="/logo-icon-transparent.png"
+            alt="logo"
+            className="w-12 h-12 rounded-xl mx-auto mb-4 dark:hidden"
+          />
+          <img
+            src="/logo-icon-invert.png"
+            alt="logo"
+            className="w-12 h-12 rounded-xl mx-auto mb-4 hidden dark:block"
+          />
           <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">用户注册</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">创建您的账号以开始使用</p>
         </div>

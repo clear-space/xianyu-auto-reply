@@ -297,6 +297,8 @@ export interface SystemSettings {
   'theme.effect'?: ThemeEffect
   'theme.color_preset'?: ThemeColorPreset
   'theme.font_family'?: ThemeFontFamily
+  // 登录页导航栏「关于」入口是否隐藏（默认隐藏：undefined 视为 true）
+  'navigation.hide_public_about'?: boolean
   // SMTP邮件配置
   smtp_server?: string
   smtp_port?: number

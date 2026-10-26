@@ -149,9 +149,16 @@ export function About() {
     <div className="max-w-5xl mx-auto space-y-4">
       {/* Header */}
       <div className="text-center mb-6">
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-600 mx-auto mb-4 flex items-center justify-center shadow-md">
-          <MessageSquare className="w-8 h-8 text-white" />
-        </div>
+        <img
+          src="/logo-icon-transparent.png"
+          alt="logo"
+          className="w-16 h-16 rounded-2xl mx-auto mb-4 shadow-md dark:hidden"
+        />
+        <img
+          src="/logo-icon-invert.png"
+          alt="logo"
+          className="w-16 h-16 rounded-2xl mx-auto mb-4 shadow-md hidden dark:block"
+        />
         <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
           闲鱼自动回复管理系统
         </h1>

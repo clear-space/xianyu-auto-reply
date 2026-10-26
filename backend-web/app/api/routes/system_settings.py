@@ -337,6 +337,7 @@ async def get_public_settings(
         "theme.color_preset",
         "theme.font_family",
         "runtime.is_exe_mode",
+        "navigation.hide_public_about",
     }
     all_settings["runtime.is_exe_mode"] = "true" if is_frozen() else "false"
     return {k: v for k, v in all_settings.items() if k in public_keys}

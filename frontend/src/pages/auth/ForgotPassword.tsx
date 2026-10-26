@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { MessageSquare, Mail, KeyRound, Lock, Eye, EyeOff, ArrowLeft } from 'lucide-react'
+import { Mail, KeyRound, Lock, Eye, EyeOff, ArrowLeft } from 'lucide-react'
 import { AuthNavbar } from '@/components/common/AuthNavbar'
 import { SafeHtml } from '@/components/common/SafeHtml'
 import { getDefaultAuthFooterAdSettings, getDefaultLoginBrandingSettings } from '@/api/settings'
@@ -156,12 +156,14 @@ export function ForgotPassword() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2, duration: 0.5 }}
-              className="flex items-center gap-3 mb-8"
+              className="mb-8"
             >
-              <div className="w-12 h-12 rounded-xl bg-blue-500 flex items-center justify-center">
-                <MessageSquare className="w-6 h-6 text-white" />
-              </div>
-              <span className="text-2xl font-bold text-white">{loginBranding['login.system_name']}</span>
+              {/* 左侧深色面板固定使用亮色透明底 logo 变体 */}
+              <img
+                src="/logo-full-invert.png"
+                alt={loginBranding['login.system_name']}
+                className="h-14 w-auto"
+              />
             </motion.div>
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
@@ -200,9 +202,16 @@ export function ForgotPassword() {
               transition={{ delay: 0.1, duration: 0.4 }}
               className="lg:hidden text-center mb-8"
             >
-              <div className="w-12 h-12 rounded-xl bg-blue-500 text-white mx-auto mb-4 flex items-center justify-center">
-                <MessageSquare className="w-6 h-6" />
-              </div>
+              <img
+                src="/logo-icon-transparent.png"
+                alt={loginBranding['login.system_name']}
+                className="w-12 h-12 rounded-xl mx-auto mb-4 dark:hidden"
+              />
+              <img
+                src="/logo-icon-invert.png"
+                alt={loginBranding['login.system_name']}
+                className="w-12 h-12 rounded-xl mx-auto mb-4 hidden dark:block"
+              />
               <h1 className="text-xl font-bold text-slate-900 dark:text-white">{loginBranding['login.system_name']}</h1>
             </motion.div>
 

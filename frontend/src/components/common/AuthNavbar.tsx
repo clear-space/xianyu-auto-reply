@@ -7,9 +7,9 @@
  */
 import { Link, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { Home, Key, RefreshCw, Monitor, Menu, X, MessageSquare, Code2, Sun, Moon, Info } from 'lucide-react'
+import { Home, Key, RefreshCw, Monitor, Menu, X, Code2, Sun, Moon, Info } from 'lucide-react'
 import { getDefaultLoginBrandingSettings, LOGIN_BRANDING_UPDATED_EVENT } from '@/api/settings'
-import { getLoginBrandingSettings } from '@/api/auth'
+import { getLoginBrandingSettings, getPublicAboutMenuHidden } from '@/api/auth'
 import type { LoginBrandingSettings } from '@/types'
 import { cn } from '@/utils/cn'
 import { initializeThemeMode, toggleThemeMode } from '@/utils/theme'
@@ -31,6 +31,8 @@ const NAV_ITEMS = [
 
 interface AuthNavbarProps {
   systemName?: string
+  /** 透明模式：用于科技感背景的登录页，导航栏不带底色和边框 */
+  transparent?: boolean
 }
 
 const DEFAULT_SYSTEM_NAME = getDefaultLoginBrandingSettings()['login.system_name']
@@ -96,13 +98,36 @@ export function PublicPageFooter({ systemName }: AuthNavbarProps) {
   )
 }
 
-export function AuthNavbar({ systemName }: AuthNavbarProps) {
+export function AuthNavbar({ systemName, transparent = false }: AuthNavbarProps) {
   const location = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const resolvedSystemName = usePublicSystemName(systemName)
   const online = isOnlineEnv()
-  /** 根据当前环境过滤菜单项：仅线上正式环境(xy.zhinianboke.com)显示受域名限制的菜单 */
-  const filteredItems = NAV_ITEMS.filter(item => !item.hideOnLocal || online)
+  // 「关于」入口可见性：受系统设置 navigation.hide_public_about 控制，默认隐藏（初始 false，加载后按设置显示）
+  const [aboutMenuVisible, setAboutMenuVisible] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    getPublicAboutMenuHidden()
+      .then((result) => {
+        if (!cancelled) {
+          setAboutMenuVisible(!result.hidden)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  /** 根据当前环境过滤菜单项：仅线上正式环境(xy.zhinianboke.com)显示受域名限制的菜单；「关于」受隐藏开关控制 */
+  const filteredItems = NAV_ITEMS.filter(item => {
+    if (item.hideOnLocal && !online) {
+      return false
+    }
+    if (item.path === '/about-public' && !aboutMenuVisible) {
+      return false
+    }
+    return true
+  })
 
   // 主题切换（统一在 Navbar 内管理，避免各页面重复实现和遮挡手机端汉堡菜单）
   const [isDark, setIsDark] = useState(false)
@@ -114,14 +139,26 @@ export function AuthNavbar({ systemName }: AuthNavbarProps) {
   }
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700">
+    <nav className={cn(
+      'fixed top-0 left-0 right-0 z-50 border-b',
+      transparent
+        ? 'bg-transparent dark:bg-transparent border-transparent'
+        : 'bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-slate-200 dark:border-slate-700'
+    )}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
         <div className="flex items-center justify-between h-14">
-          {/* Logo */}
+          {/* Logo：方形图标 + 系统名 */}
           <Link to="/login" className="flex items-center gap-2 flex-shrink-0">
-            <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center">
-              <MessageSquare className="w-4 h-4 text-white" />
-            </div>
+            <img
+              src="/logo-icon-transparent.png"
+              alt={resolvedSystemName}
+              className="w-8 h-8 rounded-lg shadow-sm dark:hidden"
+            />
+            <img
+              src="/logo-icon-invert.png"
+              alt={resolvedSystemName}
+              className="w-8 h-8 rounded-lg hidden dark:block"
+            />
             <span className="text-sm font-bold text-slate-900 dark:text-white hidden sm:inline">
               {resolvedSystemName}
             </span>

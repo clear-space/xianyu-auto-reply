@@ -89,6 +89,14 @@ export const getAuthFooterAdSettings = async (): Promise<AuthFooterAdSettings> =
   return normalizeAuthFooterAdSettings(settings)
 }
 
+// 获取登录页导航栏「关于」入口的隐藏状态
+// 默认隐藏：仅当设置明确为 false 时才显示
+export const getPublicAboutMenuHidden = async (): Promise<{ hidden: boolean }> => {
+  const settings = await getPublicSettings()
+  const value = settings['navigation.hide_public_about']
+  return { hidden: !(value === false || value === 'false') }
+}
+
 // 生成图形验证码
 export const generateCaptcha = async (sessionId: string): Promise<{ success: boolean; captcha_image?: string }> => {
   const result = await post<{ success: boolean; data: { captcha_image: string; session_id: string }; message: string }>(

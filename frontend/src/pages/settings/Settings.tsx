@@ -61,6 +61,7 @@ export function Settings() {
   const [authFooterAdSaving, setAuthFooterAdSaving] = useState(false)
   const [disclaimerSaving, setDisclaimerSaving] = useState(false)
   const [hiddenMenuSaving, setHiddenMenuSaving] = useState(false)
+  const [publicAboutSaving, setPublicAboutSaving] = useState(false)
   const [themeAppearanceSaving, setThemeAppearanceSaving] = useState(false)
   const [themeFontSaving, setThemeFontSaving] = useState(false)
   // 代理设置独立保存状态：与页面右上角"保存设置"按钮的 saving 分离，互不影响
@@ -460,6 +461,33 @@ export function Settings() {
       })
     } finally {
       setHiddenMenuSaving(false)
+    }
+  }
+
+  // 登录页「关于」菜单隐藏开关（默认隐藏：设置不存在时视为隐藏）
+  const handleHidePublicAboutChange = async (hidden: boolean) => {
+    if (!settings || publicAboutSaving) {
+      return
+    }
+
+    const settingKey = 'navigation.hide_public_about'
+    const previousValue = settings[settingKey]
+    setSettings({ ...settings, [settingKey]: hidden })
+
+    try {
+      setPublicAboutSaving(true)
+      const result = await updateSystemSettings({ [settingKey]: hidden })
+      if (!result.success) {
+        throw new Error(result.message || '登录页关于菜单设置保存失败')
+      }
+    } catch (error) {
+      setSettings((current) => current ? { ...current, [settingKey]: previousValue } : current)
+      addToast({
+        type: 'error',
+        message: getApiErrorMessage(error, '登录页关于菜单设置保存失败'),
+      })
+    } finally {
+      setPublicAboutSaving(false)
     }
   }
 
@@ -1046,6 +1074,9 @@ export function Settings() {
           onChange={handleHiddenMenusChange}
           excludedMenuKeys={getExeForcedHiddenMenuKeys(isExeMode)}
           saving={hiddenMenuSaving}
+          hidePublicAbout={settings?.['navigation.hide_public_about'] !== false}
+          onHidePublicAboutChange={handleHidePublicAboutChange}
+          publicAboutSaving={publicAboutSaving}
         />
       )}
 

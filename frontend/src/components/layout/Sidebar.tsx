@@ -12,7 +12,6 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   Menu,
-  MessageSquare,
   X,
   PanelLeftClose,
   PanelLeft,
@@ -286,9 +285,16 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
           )}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center flex-shrink-0">
-              <MessageSquare className="w-4 h-4 text-white" />
-            </div>
+            <img
+              src="/logo-icon-transparent.png"
+              alt={systemName}
+              className="w-8 h-8 rounded-lg flex-shrink-0 dark:hidden"
+            />
+            <img
+              src="/logo-icon-invert.png"
+              alt={systemName}
+              className="w-8 h-8 rounded-lg flex-shrink-0 hidden dark:block"
+            />
             {showLabel && (
               <>
                 <span className="font-semibold text-sm text-slate-900 dark:text-white truncate min-w-0">

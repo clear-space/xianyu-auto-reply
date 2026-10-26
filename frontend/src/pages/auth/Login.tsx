@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { MessageSquare, User, Lock, Mail, KeyRound, Eye, EyeOff } from 'lucide-react'
+import { User, Lock, Mail, KeyRound, Eye, EyeOff, MessageSquare, Radar, Compass, Clock, Users, Ticket } from 'lucide-react'
 import { AuthNavbar } from '@/components/common/AuthNavbar'
+import { TechBackground } from '@/components/common/TechBackground'
 import { SafeHtml } from '@/components/common/SafeHtml'
 import { getDefaultAuthFooterAdSettings, getDefaultLoginBrandingSettings } from '@/api/settings'
 import { login, verifyToken, getRegistrationStatus, getLoginInfoStatus, generateCaptcha, verifyCaptcha, sendVerificationCode, getLoginCaptchaStatus, getLoginBrandingSettings, getAuthFooterAdSettings } from '@/api/auth'
@@ -14,6 +15,16 @@ import { GeetestCaptcha, type GeetestResult } from '@/components/common/GeetestC
 import { POPUP_ANNOUNCEMENT_SHOWN_KEY } from '@/components/common/PopupAnnouncementModal'
 
 type LoginType = 'username' | 'email-password' | 'email-code'
+
+/** 登录页功能亮点（内容提炼自「使用教程」各模块） */
+const LOGIN_FEATURES = [
+  { icon: MessageSquare, title: '智能自动回复', desc: '关键词精准匹配，买家消息自动秒回' },
+  { icon: Radar, title: '商品监控', desc: '自动采集、下单、私信全链路托管' },
+  { icon: Compass, title: '数据罗盘', desc: '浏览、想要、转化率等商品指标实时掌握' },
+  { icon: Clock, title: '定时发布', desc: '定时上架、定时擦亮，发布计划自动执行' },
+  { icon: Users, title: '多账号管理', desc: '扫码一键登录，批量管理多个闲鱼账号' },
+  { icon: Ticket, title: '卡券与订单', desc: '卡券生成核销、订单发货全流程管理' },
+] as const
 
 export function Login() {
   const navigate = useNavigate()
@@ -282,54 +293,89 @@ export function Login() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-900 transition-colors duration-200">
-      <AuthNavbar systemName={loginBranding['login.system_name']} />
+    <div className="relative min-h-screen flex flex-col overflow-hidden bg-sky-100 dark:bg-[#050b1f] transition-colors duration-200">
+      {/* 科技感背景：渐变底 + 网格 + 漂浮光斑 */}
+      <TechBackground />
+      <AuthNavbar systemName={loginBranding['login.system_name']} transparent />
 
-      <div className="flex-1 flex pt-14">
+      <div className="flex-1 flex pt-14 relative">
       {/* Left side - Branding */}
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.5 }}
-        className="hidden lg:flex lg:w-1/2 bg-slate-900 dark:bg-slate-950 relative overflow-hidden"
+        className="hidden lg:flex lg:w-1/2 xl:w-[55%] relative"
       >
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-600/20 to-transparent" />
-        <div className="relative z-10 flex flex-col justify-center px-16">
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
+        {/* 内容列：logo → 标题 → 描述 → 功能亮点；底部与右侧登录卡底边对齐（上移约 25px） */}
+        <div className="relative z-10 flex flex-col justify-center px-16 xl:pl-24 xl:pr-8 pt-10 pb-24 w-full">
+          {/* 品牌 logo：内容流顶部、左对齐，尺寸适中（约为标题 1.5 倍高） */}
+          <motion.img
+            initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2, duration: 0.5 }}
-            className="flex items-center gap-3 mb-8"
-          >
-            <div className="w-12 h-12 rounded-xl bg-blue-500 flex items-center justify-center">
-              <MessageSquare className="w-6 h-6 text-white" />
-            </div>
-            <span className="text-2xl font-bold text-white">{loginBranding['login.system_name']}</span>
-          </motion.div>
-          <motion.h1 
+            transition={{ delay: 0.15, duration: 0.5 }}
+            src="/logo-full-transparent-trim.png"
+            alt={loginBranding['login.system_name']}
+            className="w-[300px] xl:w-[360px] h-auto mb-8 dark:hidden"
+          />
+          <motion.img
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15, duration: 0.5 }}
+            src="/logo-full-invert-trim.png"
+            alt={loginBranding['login.system_name']}
+            className="w-[300px] xl:w-[360px] h-auto mb-8 hidden dark:block"
+          />
+
+          <motion.h1
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3, duration: 0.5 }}
-            className="text-4xl font-bold text-white mb-4 leading-tight whitespace-pre-line"
+            className="text-3xl font-bold text-slate-900 dark:text-white mb-4 leading-tight whitespace-pre-line"
           >
             {loginBranding['login.system_title']}
           </motion.h1>
-          <motion.p 
+          <motion.p
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4, duration: 0.5 }}
-            className="text-slate-400 text-lg max-w-md"
+            className="text-slate-600 dark:text-slate-400 text-base xl:text-lg max-w-lg leading-relaxed"
           >
             {loginBranding['login.system_description']}
           </motion.p>
+
+          {/* 功能亮点：内容参考「使用教程」 */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5, duration: 0.5 }}
+            className="mt-10 grid grid-cols-2 gap-4"
+          >
+            {LOGIN_FEATURES.map((feature, index) => {
+              const Icon = feature.icon
+              return (
+                <motion.div
+                  key={feature.title}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.55 + index * 0.07, duration: 0.4 }}
+                  className="flex items-start gap-3 rounded-xl bg-white/90 dark:bg-white/[0.09] backdrop-blur-sm border border-slate-200/70 dark:border-white/15 px-3.5 py-3 shadow-md shadow-blue-900/10 dark:shadow-black/20"
+                >
+                  <span className="w-8 h-8 rounded-lg bg-blue-500/10 dark:bg-blue-400/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <Icon className="w-4 h-4 text-blue-600 dark:text-blue-300" />
+                  </span>
+                  <span className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{feature.title}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">{feature.desc}</p>
+                  </span>
+                </motion.div>
+              )
+            })}
+          </motion.div>
         </div>
-        {/* Decorative circles */}
-        <div className="absolute -bottom-32 -left-32 w-96 h-96 rounded-full bg-blue-600/10" />
-        <div className="absolute -top-32 -right-32 w-96 h-96 rounded-full bg-blue-600/5" />
       </motion.div>
 
-      {/* Right side - Login form */}
-      <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
+      {/* Right side - Login form（xl 下卡片向左靠拢，缩小中部空档） */}
+      <div className="flex-1 relative z-10 flex items-center justify-center p-4 sm:p-6 xl:justify-start xl:pl-16">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -337,20 +383,27 @@ export function Login() {
           className="w-full max-w-md"
         >
           {/* Mobile header */}
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1, duration: 0.4 }}
             className="lg:hidden text-center mb-8"
           >
-            <div className="w-12 h-12 rounded-xl bg-blue-500 text-white mx-auto mb-4 flex items-center justify-center">
-              <MessageSquare className="w-6 h-6" />
-            </div>
+            <img
+              src="/logo-icon-transparent.png"
+              alt={loginBranding['login.system_name']}
+              className="w-12 h-12 rounded-xl mx-auto mb-4 shadow-md shadow-blue-900/10 dark:hidden"
+            />
+            <img
+              src="/logo-icon-invert.png"
+              alt={loginBranding['login.system_name']}
+              className="w-12 h-12 rounded-xl mx-auto mb-4 hidden dark:block"
+            />
             <h1 className="text-xl font-bold text-slate-900 dark:text-white">{loginBranding['login.system_name']}</h1>
           </motion.div>
 
-          {/* Login Card */}
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-5 sm:p-8">
+          {/* Login Card（毛玻璃质感，融入科技背景） */}
+          <div className="bg-white/90 dark:bg-slate-900/75 backdrop-blur-xl rounded-xl shadow-lg border border-slate-200/70 dark:border-slate-700/60 p-5 sm:p-8">
             <div className="mb-6">
               <h2 className="text-xl vben-card-title text-slate-900 dark:text-white">登录</h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">欢迎回来，请登录您的账号</p>
