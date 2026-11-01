@@ -22,6 +22,7 @@ import { GetSourceCode } from '@/pages/auth/GetSourceCode'
 
 // 页面组件懒加载，按需加载提升首屏速度
 const Dashboard = React.lazy(() => import('@/pages/dashboard/Dashboard').then(m => ({ default: m.Dashboard })))
+const Home = React.lazy(() => import('@/pages/home/Home').then(m => ({ default: m.Home })))
 const DataOverview = React.lazy(() => import('@/pages/data_analysis/DataOverview').then(m => ({ default: m.DataOverview })))
 const BrowseDistribution = React.lazy(() => import('@/pages/data_analysis/BrowseDistribution').then(m => ({ default: m.BrowseDistribution })))
 const ItemAnalysis = React.lazy(() => import('@/pages/data_analysis/ItemAnalysis').then(m => ({ default: m.ItemAnalysis })))
@@ -327,6 +328,7 @@ function App() {
       <Suspense fallback={<PageLoading />}>
         <Routes>
           {/* Public routes */}
+          <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -342,14 +344,12 @@ function App() {
 
           {/* Protected routes */}
           <Route
-            path="/"
             element={
               <ProtectedRoute>
                 <MainLayout />
               </ProtectedRoute>
             }
           >
-            <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="data-analysis/overview" element={<DataOverview />} />
             <Route path="data-analysis/browse" element={<BrowseDistribution />} />

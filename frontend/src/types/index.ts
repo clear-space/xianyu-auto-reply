@@ -301,7 +301,7 @@ export interface SystemSettings {
   'navigation.hide_public_about'?: boolean
   // SMTP邮件配置
   smtp_server?: string
-  smtp_port?: number
+  smtp_port?: number | string
   smtp_user?: string
   smtp_password?: string
   smtp_from?: string

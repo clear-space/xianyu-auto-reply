@@ -18,15 +18,10 @@ from typing import Any
 import aiohttp
 from loguru import logger
 
-from common.services.token_api_mode import (
-    DEFAULT_TOKEN_API_MODE,
-    TOKEN_API_MODE_REMOTE,
-    TOKEN_API_MODE_WEB,
-    get_token_api_name,
-    normalize_token_api_mode,
-)
 from common.services.remote_token_api import (
     RemoteTokenResult,
+    RemoteTokenSettings,
+    load_remote_token_settings,
     request_remote_xianyu_token_from_settings,
 )
 from common.services.remote_token_risk_log_service import (
@@ -35,9 +30,15 @@ from common.services.remote_token_risk_log_service import (
     build_remote_direct_event_description,
     record_remote_token_risk_log,
 )
+from common.services.token_api_mode import (
+    DEFAULT_TOKEN_API_MODE,
+    TOKEN_API_MODE_REMOTE,
+    TOKEN_API_MODE_WEB,
+    get_token_api_name,
+    normalize_token_api_mode,
+)
 from common.utils.cookie_refresh import is_session_expired_error
 from common.utils.xianyu_utils import generate_sign, trans_cookies
-
 
 IM_TOKEN_API_BASE_URL = "https://h5api.m.goofish.com/h5"
 # 远程接口取 Token 超时时的最大尝试次数（首次 + 重试 2 次）；全部超时后才交由上层处理滑块
@@ -67,8 +68,7 @@ class ImTokenApiResult:
     duration_seconds: float
     api_mode: str = DEFAULT_TOKEN_API_MODE
     device_id: str = ""
-    # 远程接口失败时的原因文本。独立字段承载，不写入 response_json 的 ret / data，
-    # 避免污染滑块关键词与令牌过期的子串判断，也不覆盖响应里的滑块验证链接。
+    # 远程失败原因独立保存；ret仅保留闲鱼真实协议错误，避免普通服务报错误触发滑块。
     remote_failure_message: str = ""
 
 
@@ -200,30 +200,29 @@ async def request_im_token(
     }
 
     started_at = time.time()
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            build_im_token_api_url(normalized_mode),
-            params=params,
-            data={"data": data_value},
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-        ) as response:
-            # 风控响应的 content-type 可能不是 json，统一放开校验避免解析异常
-            response_json = await response.json(content_type=None)
-            response_cookies: dict[str, str] = {}
-            for cookie_header in response.headers.getall("set-cookie", []):
-                if "=" not in cookie_header:
-                    continue
-                name, value = cookie_header.split(";", 1)[0].split("=", 1)
-                response_cookies[name.strip()] = value.strip()
-            return ImTokenApiResult(
-                response_json=response_json,
-                response_cookies=response_cookies,
-                status_code=response.status,
-                duration_seconds=time.time() - started_at,
-                api_mode=normalized_mode,
-                device_id=device_id,
-            )
+    async with aiohttp.ClientSession() as session, session.post(
+        build_im_token_api_url(normalized_mode),
+        params=params,
+        data={"data": data_value},
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+    ) as response:
+        # 风控响应的 content-type 可能不是 json，统一放开校验避免解析异常
+        response_json = await response.json(content_type=None)
+        response_cookies: dict[str, str] = {}
+        for cookie_header in response.headers.getall("set-cookie", []):
+            if "=" not in cookie_header:
+                continue
+            name, value = cookie_header.split(";", 1)[0].split("=", 1)
+            response_cookies[name.strip()] = value.strip()
+        return ImTokenApiResult(
+            response_json=response_json,
+            response_cookies=response_cookies,
+            status_code=response.status,
+            duration_seconds=time.time() - started_at,
+            api_mode=normalized_mode,
+            device_id=device_id,
+        )
 
 
 def _remote_result_to_im_token_result(
@@ -257,17 +256,41 @@ def _remote_result_to_im_token_result(
         )
 
     failure_message = result.message or "远程接口取Token失败"
+    raw = result.response_json if isinstance(result.response_json, dict) else {}
+    data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+    # 远程服务可能透传 mtop 响应；保留真实 ret 和验证链接，不把普通中文报错塞入 ret。
+    platform_response = data if "ret" in data else raw
+    platform_data = platform_response.get("data")
+    platform_data = platform_data if isinstance(platform_data, dict) else data
+    platform_ret = platform_response.get("ret")
+    if isinstance(platform_ret, str):
+        platform_ret = [platform_ret]
+    if isinstance(platform_ret, (list, tuple)):
+        # 远程已判失败，不能再让透传的 SUCCESS 标记把下游变成成功。
+        platform_ret = [item for item in platform_ret if "SUCCESS::" not in str(item)] or None
+    if not isinstance(platform_ret, (str, list, tuple)):
+        platform_ret = ["FAIL::远程Token接口请求失败"]
+        for marker in (
+            "FAIL_SYS_SESSION_EXPIRED", "FAIL_SYS_TOKEN_EXOIRED", "FAIL_SYS_TOKEN_EXPIRED",
+            "FAIL_SYS_USER_VALIDATE", "RGV587_ERROR",
+        ):
+            if marker in failure_message:
+                platform_ret = [marker]
+                break
+    if not 200 <= result.status_code < 300:
+        platform_ret, platform_data = ["FAIL::远程Token接口HTTP请求失败"], {}
     return ImTokenApiResult(
         response_json={
-            "ret": [f"FAIL::{failure_message}"],
-            "data": result.response_json,
+            "ret": platform_ret,
+            "data": platform_data,
+            "message": failure_message,
         },
         response_cookies={},
         status_code=result.status_code,
         duration_seconds=result.duration_seconds,
         api_mode=TOKEN_API_MODE_REMOTE,
         device_id=current_device_id,
-        # 远程失败原因单独留一份，供上层判断 Session 是否过期
+        # 保留完整服务错误，供通知展示及明确的 Session 过期判断使用。
         remote_failure_message=failure_message,
     )
 
@@ -278,6 +301,7 @@ async def _request_remote_token_from_settings(
     cookies: str,
     timeout_seconds: int,
     log_tag: str,
+    remote_settings: RemoteTokenSettings | None = None,
 ) -> ImTokenApiResult:
     """调用远程 Token 接口并记录完整的风控日志。
 
@@ -290,17 +314,30 @@ async def _request_remote_token_from_settings(
         device_id: 当前账号的设备 ID。
         cookies: 当前账号完整 Cookie 字符串，传给远程接口 data.cookies。
         timeout_seconds: 单次 HTTP 请求总超时时间。
-        log_tag: 账号标识，用于日志定位。
+        log_tag: 账号标识，用于读取账号所属用户配置及日志定位。
     Returns:
         统一的 Token 接口响应结果。
     Raises:
         Exception: 远程请求连续超时，或发生非超时异常时向调用方抛出。
     """
     prefix = f"【{log_tag}】" if log_tag else ""
+    if remote_settings is None:
+        try:
+            remote_settings = await load_remote_token_settings(log_tag)
+        except Exception as exc:
+            logger.opt(exception=exc).error("{}远程Token配置读取失败", prefix)
+            await record_remote_token_risk_log(
+                account_identifier=log_tag,
+                success=False,
+                message=f"远程Token配置读取失败：{type(exc).__name__}: {exc}",
+                event_description="远程Token配置读取失败，已停止本次请求",
+            )
+            raise
 
     def _event_description(remote_outcome: str) -> str:
         return build_remote_direct_event_description(
             remote_outcome=remote_outcome,
+            configuration_source=remote_settings.source,
         )
 
     remote_result = None
@@ -312,9 +349,11 @@ async def _request_remote_token_from_settings(
             remote_result = await request_remote_xianyu_token_from_settings(
                 cookies=cookies,
                 timeout_seconds=timeout_seconds,
+                account_id=log_tag,
+                settings=remote_settings,
             )
             break
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             # 仅「超时」才重试；其余异常走下面的分支，不重试
             message = f"{type(exc).__name__}: {exc}"
             if attempt < REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS:
@@ -384,7 +423,7 @@ async def request_im_token_with_fallback(
     timeout_seconds: int = 600,
     log_tag: str = "",
 ) -> ImTokenApiResult:
-    """按系统设置调用 Token 接口。
+    """按既有接口方式调用 Token 接口，远程配置优先使用账号所属用户设置。
 
     网页模式仅调用本地网页端接口；远程模式在缓存未命中后直接调用远程接口，
     不再请求本地网页端接口。远程失败时返回远程失败结果，由调用方继续处理
@@ -395,7 +434,7 @@ async def request_im_token_with_fallback(
         device_id: 本次请求必须使用的 Device ID。
         api_mode: Token 获取方式。
         timeout_seconds: HTTP 请求总超时秒数。
-        log_tag: 日志前缀标识（如账号 ID），仅用于日志定位。
+        log_tag: 账号标识，同时用于读取账号所属用户的远程配置和日志定位。
 
     Returns:
         接口响应结果，``api_mode`` 字段标明实际生效的接口方式。
@@ -405,12 +444,21 @@ async def request_im_token_with_fallback(
         asyncio.TimeoutError: 请求超时。
     """
     configured_mode = normalize_token_api_mode(api_mode)
+    selected_remote_settings = None
+    account_id = str(log_tag or "").strip()
+    if account_id:
+        # 公共请求层再次确认账号所属用户配置，防止新增调用点遗漏模式选择。
+        # 个人配置任一项存在即固定走个人远程接口，读取异常直接抛出。
+        selected_remote_settings = await load_remote_token_settings(account_id)
+        if selected_remote_settings.source == "个人设置":
+            configured_mode = TOKEN_API_MODE_REMOTE
     if configured_mode == TOKEN_API_MODE_REMOTE:
         return await _request_remote_token_from_settings(
             device_id,
             cookies=cookies_str,
             timeout_seconds=timeout_seconds,
             log_tag=log_tag,
+            remote_settings=selected_remote_settings,
         )
 
     return await request_im_token(

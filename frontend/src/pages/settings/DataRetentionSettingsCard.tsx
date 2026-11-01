@@ -1,5 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from 'react'
-import { Database, PlayCircle } from 'lucide-react'
+import { Database, PlayCircle, Save } from 'lucide-react'
+import { ButtonLoading } from '@/components/common/Loading'
 import type { SystemSettings } from '@/types'
 import { useUIStore } from '@/store/uiStore'
 import { triggerScheduledTask } from '@/api/scheduledTasks'
@@ -7,6 +8,9 @@ import { triggerScheduledTask } from '@/api/scheduledTasks'
 interface DataRetentionSettingsCardProps {
   settings: SystemSettings | null
   setSettings: Dispatch<SetStateAction<SystemSettings | null>>
+  /** 独立保存入口：保存当前数据保留策略（Tab 化设置页由外部传入） */
+  onSave?: () => void
+  saving?: boolean
 }
 
 /**
@@ -39,7 +43,7 @@ const RETENTION_DAY_ITEMS: Array<{ key: keyof SystemSettings; label: string; des
   { key: 'data_retention.cleanup_log_days', label: '清理审计日志', desc: 'xy_data_cleanup_log 自身保留天数' },
 ]
 
-export function DataRetentionSettingsCard({ settings, setSettings }: DataRetentionSettingsCardProps) {
+export function DataRetentionSettingsCard({ settings, setSettings, onSave, saving = false }: DataRetentionSettingsCardProps) {
   const { addToast } = useUIStore()
   const [triggering, setTriggering] = useState(false)
 
@@ -52,7 +56,7 @@ export function DataRetentionSettingsCard({ settings, setSettings }: DataRetenti
     try {
       const result = await triggerScheduledTask('data_retention_cleanup')
       if (result.success) {
-        addToast({ type: 'success', message: '清理任务已触发，正在执行...（未保存的修改请先点右上角保存设置）' })
+        addToast({ type: 'success', message: '清理任务已触发，正在执行...（未保存的修改请先点保存数据保留策略）' })
       } else {
         addToast({ type: 'error', message: result.message || '触发清理任务失败' })
       }
@@ -65,16 +69,22 @@ export function DataRetentionSettingsCard({ settings, setSettings }: DataRetenti
 
   return (
     <div className="vben-card">
-      <div className="vben-card-header">
+      <div className="vben-card-header flex items-center justify-between gap-3">
         <h2 className="vben-card-title">
           <Database className="w-4 h-4" />
           数据保留策略
         </h2>
+        {onSave && (
+          <button type="button" onClick={onSave} disabled={saving} className="btn-ios-primary">
+            {saving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+            保存数据保留策略
+          </button>
+        )}
       </div>
       <div className="vben-card-body space-y-4">
         <p className="text-sm text-slate-500 dark:text-slate-400">
           统一数据保留引擎每小时自动清理各日志类表超过保留天数的历史数据，防止数据库无限增长（默认保留 30 天）。
-          修改后点右上角「保存设置」，下次定时执行或手动触发时生效。
+          修改后点击右上角「保存数据保留策略」，下次定时执行或手动触发时生效。
         </p>
 
         {/* 总开关 + 执行参数 */}
