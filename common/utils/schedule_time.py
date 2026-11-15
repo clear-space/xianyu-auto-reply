@@ -189,6 +189,61 @@ def _next_weekly(config: dict, now: datetime, today, force_next_day: bool = Fals
     return None
 
 
+def compute_publish_window_anchor(
+    schedule_mode: str, schedule_config: dict, after: datetime = None,
+    force_next_day: bool = False,
+) -> Optional[datetime]:
+    """计算定时发布规则的窗口锚点（账号级触发计划的物化时机）。
+
+    random+time_range 模式：next_trigger_at 取窗口开始时间——scheduler 在锚点到期时
+    为规则内每个账号独立生成窗口内随机触发时间（trigger_state），随后逐账号触发。
+    其余模式（once/固定时间点）：行为与 compute_next_trigger 完全一致。
+    """
+    use_random = bool(schedule_config.get("random"))
+    time_range = schedule_config.get("time_range")
+    if not (use_random and time_range):
+        return compute_next_trigger(
+            schedule_mode, schedule_config, after=after, force_next_day=force_next_day
+        )
+
+    now = after if after else get_beijing_now()
+    today = now.date()
+
+    def _window_for(day):
+        start = parse_time(str(time_range.get("start", "00:00"))) or time(0, 0)
+        end = parse_time(str(time_range.get("end", "23:59"))) or time(23, 59)
+        ws = datetime.combine(day, start).replace(tzinfo=BEIJING_TZ)
+        we = datetime.combine(day, end).replace(tzinfo=BEIJING_TZ)
+        return ws, we
+
+    if schedule_mode == "daily":
+        if force_next_day:
+            return _window_for(today + timedelta(days=1))[0]
+        ws, we = _window_for(today)
+        # 窗口尚未结束（含已开启）→ 今天窗口；已结束 → 明天窗口
+        if now >= we:
+            return _window_for(today + timedelta(days=1))[0]
+        return ws
+
+    if schedule_mode == "weekly":
+        days = schedule_config.get("days") or []
+        for offset in range(8):
+            day = today + timedelta(days=offset)
+            if day.isoweekday() not in days:
+                continue
+            if force_next_day and offset == 0:
+                continue
+            ws, we = _window_for(day)
+            if now < we or offset > 0:
+                return ws
+        return None
+
+    # once 模式不支持 random+time_range（校验层禁止），兜底回退
+    return compute_next_trigger(
+        schedule_mode, schedule_config, after=after, force_next_day=force_next_day
+    )
+
+
 def compute_next_trigger(
     schedule_mode: str, schedule_config: dict, after: datetime = None,
     force_next_day: bool = False,
@@ -241,6 +296,7 @@ def compute_next_trigger(
 
 __all__ = [
     "compute_next_trigger",
+    "compute_publish_window_anchor",
     "parse_time",
     "random_time_between",
     "validate_schedule_config",

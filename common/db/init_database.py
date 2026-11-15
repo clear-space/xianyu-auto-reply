@@ -2249,6 +2249,7 @@ class DatabaseInitializer:
                 enabled TINYINT NOT NULL DEFAULT 1 COMMENT '是否启用',
                 last_triggered_at DATETIME COMMENT '上次触发时间',
                 next_trigger_at DATETIME COMMENT '下次触发时间',
+                trigger_state JSON DEFAULT NULL COMMENT '账号触发计划JSON（random+time_range 模式的窗口期账号级随机触发时间与状态）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_ps_user (user_id),
@@ -2261,6 +2262,8 @@ class DatabaseInitializer:
             CREATE TABLE IF NOT EXISTS xy_publish_schedule_logs (
                 id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
                 schedule_id BIGINT NOT NULL COMMENT '关联的定时规则ID',
+                schedule_name VARCHAR(100) DEFAULT NULL COMMENT '规则名称快照（规则删除后执行记录仍可查看名称）',
+                account_id VARCHAR(80) DEFAULT NULL COMMENT '账号级执行的账号ID（规则级执行为 NULL）',
                 batch_id VARCHAR(36) COMMENT '批量发布的 batch_id',
                 scheduled_at DATETIME NOT NULL COMMENT '计划执行时间',
                 executed_at DATETIME COMMENT '实际执行时间',
@@ -2269,6 +2272,7 @@ class DatabaseInitializer:
                 success_count INT DEFAULT 0 COMMENT '成功次数',
                 failed_count INT DEFAULT 0 COMMENT '失败次数',
                 error_message VARCHAR(1000) COMMENT '失败原因',
+                detail_json JSON DEFAULT NULL COMMENT '执行明细JSON（成功/失败商品编号明细、补发轮次、账号级错误）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_psl_schedule (schedule_id),
@@ -2439,10 +2443,12 @@ class DatabaseInitializer:
             ("deduplicate_enabled", "TINYINT NOT NULL DEFAULT 0 COMMENT '去重开关（随机模式可用）'", "random_count"),
             ("weight_algorithm_id", "BIGINT DEFAULT NULL COMMENT '权重算法ID（随机模式加权选料；NULL=系统默认参数）'", "deduplicate_enabled"),
             ("material_scope", "VARCHAR(20) NOT NULL DEFAULT 'selected' COMMENT '素材范围：selected-指定素材, all-全部素材（随素材库实时更新）'", "material_ids"),
+            ("trigger_state", "JSON DEFAULT NULL COMMENT '账号触发计划JSON（random+time_range 模式的窗口期账号级随机触发时间与状态）'", "next_trigger_at"),
         ],
         "xy_publish_schedule_logs": [
             ("detail_json", "JSON DEFAULT NULL COMMENT '执行明细JSON（成功/失败商品编号明细、补发轮次、账号级错误）'", "error_message"),
             ("schedule_name", "VARCHAR(100) DEFAULT NULL COMMENT '规则名称快照（规则删除后执行记录仍可查看名称）'", "schedule_id"),
+            ("account_id", "VARCHAR(80) DEFAULT NULL COMMENT '账号级执行的账号ID（规则级执行为 NULL）'", "schedule_name"),
         ],
         "xy_weight_algorithms": [
             ("is_builtin", "TINYINT NOT NULL DEFAULT 0 COMMENT '是否系统内置（内置算法仅少量开关可调，其余参数只读，不可删除/停用，列表置顶）'", "enabled"),

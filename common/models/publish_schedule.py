@@ -66,3 +66,7 @@ class PublishSchedule(TimestampMixin, Base):
     next_trigger_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), comment="下次触发时间（预计算，方便扫描）"
     )
+    trigger_state: Mapped[dict | None] = mapped_column(
+        JSON, comment="账号触发计划JSON（random+time_range 模式的窗口期账号级随机触发时间与状态；"
+                       "window_date/accounts:{账号:{trigger_at,status: pending|fired}}）"
+    )

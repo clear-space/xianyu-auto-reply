@@ -52,17 +52,32 @@ const MATERIAL_RESULT_CONFIG: Record<string, { label: string; cls: string }> = {
   account_error: { label: '账号错误', cls: 'badge-warning' },
 }
 
-/** 执行记录明细面板（detail_json 展开） */
+const ACCOUNT_SECTION_STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
+  done: { label: '达标', cls: 'badge-success' },
+  partial: { label: '部分成功', cls: 'badge-warning' },
+  failed: { label: '失败', cls: 'badge-danger' },
+  pool_exhausted: { label: '池耗尽', cls: 'badge-gray' },
+}
+
+const ACCOUNT_RESULT_STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
+  done: { label: '达标', cls: 'badge-success' },
+  dead: { label: '已熔断', cls: 'badge-danger' },
+  pool_exhausted: { label: '池耗尽未达标', cls: 'badge-warning' },
+  incomplete: { label: '未达标', cls: 'badge-warning' },
+}
+
+/** 执行记录明细面板（detail_json 展开，按账号组织） */
 function LogDetailPanel({ detail }: { detail: ScheduleLogDetail }) {
   const rounds = detail.rounds || []
   const filtered = detail.filtered || []
+  const failSummary = detail.fail_summary || []
+  const accountResults = detail.account_result || []
   return (
     <div className="space-y-3 text-sm">
       <div className="flex flex-wrap gap-2 items-center">
         <span className="badge-gray">模式：{detail.publish_mode === 'random' ? '随机发布' : '指定发布'}</span>
-        {detail.random_count != null && <span className="badge-gray">目标 {detail.random_count} 条</span>}
+        {detail.random_count != null && <span className="badge-gray">目标 {detail.random_count} 条/账号</span>}
         {detail.deduplicate && <span className="badge-gray">已启用去重</span>}
-        {detail.target_ok != null && <span className="badge-gray">素材成功 {detail.target_ok} 条</span>}
         {detail.weight_algorithm_name && (
           <span className="badge-gray">算法：{detail.weight_algorithm_name}</span>
         )}
@@ -76,31 +91,82 @@ function LogDetailPanel({ detail }: { detail: ScheduleLogDetail }) {
           <span className="badge-warning">素材过多，仅展示账号结果计数</span>
         )}
       </div>
+      {/* 失败原因汇总（错误码 + 原始原因 + 次数，内联展示不靠悬停） */}
+      {failSummary.length > 0 && (
+        <div className="rounded-xl border border-red-200 dark:border-red-800 p-3 bg-red-50/70 dark:bg-red-900/20 space-y-1.5">
+          <div className="font-medium text-red-600 dark:text-red-400">失败原因汇总</div>
+          {failSummary.map((f, i) => (
+            <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-red-500 font-medium">×{f.count}</span>
+              {f.account_id && <span className="font-mono text-slate-500">{f.account_id}</span>}
+              {f.code && <span className="badge-danger">{f.code}</span>}
+              <span className="text-red-500 break-all" title={f.message}>{f.message}</span>
+              {f.hint && <span className="badge-warning">{f.hint}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {/* 账号最终状态 */}
+      {accountResults.length > 0 && (
+        <div className="flex flex-wrap gap-2 items-center">
+          {accountResults.map(a => {
+            const cfg = ACCOUNT_RESULT_STATUS_CONFIG[a.status] || { label: a.status, cls: 'badge-gray' }
+            return (
+              <span key={a.account_id} className={`${cfg.cls} inline-flex items-center gap-1`}>
+                {a.account_id}：{cfg.label}
+                {a.target != null ? `（${a.ok}/${a.target}）` : `（成 ${a.ok} · 败 ${a.fail}）`}
+                {a.reason ? ` · ${a.reason}` : ''}
+              </span>
+            )
+          })}
+        </div>
+      )}
+      {/* 账号熔断信息 */}
+      {detail.breaker && Object.keys(detail.breaker).length > 0 && (
+        <div className="text-xs text-slate-500 space-y-0.5">
+          {Object.entries(detail.breaker).map(([aid, b]) => (
+            <div key={aid}>
+              账号 {aid} 第 {b?.round ?? '-'} 轮起熔断：{b?.reason ?? '未知原因'}
+              {b?.last_error ? `（${b.last_error}）` : ''}
+            </div>
+          ))}
+        </div>
+      )}
+      {/* 轮次明细（按账号分节） */}
       {rounds.map(r => (
         <div key={r.round}>
-          <div className="font-medium text-slate-600 dark:text-slate-300 mb-1">第 {r.round} 轮（{r.materials.length} 条素材）</div>
-          <div className="space-y-1">
-            {r.materials.map((m, i) => {
-              const cfg = MATERIAL_RESULT_CONFIG[m.result] || { label: m.result, cls: 'badge-gray' }
-              const accounts = m.accounts || []
-              const failedAccounts = accounts.filter(a => a.status !== 'success')
-              const counts = m.account_counts
+          <div className="font-medium text-slate-600 dark:text-slate-300 mb-1">
+            第 {r.round} 轮（{r.accounts?.length ?? 0} 个账号）
+          </div>
+          <div className="space-y-2">
+            {(r.accounts || []).map((a, i) => {
+              const acfg = ACCOUNT_SECTION_STATUS_CONFIG[a.status] || { label: a.status, cls: 'badge-gray' }
               return (
-                <div key={i} className="flex flex-wrap items-center gap-2">
-                  <span className={cfg.cls}>{cfg.label}</span>
-                  <span className="font-mono text-slate-500">{m.item_no ?? '无编号'}</span>
-                  {m.weight != null && <span className="badge-info text-xs">权重 {m.weight}</span>}
-                  <span className="truncate max-w-[280px] text-slate-700 dark:text-slate-200" title={m.title}>{m.title}</span>
-                  {failedAccounts.length > 0 && (
-                    <span className="text-xs text-red-500" title={failedAccounts.map(a => a.error).join('；')}>
-                      {failedAccounts.map(a => a.account_id).join('、')} 失败
-                    </span>
-                  )}
-                  {counts && !accounts.length && (
-                    <span className="text-xs text-slate-400">
-                      成功 {counts.success} · 失败 {counts.failed} · 账号错误 {counts.account_error}
-                    </span>
-                  )}
+                <div key={i} className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 bg-slate-50/80 dark:bg-slate-800/60">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <span className={acfg.cls}>{acfg.label}</span>
+                    <span className="font-medium text-slate-700 dark:text-slate-200">{a.account_id}</span>
+                    {a.note && <span className="text-xs text-slate-400">{a.note}</span>}
+                  </div>
+                  <div className="space-y-1">
+                    {(a.materials || []).map((m, j) => {
+                      const cfg = MATERIAL_RESULT_CONFIG[m.result] || { label: m.result, cls: 'badge-gray' }
+                      return (
+                        <div key={j} className="flex flex-wrap items-center gap-2">
+                          <span className={cfg.cls}>{cfg.label}</span>
+                          <span className="font-mono text-slate-500">{m.item_no ?? '无编号'}</span>
+                          {m.weight != null && <span className="badge-info text-xs">权重 {m.weight}</span>}
+                          <span className="truncate max-w-[280px] text-slate-700 dark:text-slate-200" title={m.title}>{m.title}</span>
+                          {m.error && <span className="text-xs text-red-400" title={m.error}>{m.error}</span>}
+                        </div>
+                      )
+                    })}
+                    {a.material_counts && !(a.materials || []).length && (
+                      <span className="text-xs text-slate-400">
+                        成功 {a.material_counts.success} · 失败 {a.material_counts.failed} · 账号错误 {a.material_counts.account_error}
+                      </span>
+                    )}
+                  </div>
                 </div>
               )
             })}
@@ -119,7 +185,7 @@ function LogDetailPanel({ detail }: { detail: ScheduleLogDetail }) {
           </div>
         </div>
       )}
-      {rounds.length === 0 && filtered.length === 0 && (
+      {rounds.length === 0 && filtered.length === 0 && failSummary.length === 0 && (
         <p className="text-slate-400">暂无明细</p>
       )}
     </div>
@@ -600,7 +666,17 @@ export function ScheduledPublish() {
                     </td>
                     <td className="text-sm text-slate-500">{formatConfig(s)}</td>
                     <td className="text-sm text-slate-500">
-                      {(s.account_count ?? s.account_ids.length)} 账号 / {s.material_scope === 'all'
+                      {(s.account_count ?? s.account_ids.length)} 账号
+                      {s.trigger_progress && (
+                        <span
+                          className="badge-primary ml-1"
+                          title={(s.trigger_progress.accounts || [])
+                            .map(a => `${a.account_id} @ ${a.trigger_at ? new Date(a.trigger_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '-'}${a.status === 'fired' ? '（已触发）' : '（待触发）'}`)
+                            .join('\n')}
+                        >
+                          已触发 {s.trigger_progress.fired}/{s.trigger_progress.total}
+                        </span>
+                      )}{' '}/ {s.material_scope === 'all'
                         ? <span className="badge-info">全部素材（{s.material_count ?? 0}）</span>
                         : `${s.material_count ?? s.material_ids.length} 素材`}
                     </td>
@@ -770,6 +846,11 @@ export function ScheduledPublish() {
                           <span className="font-medium text-slate-800 dark:text-slate-100 truncate block max-w-[150px]" title={l.schedule_name || `规则 #${l.schedule_id}`}>
                             {l.schedule_name || `规则 #${l.schedule_id}`}
                           </span>
+                          {l.account_id && (
+                            <span className="badge-gray block max-w-[150px] truncate mt-0.5" title={`账号级执行：${l.account_id}`}>
+                              {l.account_id}
+                            </span>
+                          )}
                         </td>
                         <td className="text-sm whitespace-nowrap">
                           {new Date(l.scheduled_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}

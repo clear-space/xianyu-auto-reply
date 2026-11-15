@@ -669,6 +669,11 @@ async def trigger_schedule(
     if schedule.schedule_mode == "once":
         await svc.update(schedule_id, query_user_id, {"enabled": False})
 
+    # 手动触发视为本窗口已执行：账号级触发计划中 pending 账号全部标记 fired，
+    # 避免手动触发后，账号级定时触发又重复执行一遍
+    if schedule.trigger_state:
+        await svc.mark_trigger_state_fired(schedule)
+
     logger.info(
         f"[定时发布] 手动触发 schedule_id={schedule_id}, batch_id={batch_id}, "
         f"{len(account_ids)} 账号 × {len(materials)} 素材（scope={material_scope}）"
@@ -778,6 +783,7 @@ async def list_unified_schedule_history(
         PublishScheduleLog.id.label("log_id"),
         PublishScheduleLog.schedule_id.label("schedule_id"),
         PublishScheduleLog.schedule_name.label("schedule_name"),
+        PublishScheduleLog.account_id.label("account_id"),
         PublishScheduleLog.batch_id.label("batch_id"),
         PublishScheduleLog.scheduled_at.label("scheduled_at"),
         PublishScheduleLog.executed_at.label("executed_at"),
@@ -795,6 +801,7 @@ async def list_unified_schedule_history(
         OfflineScheduleLog.id.label("log_id"),
         OfflineScheduleLog.schedule_id.label("schedule_id"),
         OfflineScheduleLog.schedule_name.label("schedule_name"),
+        literal(None).label("account_id"),
         OfflineScheduleLog.batch_id.label("batch_id"),
         OfflineScheduleLog.scheduled_at.label("scheduled_at"),
         OfflineScheduleLog.executed_at.label("executed_at"),
@@ -826,6 +833,7 @@ async def list_unified_schedule_history(
             "log_id": r.log_id,
             "schedule_id": r.schedule_id,
             "schedule_name": r.schedule_name,
+            "account_id": r.account_id,
             "batch_id": r.batch_id,
             "scheduled_at": safe_isoformat(r.scheduled_at),
             "executed_at": safe_isoformat(r.executed_at),

@@ -17,7 +17,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.models.publish_schedule import PublishSchedule
 from common.models.publish_schedule_log import PublishScheduleLog
 from common.utils.schedule_time import compute_next_trigger as _compute_next_trigger
+from common.utils.schedule_time import compute_publish_window_anchor as _compute_window_anchor
 from common.utils.time_utils import get_beijing_now, safe_isoformat
+
+
+def _trigger_progress(s: PublishSchedule) -> Optional[dict]:
+    """规则列表「已触发 N 账号」进度（仅 random+time_range 模式有值）"""
+    ts = s.trigger_state or {}
+    accounts = ts.get("accounts") or {}
+    if not ts.get("window_date"):
+        return None
+    return {
+        "window_date": ts.get("window_date"),
+        "total": len(s.account_ids or []),
+        "fired": sum(1 for a in accounts.values() if a.get("status") == "fired"),
+        "accounts": [
+            {"account_id": aid, "trigger_at": a.get("trigger_at"), "status": a.get("status")}
+            for aid, a in accounts.items()
+        ],
+    }
 
 
 def _schedule_to_dict(s: PublishSchedule) -> dict:
@@ -37,6 +55,7 @@ def _schedule_to_dict(s: PublishSchedule) -> dict:
         "enabled": s.enabled,
         "last_triggered_at": safe_isoformat(s.last_triggered_at),
         "next_trigger_at": safe_isoformat(s.next_trigger_at),
+        "trigger_progress": _trigger_progress(s),
         "created_at": safe_isoformat(s.created_at),
         "updated_at": safe_isoformat(s.updated_at),
     }
@@ -47,6 +66,7 @@ def _log_to_dict(l: PublishScheduleLog) -> dict:
         "id": l.id,
         "schedule_id": l.schedule_id,
         "schedule_name": l.schedule_name,
+        "account_id": l.account_id,
         "batch_id": l.batch_id,
         "scheduled_at": safe_isoformat(l.scheduled_at),
         "executed_at": safe_isoformat(l.executed_at),
@@ -85,8 +105,8 @@ class PublishScheduleService:
             weight_algorithm_id=data.get("weight_algorithm_id"),
             enabled=data.get("enabled", True),
         )
-        # 计算首次触发时间
-        schedule.next_trigger_at = _compute_next_trigger(
+        # 计算首次触发时间（random+time_range 模式取窗口锚点，账号级触发计划由 scheduler 物化）
+        schedule.next_trigger_at = _compute_window_anchor(
             schedule.schedule_mode, schedule.schedule_config
         )
         # once 且时间已过的情况
@@ -164,10 +184,11 @@ class PublishScheduleService:
             schedule.random_count = None
             schedule.deduplicate_enabled = False
 
-        # 重新计算下次触发时间
-        schedule.next_trigger_at = _compute_next_trigger(
+        # 重新计算下次触发时间；规则改动后清空账号触发计划（下个窗口重新物化）
+        schedule.next_trigger_at = _compute_window_anchor(
             schedule.schedule_mode, schedule.schedule_config
         )
+        schedule.trigger_state = None
         if schedule.next_trigger_at is None and schedule.schedule_mode == "once":
             schedule.enabled = False
 
@@ -201,10 +222,11 @@ class PublishScheduleService:
             return None
         schedule.enabled = not schedule.enabled
         if schedule.enabled:
-            # 重新启用时重新计算 next_trigger_at
-            schedule.next_trigger_at = _compute_next_trigger(
+            # 重新启用时重新计算 next_trigger_at，并清空账号触发计划（重新物化）
+            schedule.next_trigger_at = _compute_window_anchor(
                 schedule.schedule_mode, schedule.schedule_config
             )
+            schedule.trigger_state = None
             # once 且时间已过：无法再触发，保持禁用（否则规则永远挂在列表里）
             if schedule.next_trigger_at is None and schedule.schedule_mode == "once":
                 schedule.enabled = False
@@ -229,10 +251,12 @@ class PublishScheduleService:
     async def create_log(
         self, schedule_id: int, scheduled_at: datetime, total_count: int,
         schedule_name: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> PublishScheduleLog:
         log = PublishScheduleLog(
             schedule_id=schedule_id,
             schedule_name=schedule_name,
+            account_id=account_id,
             scheduled_at=scheduled_at,
             total_count=total_count,
         )
@@ -329,13 +353,34 @@ class PublishScheduleService:
             schedule.enabled = False
             schedule.next_trigger_at = None
         else:
-            schedule.next_trigger_at = _compute_next_trigger(
+            schedule.next_trigger_at = _compute_window_anchor(
                 schedule.schedule_mode, schedule.schedule_config,
                 force_next_day=True,  # 触发后推进：随机模式固定到明天，防止同窗口重复触发
             )
+            schedule.trigger_state = None
 
         await self.session.commit()
         await self.session.refresh(schedule)
+
+    async def mark_trigger_state_fired(self, schedule: PublishSchedule) -> None:
+        """手动触发视为本窗口已执行：将当前窗口触发计划中所有 pending 账号标记为 fired，
+        避免手动触发后账号级定时触发再次执行（重复发布）。"""
+        ts = schedule.trigger_state or {}
+        accounts = ts.get("accounts") or {}
+        # 先拷贝再改：ts 与 schedule.trigger_state 是同一对象，原地修改会把
+        # "旧值"一并改掉，SQLAlchemy 判定无变更而不发 UPDATE
+        import copy
+
+        new_ts = copy.deepcopy(ts)
+        changed = False
+        for a in (new_ts.get("accounts") or {}).values():
+            if a.get("status") == "pending":
+                a["status"] = "fired"
+                changed = True
+        if changed:
+            schedule.trigger_state = new_ts
+            await self.session.commit()
+            await self.session.refresh(schedule)
 
 
 # 计算函数导出供外部使用

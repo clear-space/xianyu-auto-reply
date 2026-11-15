@@ -163,9 +163,9 @@ async def compute_material_weight_details(
         materials: 素材池 dict 列表（含 id/title）
         params: 权重参数（None 用系统默认）
         session: 复用调用方的 DB session（不传则内部新建）
-        account_ids: 账号范围（闲鱼账号ID列表）；仅预览指定账号时传入，
-                     商品信号（编号状态/官方快照聚合/已用编号）只统计这些账号的商品，
-                     发布日志信号仍按用户全量统计
+        account_ids: 账号范围（闲鱼账号ID列表）；仅预览指定账号或定时发布按账号独立计算权重时传入，
+                     商品信号（编号状态/官方快照聚合/已用编号）与发布日志信号
+                     （首次使用/近60天失败次数）均只统计这些账号
     """
     from common.db.session import async_session_maker
     from common.models.item_stats_daily import ItemStatsDaily
@@ -270,15 +270,15 @@ async def compute_material_weight_details(
                 agg["days_on_shelf"] = max(agg["days_on_shelf"], row.days_on_shelf or 0)
 
         # 3. 近60天发布失败次数 + 从未发布判定（按素材ID）
-        log_rows = (
-            await session.execute(
-                select(
-                    PublishLog.material_id,
-                    PublishLog.status,
-                    PublishLog.created_at,
-                ).where(PublishLog.user_id == user_id, PublishLog.material_id.isnot(None))
-            )
-        ).all()
+        # 账号范围：传了 account_ids 时发布日志同样按账号过滤（账号独立权重口径）
+        log_stmt = select(
+            PublishLog.material_id,
+            PublishLog.status,
+            PublishLog.created_at,
+        ).where(PublishLog.user_id == user_id, PublishLog.material_id.isnot(None))
+        if account_ids:
+            log_stmt = log_stmt.where(PublishLog.account_id.in_(account_ids))
+        log_rows = (await session.execute(log_stmt)).all()
         recent_fail_counts: Dict[int, int] = {}
         published_ids: set = set()
         for mid, status, created_at in log_rows:

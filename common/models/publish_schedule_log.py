@@ -32,6 +32,9 @@ class PublishScheduleLog(TimestampMixin, Base):
     schedule_name: Mapped[str | None] = mapped_column(
         String(100), comment="规则名称快照（规则删除后执行记录仍可查看名称）"
     )
+    account_id: Mapped[str | None] = mapped_column(
+        String(80), comment="账号级执行的账号ID（random+time_range 模式定时触发时按账号落行；规则级执行为 NULL）"
+    )
     batch_id: Mapped[str | None] = mapped_column(
         String(36), comment="批量发布的 batch_id"
     )

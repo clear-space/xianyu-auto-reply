@@ -22,6 +22,9 @@ const ITEM_RESULT_CONFIG: Record<string, { label: string; cls: string }> = {
 export function OfflineLogDetailPanel({ detail }: { detail: OfflineLogDetail }) {
   const accounts = detail.accounts || []
   const missing = detail.missing_accounts || []
+  const failSummary = detail.fail_summary || []
+  const cooldownSkipped = detail.cooldown_skipped || {}
+  const cooldownTotal = Object.values(cooldownSkipped).reduce((s, n) => s + (n || 0), 0)
   return (
     <div className="space-y-3 text-sm">
       <div className="flex flex-wrap gap-2 items-center">
@@ -34,10 +37,28 @@ export function OfflineLogDetailPanel({ detail }: { detail: OfflineLogDetail }) 
         {detail.max_count != null && (
           <span className="badge-gray">每账号限 {detail.max_count} 个</span>
         )}
+        {cooldownTotal > 0 && (
+          <span className="badge-gray">失败冷却跳过 {cooldownTotal} 个</span>
+        )}
         {detail.detail_truncated && (
           <span className="badge-warning">商品过多，仅展示账号结果计数</span>
         )}
       </div>
+      {/* 失败原因汇总（错误码 + 原始原因 + 次数，内联展示不靠悬停） */}
+      {failSummary.length > 0 && (
+        <div className="rounded-xl border border-red-200 dark:border-red-800 p-3 bg-red-50/70 dark:bg-red-900/20 space-y-1.5">
+          <div className="font-medium text-red-600 dark:text-red-400">失败原因汇总</div>
+          {failSummary.map((f, i) => (
+            <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-red-500 font-medium">×{f.count}</span>
+              {f.account_id && <span className="font-mono text-slate-500">{f.account_id}</span>}
+              {f.code && <span className="badge-danger">{f.code}</span>}
+              <span className="text-red-500 break-all" title={f.message}>{f.message}</span>
+              {f.hint && <span className="badge-warning">{f.hint}</span>}
+            </div>
+          ))}
+        </div>
+      )}
       {accounts.map((a, i) => {
         const cfg = ACCOUNT_STATUS_CONFIG[a.status] || { label: a.status, cls: 'badge-gray' }
         const items = a.items || []

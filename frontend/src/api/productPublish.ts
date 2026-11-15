@@ -687,6 +687,13 @@ export interface PublishSchedule {
   next_trigger_at?: string | null
   account_count?: number
   material_count?: number
+  /** 账号级触发进度（仅 random+time_range 模式有值）：窗口内已触发账号数 */
+  trigger_progress?: {
+    window_date?: string
+    total: number
+    fired: number
+    accounts?: Array<{ account_id: string; trigger_at?: string; status?: string }>
+  } | null
   created_at: string
   updated_at: string
 }
@@ -746,12 +753,30 @@ export interface PublishScheduleLog {
   created_at: string
 }
 
-/** 执行记录明细（detail_json） */
+/** 失败原因汇总条目（fail_summary）：错误码 + 闲鱼原始原因 + 次数 + 通用检查提示 */
+export interface ScheduleFailSummaryEntry {
+  account_id?: string | null
+  code?: string | null
+  message?: string
+  count: number
+  hint?: string
+}
+
+/** 账号最终执行状态（account_result）：每账号独立达标/熔断/池耗尽 */
+export interface ScheduleAccountResult {
+  account_id: string
+  target?: number | null
+  ok: number
+  fail: number
+  status: 'done' | 'dead' | 'pool_exhausted' | 'incomplete'
+  reason?: string | null
+}
+
+/** 执行记录明细（detail_json）：按账号组织 */
 export interface ScheduleLogDetail {
   publish_mode?: string
   random_count?: number | null
   deduplicate?: boolean
-  target_ok?: number
   detail_truncated?: boolean
   filtered_count?: number
   weight_algorithm_id?: number | null
@@ -760,18 +785,26 @@ export interface ScheduleLogDetail {
   sample_mode?: string
   rounds?: Array<{
     round: number
-    materials: Array<{
-      material_id?: number
-      title?: string
-      item_no?: string | null
-      result: 'success' | 'failed' | 'account_error'
-      weight?: number
-      accounts?: Array<{ account_id: string; status: string; error?: string }>
-      /** 明细过大压缩后：仅保留各账号状态计数（accounts 数组被丢弃） */
-      account_counts?: { success: number; failed: number; account_error: number }
+    accounts?: Array<{
+      account_id: string
+      status: 'done' | 'partial' | 'failed' | 'pool_exhausted'
+      note?: string
+      materials?: Array<{
+        material_id?: number
+        title?: string
+        item_no?: string | null
+        result: 'success' | 'failed' | 'account_error'
+        weight?: number
+        error?: string
+      }>
+      /** 明细过大压缩后：仅保留该账号结果计数（materials 数组被丢弃） */
+      material_counts?: { success: number; failed: number; account_error: number }
     }>
   }>
   filtered?: Array<{ material_id?: number; item_no?: string; round?: number }>
+  account_result?: ScheduleAccountResult[]
+  breaker?: Record<string, { round?: number; reason?: string; last_error?: string | null }> | null
+  fail_summary?: ScheduleFailSummaryEntry[]
 }
 
 /** 规则列表响应 */
@@ -856,6 +889,8 @@ export interface ScheduleHistoryItem {
   log_id: number
   schedule_id: number
   schedule_name?: string | null
+  /** 账号级执行的账号ID（发布规则账号级定时触发时有值，规则级执行为 null） */
+  account_id?: string | null
   batch_id?: string | null
   scheduled_at: string
   executed_at?: string | null

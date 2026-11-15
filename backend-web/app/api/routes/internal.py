@@ -75,6 +75,9 @@ async def internal_publish_batch(
         from app.services.scheduled_publish_executor import ScheduledPublishExecutor
 
         material_scope = schedule.material_scope or "selected"
+        # 账号级定时触发时 scheduler 只传该账号（req.account_ids 子集），规则级触发传全量；
+        # 执行器按请求账号执行，保证账号独立触发不连带其他账号
+        execute_account_ids = list(req.account_ids or []) or list(schedule.account_ids or [])
         # 全部素材范围：素材池由执行器实时解析，batch 快照初始素材数也取库内实时值（进度面板初始即正确）
         material_count = len(schedule.material_ids or [])
         if material_scope == "all":
@@ -84,12 +87,12 @@ async def internal_publish_batch(
 
         await PublishBatchStatusService.init_batch(
             batch_id=batch_id,
-            account_ids=list(schedule.account_ids or []),
+            account_ids=execute_account_ids,
             material_count=material_count,
         )
         schedule_data = {
             "id": schedule.id,
-            "account_ids": list(schedule.account_ids or []),
+            "account_ids": execute_account_ids,
             "material_ids": list(schedule.material_ids or []),
             "material_scope": material_scope,
             "publish_mode": schedule.publish_mode or "specified",

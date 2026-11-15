@@ -85,6 +85,16 @@ export interface OfflineLogDetail {
     items?: Array<{ item_id: string; title?: string; item_no?: string | null; weight?: number; result: string; error?: string; note?: string }>
   }>
   missing_accounts?: string[]
+  /** 失败冷却跳过的商品数（按账号） */
+  cooldown_skipped?: Record<string, number> | null
+  /** 失败原因汇总（错误码 + 原始原因 + 次数 + 通用检查提示） */
+  fail_summary?: Array<{
+    account_id?: string | null
+    code?: string | null
+    message?: string
+    count: number
+    hint?: string
+  }>
 }
 
 /** 分页响应 */
