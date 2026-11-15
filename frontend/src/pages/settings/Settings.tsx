@@ -132,7 +132,8 @@ export function Settings() {
     })
   }
 
-  // 登录页「关于」菜单隐藏开关（默认隐藏：设置不存在时视为隐藏）
+  // 登录页公共入口隐藏开关（默认隐藏：设置不存在时视为隐藏）；
+  // 一并控制「关于」入口、「登录」按钮、品牌区跳转
   const handleHidePublicAboutChange = async (hidden: boolean) => {
     if (!settings || publicAboutSaving) {
       return
@@ -146,13 +147,13 @@ export function Settings() {
       setPublicAboutSaving(true)
       const result = await updateSystemSettings({ [settingKey]: hidden })
       if (!result.success) {
-        throw new Error(result.message || '登录页关于菜单设置保存失败')
+        throw new Error(result.message || '登录页公共入口设置保存失败')
       }
     } catch (error) {
       setSettings((current) => current ? { ...current, [settingKey]: previousValue } : current)
       addToast({
         type: 'error',
-        message: getApiErrorMessage(error, '登录页关于菜单设置保存失败'),
+        message: getApiErrorMessage(error, '登录页公共入口设置保存失败'),
       })
     } finally {
       setPublicAboutSaving(false)

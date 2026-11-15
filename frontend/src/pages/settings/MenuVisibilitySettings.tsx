@@ -8,7 +8,7 @@ interface MenuVisibilitySettingsProps {
   onSave: () => void
   excludedMenuKeys?: string[]
   saving?: boolean
-  /** 登录页导航栏「关于」入口是否隐藏（默认隐藏） */
+  /** 登录页公共入口是否隐藏（默认隐藏）：「关于」入口 + 「登录」按钮 + 品牌区跳转 */
   hidePublicAbout?: boolean
   onHidePublicAboutChange?: (hidden: boolean) => void
   publicAboutSaving?: boolean
@@ -89,14 +89,16 @@ export function MenuVisibilitySettings({
           </div>
         </div>
 
-        {/* 登录页「关于」入口开关 */}
+        {/* 登录页公共入口开关（「关于」入口 + 「登录」按钮 + 品牌区跳转） */}
         <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium leading-5 text-slate-700 dark:text-slate-200">
-              登录页「关于」菜单
+              登录页公共入口
             </div>
             <div className="text-xs text-slate-500 dark:text-slate-400">
-              {hidePublicAbout ? '登录页导航栏不显示「关于」入口' : '登录页导航栏显示「关于」入口'}
+              {hidePublicAbout
+                ? '登录页隐藏「关于」入口、「登录」按钮，品牌区不可点击跳转'
+                : '登录页显示「关于」入口、「登录」按钮，品牌区可点击跳转'}
             </div>
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">

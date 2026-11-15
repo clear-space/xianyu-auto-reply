@@ -21,7 +21,8 @@ const isOnlineEnv = () => {
 
 /** 导航菜单项定义 */
 const NAV_ITEMS = [
-  { path: '/', label: '首页', icon: Home, hideOnLocal: false },
+  // 首页仅线上正式环境显示（本地/客户部署隐藏，恢复 01d0e8e 行为；合并 main 时被覆盖为 false）
+  { path: '/', label: '首页', icon: Home, hideOnLocal: true },
   { path: '/get-activation', label: '获取激活码', icon: Key, hideOnLocal: true },
   { path: '/renew-activation', label: '激活码续期', icon: RefreshCw, hideOnLocal: true },
   { path: '/get-local-version', label: '获取本地版', icon: Monitor, hideOnLocal: true },
@@ -103,14 +104,15 @@ export function AuthNavbar({ systemName, transparent = false }: AuthNavbarProps)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const resolvedSystemName = usePublicSystemName(systemName)
   const online = isOnlineEnv()
-  // 「关于」入口可见性：受系统设置 navigation.hide_public_about 控制，默认隐藏（初始 false，加载后按设置显示）
-  const [aboutMenuVisible, setAboutMenuVisible] = useState(false)
+  // 「登录页公共入口」可见性：受系统设置 navigation.hide_public_about 控制，默认隐藏（初始 false，加载后按设置显示）。
+  // 该开关一并控制：「关于」入口、「登录」按钮、品牌区（logo+系统名）点击跳转。
+  const [publicExtrasVisible, setPublicExtrasVisible] = useState(false)
   useEffect(() => {
     let cancelled = false
     getPublicAboutMenuHidden()
       .then((result) => {
         if (!cancelled) {
-          setAboutMenuVisible(!result.hidden)
+          setPublicExtrasVisible(!result.hidden)
         }
       })
       .catch(() => {})
@@ -123,7 +125,7 @@ export function AuthNavbar({ systemName, transparent = false }: AuthNavbarProps)
     if (item.hideOnLocal && !online) {
       return false
     }
-    if (item.path === '/about-public' && !aboutMenuVisible) {
+    if (item.path === '/about-public' && !publicExtrasVisible) {
       return false
     }
     return true
@@ -147,22 +149,40 @@ export function AuthNavbar({ systemName, transparent = false }: AuthNavbarProps)
     )}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
         <div className="flex items-center justify-between h-14">
-          {/* Logo：方形图标 + 系统名 */}
-          <Link to="/" aria-label={`${resolvedSystemName}首页`} onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-2 flex-shrink-0">
-            <img
-              src="/logo-icon-transparent.png"
-              alt={resolvedSystemName}
-              className="w-8 h-8 rounded-lg shadow-sm dark:hidden"
-            />
-            <img
-              src="/logo-icon-invert.png"
-              alt={resolvedSystemName}
-              className="w-8 h-8 rounded-lg hidden dark:block"
-            />
-            <span className="text-sm font-bold text-slate-900 dark:text-white hidden sm:inline">
-              {resolvedSystemName}
-            </span>
-          </Link>
+          {/* Logo：方形图标 + 系统名；公共入口开关隐藏时不可点击（不跳转） */}
+          {publicExtrasVisible ? (
+            <Link to="/" aria-label={`${resolvedSystemName}首页`} onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-2 flex-shrink-0">
+              <img
+                src="/logo-icon-transparent.png"
+                alt={resolvedSystemName}
+                className="w-8 h-8 rounded-lg shadow-sm dark:hidden"
+              />
+              <img
+                src="/logo-icon-invert.png"
+                alt={resolvedSystemName}
+                className="w-8 h-8 rounded-lg hidden dark:block"
+              />
+              <span className="text-sm font-bold text-slate-900 dark:text-white hidden sm:inline">
+                {resolvedSystemName}
+              </span>
+            </Link>
+          ) : (
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <img
+                src="/logo-icon-transparent.png"
+                alt={resolvedSystemName}
+                className="w-8 h-8 rounded-lg shadow-sm dark:hidden"
+              />
+              <img
+                src="/logo-icon-invert.png"
+                alt={resolvedSystemName}
+                className="w-8 h-8 rounded-lg hidden dark:block"
+              />
+              <span className="text-sm font-bold text-slate-900 dark:text-white hidden sm:inline">
+                {resolvedSystemName}
+              </span>
+            </div>
+          )}
 
           {/* 桌面端菜单 */}
           <div className="hidden lg:flex items-center gap-1">
@@ -191,9 +211,12 @@ export function AuthNavbar({ systemName, transparent = false }: AuthNavbarProps)
 
           {/* 主题切换按钮（桌面和手机端都显示，放在汉堡菜单左侧避免遮挡） */}
           <div className="flex items-center gap-1">
-            <Link to="/login" onClick={() => setMobileMenuOpen(false)} aria-current={location.pathname === '/login' ? 'page' : undefined} className="btn-ios-primary btn-sm">
-              <LogIn className="h-4 w-4" />登录
-            </Link>
+            {/* 「登录」按钮：受公共入口开关控制，且在登录页本身不显示（避免原地跳转冗余） */}
+            {publicExtrasVisible && location.pathname !== '/login' && (
+              <Link to="/login" onClick={() => setMobileMenuOpen(false)} aria-current={location.pathname === '/login' ? 'page' : undefined} className="btn-ios-primary btn-sm">
+                <LogIn className="h-4 w-4" />登录
+              </Link>
+            )}
             <button
               type="button"
               onClick={toggleTheme}

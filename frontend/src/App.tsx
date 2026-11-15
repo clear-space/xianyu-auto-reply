@@ -328,7 +328,12 @@ function App() {
       <Suspense fallback={<PageLoading />}>
         <Routes>
           {/* Public routes */}
-          <Route path="/" element={<Home />} />
+          {/* 公开首页：仅线上正式环境(xy.zhinianboke.com)展示；本地/客户部署根路径直接进登录页（恢复 main 合并前行为） */}
+          <Route path="/" element={
+            window.location.hostname === 'xy.zhinianboke.com'
+              ? <Home />
+              : <Navigate to="/login" replace />
+          } />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
