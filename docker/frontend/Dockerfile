@@ -42,8 +42,10 @@ EXPOSE 80
 # 设置时区
 ENV TZ=Asia/Shanghai
 
-# 健康检查（busybox wget 不支持 --no-verbose，使用 -q 短参数）
+# 健康检查（busybox wget 不支持 --no-verbose，使用 -q 短参数；
+# 用 127.0.0.1 而非 localhost：nginx listen 80 仅绑定 IPv4，
+# localhost 会优先解析 ::1 导致 wget 连接被拒、健康检查恒为 unhealthy）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget -q --spider http://localhost:80/ || exit 1
+    CMD wget -q --spider http://127.0.0.1:80/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

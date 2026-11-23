@@ -43,24 +43,13 @@ setup_logging(
 
 async def check_database_connection():
     """
-    检查数据库连接
-    
-    如果连接失败，记录错误并退出服务
+    检查数据库连接（带指数退避重试，总窗口约 2.5 分钟）
+
+    最终失败时通过系统通知渠道推送运维预警并返回 False（由调用方退出服务）。
     """
-    try:
-        from common.db.session import async_engine
-        from sqlalchemy import text
-        
-        logger.info("正在检查数据库连接...")
-        async with async_engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        logger.info("数据库连接成功")
-        return True
-    except Exception as e:
-        logger.error(f"数据库连接失败: {str(e)}")
-        logger.error("请检查数据库配置和网络连接")
-        logger.error(f"数据库地址: {settings.mysql_host}:{settings.mysql_port}/{settings.mysql_database}")
-        return False
+    from common.utils.ops_alert_utils import check_database_with_backoff
+
+    return await check_database_with_backoff()
 
 
 @asynccontextmanager
@@ -109,7 +98,11 @@ async def lifespan(app: FastAPI):
     scheduler = get_scheduler_service()
     scheduler.start()
     logger.info("定时任务管理器已启动")
-    
+
+    # 启动完成：若此前发过启动失败告警，推送恢复通知并清除告警状态
+    from common.utils.ops_alert_utils import send_ops_recovery_alert
+    await send_ops_recovery_alert()
+
     yield
     
     # 停止定时任务

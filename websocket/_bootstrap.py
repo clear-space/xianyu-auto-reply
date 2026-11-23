@@ -63,11 +63,12 @@ async def lifespan(app: FastAPI):
     logger.info(f"服务端口: {settings.service_port}")
     logger.info(f"数据库: {settings.mysql_host}:{settings.mysql_port}/{settings.mysql_database}")
     
-    # 检查数据库连接
-    if not await check_database_connection():
+    # 检查数据库连接（带指数退避重试，最终失败推送运维预警后退出服务；
+    # 与 /health 接口的轻量探测不同，本处为启动期专用）
+    from common.utils.ops_alert_utils import check_database_with_backoff
+    if not await check_database_with_backoff():
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
-    logger.info("数据库连接成功")
 
     # 初始化 Redis 健康连接池；失败时按指数退避重试，最终失败则停止启动。
     try:
@@ -106,6 +107,11 @@ async def lifespan(app: FastAPI):
     try:
         async with startup.run():
             logger.info(f"{settings.project_name} HTTP服务已就绪")
+
+            # 启动完成：若此前发过启动失败告警，推送恢复通知并清除告警状态
+            from common.utils.ops_alert_utils import send_ops_recovery_alert
+            await send_ops_recovery_alert()
+
             yield
     finally:
         logger.info(f"{settings.project_name} 关闭中...")

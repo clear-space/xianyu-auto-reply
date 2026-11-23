@@ -86,14 +86,25 @@ class BaseConfig(BaseSettings):
         default=30, alias="REDIS_HEALTH_CHECK_INTERVAL", ge=0
     )
     redis_protocol: int = Field(default=2, alias="REDIS_PROTOCOL", ge=2, le=3)
+    # Redis 启动重试采用长窗口指数退避：依赖故障时单轮约 14 分钟，
+    # 把崩溃循环的 CPU / 日志开销降低一个数量级，且依赖恢复后最多
+    # 120 秒内自动连上（无需人工重启服务）。
     redis_startup_max_retries: int = Field(
-        default=5, alias="REDIS_STARTUP_MAX_RETRIES", ge=0, le=20
+        default=13, alias="REDIS_STARTUP_MAX_RETRIES", ge=0, le=20
     )
     redis_startup_retry_base_delay: float = Field(
-        default=1.0, alias="REDIS_STARTUP_RETRY_BASE_DELAY", gt=0
+        default=2.0, alias="REDIS_STARTUP_RETRY_BASE_DELAY", gt=0
     )
     redis_startup_retry_cap_delay: float = Field(
-        default=10.0, alias="REDIS_STARTUP_RETRY_CAP_DELAY", gt=0
+        default=120.0, alias="REDIS_STARTUP_RETRY_CAP_DELAY", gt=0
+    )
+
+    # 运维预警（服务启动失败 / 恢复通知，经系统通知渠道推送）
+    # 多设备部署时建议在 .env 配置设备名（如 LYServer-C005），告警中便于区分
+    deploy_device_name: str = Field(default="", alias="DEPLOY_DEVICE_NAME")
+    ops_alert_enabled: bool = Field(default=True, alias="OPS_ALERTS_ENABLED")
+    ops_alert_dedup_seconds: int = Field(
+        default=1800, alias="OPS_ALERT_DEDUP_SECONDS", ge=60
     )
     
     # JWT配置（用于安全模块）

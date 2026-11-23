@@ -138,6 +138,18 @@ async def initialize_redis_client() -> redis.Redis:
                         f"attempt={attempt + 1}/{max_retries + 1}, "
                         f"error_type={type(exc).__name__}, error={exc}"
                     )
+                    # 通过系统通知渠道推送运维预警（内部异常已兜底，不影响退出流程）
+                    try:
+                        from common.utils.ops_alert_utils import send_ops_failure_alert
+
+                        await send_ops_failure_alert(
+                            "redis",
+                            f"连接 {settings.redis_host}:{settings.redis_port}/"
+                            f"{settings.redis_db} 失败（已重试 {max_retries + 1} 次）: "
+                            f"{type(exc).__name__}: {exc}",
+                        )
+                    except Exception:
+                        logger.warning("发送Redis启动失败预警异常（忽略）")
                     raise
 
                 delay = min(
